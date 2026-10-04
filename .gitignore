@@ -1,0 +1,20 @@
+# Rust
+bridge/target/
+**/*.rs.bk
+Cargo.lock
+
+# Flutter & Dart
+mobile/.dart_tool/
+mobile/.flutter-plugins
+mobile/.flutter-plugins-dependencies
+mobile/build/
+mobile/.packages
+mobile/.pub/
+mobile/.pub-cache/
+
+# OS / Editor
+.DS_Store
+.idea/
+.vscode/
+*.swp
+*.swo
