@@ -11,6 +11,9 @@ void main() async {
   final client = HerdrClientService();
   client.setFontSize(prefs.getDouble('terminal_font_size') ?? 14);
   client.setMachines(prefs.getStringList('herdr_machines') ?? [], prefs.getStringList('herdr_machine_names') ?? []);
+  // On by default; the first launch asks for the permissions it needs.
+  final alerts = prefs.getBool('background_alerts');
+  client.setAlerts(alerts ?? true, ask: alerts == null);
   // Nothing to connect to until the first machine is added.
   if (host != null) client.configure(host: host, port: prefs.getInt('herdr_port') ?? 7788);
 

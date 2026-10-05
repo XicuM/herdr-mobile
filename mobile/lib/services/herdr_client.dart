@@ -1,6 +1,8 @@
 import 'dart:async';
 import 'dart:convert';
-import 'package:flutter/foundation.dart';
+import 'package:flutter/services.dart';
+import 'package:flutter/widgets.dart';
+import 'package:web_socket_channel/io.dart';
 import 'package:web_socket_channel/web_socket_channel.dart';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
@@ -15,10 +17,27 @@ class HerdrClientService extends ChangeNotifier {
   double _fontSize = 14;
   List<String> _machines = [];
   Map<String, String> _names = {};
+  bool _alerts = false;
 
   WebSocketChannel? _channel;
   Timer? _reconnectTimer;
   bool _disposed = false;
+
+  /// HerdrApp.kt: the ongoing status notification, alerts, and taps on them.
+  static const _android = MethodChannel('herdr/android');
+
+  HerdrClientService() {
+    _android.setMethodCallHandler((call) async {
+      if (call.method != 'open') return;
+      final String m = call.arguments['machine'];
+      if (m != machine && _machines.contains(m)) switchMachine(m);
+      if (m == machine) selectPane(call.arguments['pane']);
+    });
+    _native('ready');
+  }
+
+  /// Fails harmlessly off Android (e.g. in tests).
+  void _native(String method, [Object? args]) => _android.invokeMethod(method, args).ignore();
 
   String get host => _host;
   int get port => _port;
@@ -33,6 +52,36 @@ class HerdrClientService extends ChangeNotifier {
 
   /// The name given to [machine] when it was added, or its address.
   String nameOf(String machine) => _names[machine] ?? machine;
+
+  /// Background alerts: a foreground service keeps the active machine's connection open, with an
+  /// ongoing notification showing its state, and agents that need input or finish raise an alert.
+  bool get alerts => _alerts;
+
+  /// [ask] requests the notification permission and the battery-optimization exemption.
+  void setAlerts(bool on, {bool ask = true}) {
+    _alerts = on;
+    if (on && ask) _native('askPermissions');
+    SharedPreferences.getInstance().then((p) => p.setBool('background_alerts', on));
+    notifyListeners();
+  }
+
+  /// Every state change passes here, so the ongoing notification always mirrors it.
+  @override
+  void notifyListeners() {
+    super.notifyListeners();
+    if (!_alerts || !_machines.contains(machine)) return _native('status');
+    final name = nameOf(machine);
+    if (!_connected) return _native('status', {'title': 'Reconnecting to $name…', 'text': 'Alerts resume once connected'});
+    final counts = <String, int>{};
+    for (final p in _snapshot?.panes ?? <PaneModel>[]) {
+      counts[p.agentStatus] = (counts[p.agentStatus] ?? 0) + 1;
+    }
+    final text = [
+      for (final (status, label) in [('blocked', 'need you'), ('working', 'working'), ('done', 'done')])
+        if (counts[status] != null) '${counts[status]} $label',
+    ].join(' · ');
+    _native('status', {'title': 'Connected to $name', 'text': text.isEmpty ? 'No agents running' : text});
+  }
 
   /// Reports failed bridge requests; set by the screen that shows them.
   void Function(String message)? onError;
@@ -105,6 +154,7 @@ class HerdrClientService extends ChangeNotifier {
 
   void selectPane(String paneId) {
     _selectedPaneId = paneId;
+    _native('cancel', {'key': '$machine/$paneId'});
     notifyListeners();
   }
 
@@ -114,7 +164,8 @@ class HerdrClientService extends ChangeNotifier {
 
     final wsUri = Uri.parse('ws://$_host:$_port/ws/session');
     try {
-      final channel = WebSocketChannel.connect(wsUri);
+      // Pings notice a connection that died silently (e.g. the phone changed networks), so it reconnects.
+      final channel = IOWebSocketChannel.connect(wsUri, pingInterval: const Duration(seconds: 20));
       _channel = channel;
       // Connection failures also reach the stream's onError, which reconnects.
       channel.ready.ignore();
@@ -157,9 +208,38 @@ class HerdrClientService extends ChangeNotifier {
   }
 
   void _applySnapshot(SessionSnapshot snapshot) {
+    final before = _snapshot;
     _snapshot = snapshot;
     _selectedPaneId ??= snapshot.focusedPaneId ?? snapshot.panes.firstOrNull?.id;
+    // After a dropout [before] is the last snapshot seen, so what changed meanwhile still alerts.
+    if (before != null && _alerts) _alertChanges(before, snapshot);
     notifyListeners();
+  }
+
+  /// Alerts on agents that just started waiting for input or just completed work. Completion is read
+  /// from `completion_seq`, which herdr bumps on every completion: `done` only lasts until the pane is
+  /// viewed, so an agent whose pane is on screen goes straight from working to idle.
+  void _alertChanges(SessionSnapshot before, SessionSnapshot now) {
+    final watching = WidgetsBinding.instance.lifecycleState == AppLifecycleState.resumed;
+    for (final pane in now.panes) {
+      if (watching && pane.id == _selectedPaneId) continue;
+      final was = before.panes.where((p) => p.id == pane.id).firstOrNull;
+      final wasAgent = before.agents.where((a) => a.paneId == pane.id).firstOrNull;
+      final agent = now.agents.where((a) => a.paneId == pane.id).firstOrNull;
+      final blocked = was != null && was.agentStatus != 'blocked' && pane.agentStatus == 'blocked';
+      final finished = wasAgent != null && agent?.completionSeq != null && agent!.completionSeq != wasAgent.completionSeq;
+      if (!blocked && !finished) continue;
+      final task = pane.terminalTitle.isNotEmpty ? pane.terminalTitle : agent?.name ?? pane.id;
+      final workspace = now.workspaces.where((w) => w.id == pane.workspaceId).firstOrNull;
+      _native('alert', {
+        'key': '$machine/${pane.id}',
+        'title': '${blocked ? 'Needs you' : 'Finished'}: $task',
+        'text': [if (workspace != null) workspace.displayName, nameOf(machine)].join(' · '),
+        'machine': machine,
+        'pane': pane.id,
+        'urgent': blocked,
+      });
+    }
   }
 
   Future<void> _fetchSnapshotHttp() async {

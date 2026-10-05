@@ -167,11 +167,14 @@ class AgentModel {
   final String name;
   final String paneId;
   final String status;
+  /// Bumped by herdr each time the agent completes work, whether or not the pane was viewed.
+  final int? completionSeq;
 
   AgentModel({
     required this.name,
     required this.paneId,
     required this.status,
+    this.completionSeq,
   });
 
   factory AgentModel.fromJson(Map<String, dynamic> json) {
@@ -179,6 +182,7 @@ class AgentModel {
       name: json['name'] ?? json['agent'] ?? '',
       paneId: json['pane_id'] ?? '',
       status: json['status'] ?? json['agent_status'] ?? 'unknown',
+      completionSeq: json['completion_seq'],
     );
   }
 }

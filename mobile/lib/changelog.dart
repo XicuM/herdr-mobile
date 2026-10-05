@@ -2,6 +2,15 @@
 /// in pubspec.yaml and android/app/build.gradle.
 const changelog = <(String, List<String>)>[
   (
+    '1.3.0',
+    [
+      'Notifications: get an alert when an agent needs you or finishes, even with the app closed. Tap it to open that pane.',
+      'An ongoing notification shows which machine you are connected to and how many agents are working or waiting.',
+      'The first launch asks to allow notifications and background use. Turn alerts off under Settings → Notifications.',
+      'Needs the updated herdr-bridge. The bridge no longer sends ntfy or Pushover alerts.',
+    ]
+  ),
+  (
     '1.2.0',
     [
       'A message box under the terminal: type with autocorrect, swipe and voice input, and send it to the pane (empty sends Enter).',

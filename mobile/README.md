@@ -33,5 +33,5 @@ flutter run
 2. Open the navigation drawer and tap **Settings**.
 3. Set **Host** to your host machine's Tailscale IP (e.g. `100.x.y.z`).
 4. Set **Port** to `7788`.
-5. (Optional) Set **ntfy Topic** to receive background lock screen notifications when an agent is blocked or done.
-6. Tap **Save & Reconnect**.
+5. Tap **Add & Connect**.
+6. Allow notifications and background use when asked. The app then stays connected to the active machine in the background (shown as an ongoing notification) and alerts you when an agent needs you or finishes. Turn it off under **Notifications** in Settings.

@@ -27,6 +27,7 @@ class _TerminalScreenState extends State<TerminalScreen> {
   final _controller = TerminalController();
   final _message = TextEditingController();
   PtyChannel? _ptyChannel;
+  late final AppLifecycleListener _lifecycle;
   bool _ctrl = false;
 
   // Pinch-to-zoom and history scrolling, tracked from raw pointers so they don't fight the
@@ -49,6 +50,8 @@ class _TerminalScreenState extends State<TerminalScreen> {
     _controller.addListener(() => setState(() {})); // shows the copy button while text is selected
     widget.client.addListener(_onClientUpdate);
     HardwareKeyboard.instance.addHandler(_onHardwareKey);
+    // The app now keeps running in the background (for alerts), so the pane is attached only while shown.
+    _lifecycle = AppLifecycleListener(onStateChange: (_) => _connectTerminal());
     _connectTerminal();
     WidgetsBinding.instance.addPostFrameCallback((_) => _showIntroOrChangelog());
   }
@@ -205,13 +208,15 @@ class _TerminalScreenState extends State<TerminalScreen> {
     _connectTerminal();
   }
 
-  /// (Re)attaches when the selected pane or bridge address changes.
+  /// (Re)attaches when the selected pane or bridge address changes, or the app comes back on screen.
   void _connectTerminal() {
     final client = widget.client;
     final paneId = client.selectedPaneId;
     final pty = _ptyChannel;
-    if (paneId == null) {
-      // Machine switched: detach so keystrokes can't reach the old machine's pane.
+    final state = WidgetsBinding.instance.lifecycleState;
+    if (paneId == null || (state != AppLifecycleState.resumed && state != AppLifecycleState.inactive)) {
+      // Machine switched: detach so keystrokes can't reach the old machine's pane. In the background:
+      // detach so the takeover ends and the desktop gets the pane's size back.
       pty?.dispose();
       _ptyChannel = null;
       return;
@@ -228,6 +233,7 @@ class _TerminalScreenState extends State<TerminalScreen> {
 
   @override
   void dispose() {
+    _lifecycle.dispose();
     widget.client.removeListener(_onClientUpdate);
     widget.client.onError = null;
     _controller.dispose();

@@ -95,6 +95,19 @@ class _SettingsScreenState extends State<SettingsScreen> {
             ),
           ),
           const SizedBox(height: 28),
+          Text('Notifications', style: section),
+          SwitchListTile(
+            contentPadding: EdgeInsets.zero,
+            title: const Text('Alert when an agent needs you or finishes'),
+            subtitle: const Text(
+              'Stays connected to the active machine in the background, shown as an ongoing notification. '
+              'If alerts stop while the phone sleeps, allow Herdr Mobile to run unrestricted in Android\'s battery settings.',
+              style: TextStyle(color: Colors.white54, fontSize: 13),
+            ),
+            value: widget.client.alerts,
+            onChanged: (v) => setState(() => widget.client.setAlerts(v)),
+          ),
+          const SizedBox(height: 20),
           Text('Terminal', style: section),
           const SizedBox(height: 8),
           Text(

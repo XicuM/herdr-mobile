@@ -1,10 +1,15 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
     <uses-permission android:name="android.permission.INTERNET"/>
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE"/>
+    <!-- Background alerts: a foreground service holds the bridge connection open. -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE"/>
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_REMOTE_MESSAGING"/>
+    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS"/>
 
     <application
         android:label="Herdr Mobile"
-        android:name="${applicationName}"
+        android:name=".HerdrApp"
         android:icon="@drawable/ic_launcher">
         <activity
             android:name=".MainActivity"
@@ -23,6 +28,10 @@
                 <category android:name="android.intent.category.LAUNCHER"/>
             </intent-filter>
         </activity>
+        <service
+            android:name=".StatusService"
+            android:exported="false"
+            android:foregroundServiceType="remoteMessaging" />
         <meta-data
             android:name="flutterEmbedding"
             android:value="2" />
