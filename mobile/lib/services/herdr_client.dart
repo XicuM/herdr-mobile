@@ -55,6 +55,9 @@ class HerdrClientService extends ChangeNotifier {
   /// Saved bridges as `host:port`, one per machine running herdr-bridge.
   List<String> get machines => _machines;
 
+  @visibleForTesting
+  void setSnapshotForTesting(SessionSnapshot snap) => _applySnapshot(snap);
+
   /// The name given to [machine] when it was added, or its address.
   String nameOf(String machine) => _names[machine] ?? machine;
 
@@ -301,6 +304,110 @@ class HerdrClientService extends ChangeNotifier {
       if (paneId is String) selectPane(paneId);
     } catch (e) {
       onError?.call('Could not create $kind: $e');
+    }
+  }
+
+  String _parseError(dynamic e) {
+    try {
+      final data = jsonDecode(e.toString());
+      if (data is Map && data['message'] != null) return data['message'].toString();
+      if (data is Map && data['error'] != null) {
+        if (data['error'] is Map && data['error']['message'] != null) {
+          return data['error']['message'].toString();
+        }
+        return data['error'].toString();
+      }
+    } catch (_) {}
+    return e.toString();
+  }
+
+  Future<void> deleteWorkspace(String workspaceId, {bool removeWorktree = false, bool force = false}) async {
+    try {
+      final query = <String, String>{
+        if (removeWorktree) 'remove_worktree': 'true',
+        if (force) 'force': 'true',
+      };
+      final uri = Uri.http('$_host:$_port', '/api/workspace/$workspaceId', query.isEmpty ? null : query);
+      final res = await http.delete(uri);
+      if (res.statusCode != 200) throw res.body;
+      await _fetchSnapshotHttp();
+      final validPanes = _snapshot?.panes ?? <PaneModel>[];
+      if (_selectedPaneId != null && !validPanes.any((p) => p.id == _selectedPaneId)) {
+        final newPaneId = _snapshot?.focusedPaneId ?? validPanes.firstOrNull?.id;
+        if (newPaneId != null) selectPane(newPaneId);
+      }
+    } catch (e) {
+      onError?.call('Could not delete workspace: ${_parseError(e)}');
+    }
+  }
+
+  Future<void> renameWorkspace(String workspaceId, String newLabel) async {
+    try {
+      final res = await http.post(
+        Uri.parse('http://$_host:$_port/api/workspace/$workspaceId/rename'),
+        headers: {'Content-Type': 'application/json'},
+        body: jsonEncode({'label': newLabel}),
+      );
+      if (res.statusCode != 200) throw res.body;
+      await _fetchSnapshotHttp();
+    } catch (e) {
+      onError?.call('Could not rename workspace: ${_parseError(e)}');
+    }
+  }
+
+  Future<void> createWorktree(String workspaceId, String branch, {String? base, String? path, String? label}) async {
+    try {
+      final res = await http.post(
+        Uri.parse('http://$_host:$_port/api/worktree'),
+        headers: {'Content-Type': 'application/json'},
+        body: jsonEncode({
+          'workspace_id': workspaceId,
+          'branch': branch,
+          if (base != null && base.isNotEmpty) 'base': base,
+          if (path != null && path.isNotEmpty) 'path': path,
+          if (label != null && label.isNotEmpty) 'label': label,
+        }),
+      );
+      if (res.statusCode != 200) throw res.body;
+      final paneId = jsonDecode(res.body)['root_pane']?['pane_id'];
+      await _fetchSnapshotHttp();
+      if (paneId is String) selectPane(paneId);
+    } catch (e) {
+      onError?.call('Could not create worktree: ${_parseError(e)}');
+    }
+  }
+
+  Future<List<Map<String, dynamic>>> listWorktrees(String workspaceId) async {
+    try {
+      final uri = Uri.http('$_host:$_port', '/api/worktree', {'workspace_id': workspaceId});
+      final res = await http.get(uri);
+      if (res.statusCode != 200) throw res.body;
+      final data = jsonDecode(res.body);
+      final list = (data['worktrees'] as List<dynamic>? ?? []).cast<Map<String, dynamic>>();
+      return list;
+    } catch (e) {
+      onError?.call('Could not list worktrees: ${_parseError(e)}');
+      return [];
+    }
+  }
+
+  Future<void> openWorktree(String workspaceId, {String? branch, String? path}) async {
+    try {
+      final res = await http.post(
+        Uri.parse('http://$_host:$_port/api/worktree/open'),
+        headers: {'Content-Type': 'application/json'},
+        body: jsonEncode({
+          'workspace_id': workspaceId,
+          if (branch != null) 'branch': branch,
+          if (path != null) 'path': path,
+        }),
+      );
+      if (res.statusCode != 200) throw res.body;
+      final paneId = jsonDecode(res.body)['root_pane']?['pane_id'];
+      await _fetchSnapshotHttp();
+      if (paneId is String) selectPane(paneId);
+    } catch (e) {
+      onError?.call('Could not open worktree: ${_parseError(e)}');
     }
   }
 

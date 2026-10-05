@@ -46,9 +46,11 @@ class WorkspaceDrawer extends StatelessWidget {
     String? subtitle,
     required bool selected,
     required VoidCallback onTap,
+    VoidCallback? onLongPress,
   }) {
     return InkWell(
       onTap: onTap,
+      onLongPress: onLongPress,
       child: Container(
         color: selected ? _selected : null,
         padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
@@ -175,6 +177,7 @@ class WorkspaceDrawer extends StatelessWidget {
                 subtitle: tree == null ? ws.gitBranch : null,
                 selected: ws.id == selectedPane?.workspaceId,
                 onTap: () => selectWorkspace(ws),
+                onLongPress: () => _showWorkspaceActions(context, ws),
               ),
             Row(
               children: [
@@ -224,6 +227,290 @@ class WorkspaceDrawer extends StatelessWidget {
             ],
           ],
         ),
+      ),
+    );
+  }
+
+  void _showWorkspaceActions(BuildContext context, WorkspaceModel ws) {
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: const Color(0xFF1E2127),
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(12)),
+      ),
+      builder: (sheetContext) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    ws.displayName,
+                    style: const TextStyle(fontFamily: _mono, fontSize: 15, fontWeight: FontWeight.bold, color: _text),
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                  if (ws.gitBranch != null)
+                    Text(
+                      ws.gitBranch!,
+                      style: const TextStyle(fontFamily: _mono, fontSize: 12, color: _dim),
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                ],
+              ),
+            ),
+            const Divider(color: Colors.white12, height: 1),
+            ListTile(
+              leading: const Icon(Icons.edit_outlined, color: _text, size: 20),
+              title: const Text('Rename', style: TextStyle(fontFamily: _mono, fontSize: 13, color: _text)),
+              onTap: () {
+                Navigator.pop(sheetContext);
+                _showRenameDialog(context, ws);
+              },
+            ),
+            ListTile(
+              leading: const Icon(Icons.call_split, color: _text, size: 20),
+              title: const Text('New worktree', style: TextStyle(fontFamily: _mono, fontSize: 13, color: _text)),
+              onTap: () {
+                Navigator.pop(sheetContext);
+                _showNewWorktreeDialog(context, ws);
+              },
+            ),
+            ListTile(
+              leading: const Icon(Icons.folder_open_outlined, color: _text, size: 20),
+              title: const Text('Open worktree', style: TextStyle(fontFamily: _mono, fontSize: 13, color: _text)),
+              onTap: () {
+                Navigator.pop(sheetContext);
+                _showOpenWorktreeDialog(context, ws);
+              },
+            ),
+            ListTile(
+              leading: const Icon(Icons.delete_outline, color: Colors.redAccent, size: 20),
+              title: const Text('Delete', style: TextStyle(fontFamily: _mono, fontSize: 13, color: Colors.redAccent)),
+              onTap: () {
+                Navigator.pop(sheetContext);
+                _showDeleteDialog(context, ws);
+              },
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  void _showRenameDialog(BuildContext context, WorkspaceModel ws) {
+    final controller = TextEditingController(text: ws.label.isNotEmpty ? ws.label : ws.displayName);
+    showDialog(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Rename Workspace', style: TextStyle(fontFamily: _mono, fontSize: 16)),
+        content: TextField(
+          controller: controller,
+          autofocus: true,
+          style: const TextStyle(fontFamily: _mono, fontSize: 13, color: _text),
+          decoration: const InputDecoration(
+            labelText: 'Workspace name',
+            border: OutlineInputBorder(),
+          ),
+          onSubmitted: (val) {
+            final trimmed = val.trim();
+            if (trimmed.isNotEmpty) {
+              client.renameWorkspace(ws.id, trimmed);
+            }
+            Navigator.pop(dialogContext);
+          },
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext),
+            child: const Text('Cancel', style: TextStyle(fontFamily: _mono, color: _dim)),
+          ),
+          TextButton(
+            onPressed: () {
+              final trimmed = controller.text.trim();
+              if (trimmed.isNotEmpty) {
+                client.renameWorkspace(ws.id, trimmed);
+              }
+              Navigator.pop(dialogContext);
+            },
+            child: const Text('Rename', style: TextStyle(fontFamily: _mono)),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _showNewWorktreeDialog(BuildContext context, WorkspaceModel ws) {
+    final controller = TextEditingController();
+    showDialog(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('New Worktree', style: TextStyle(fontFamily: _mono, fontSize: 16)),
+        content: TextField(
+          controller: controller,
+          autofocus: true,
+          style: const TextStyle(fontFamily: _mono, fontSize: 13, color: _text),
+          decoration: const InputDecoration(
+            labelText: 'Branch name',
+            hintText: 'e.g. feat/my-feature',
+            border: OutlineInputBorder(),
+          ),
+          onSubmitted: (val) {
+            final trimmed = val.trim();
+            if (trimmed.isNotEmpty) {
+              client.createWorktree(ws.id, trimmed);
+              Navigator.pop(dialogContext);
+              Navigator.pop(context);
+            }
+          },
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext),
+            child: const Text('Cancel', style: TextStyle(fontFamily: _mono, color: _dim)),
+          ),
+          TextButton(
+            onPressed: () {
+              final trimmed = controller.text.trim();
+              if (trimmed.isNotEmpty) {
+                client.createWorktree(ws.id, trimmed);
+                Navigator.pop(dialogContext);
+                Navigator.pop(context);
+              }
+            },
+            child: const Text('Create', style: TextStyle(fontFamily: _mono)),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _showOpenWorktreeDialog(BuildContext context, WorkspaceModel ws) {
+    showDialog(
+      context: context,
+      builder: (dialogContext) => FutureBuilder<List<Map<String, dynamic>>>(
+        future: client.listWorktrees(ws.id),
+        builder: (context, snapshot) {
+          if (snapshot.connectionState == ConnectionState.waiting) {
+            return const AlertDialog(
+              title: Text('Worktrees', style: TextStyle(fontFamily: _mono, fontSize: 16)),
+              content: SizedBox(
+                height: 100,
+                child: Center(child: CircularProgressIndicator()),
+              ),
+            );
+          }
+          final list = snapshot.data ?? [];
+          if (list.isEmpty) {
+            return AlertDialog(
+              title: const Text('Worktrees', style: TextStyle(fontFamily: _mono, fontSize: 16)),
+              content: const Text('No worktrees found for this repository.',
+                  style: TextStyle(fontFamily: _mono, fontSize: 13, color: _dim)),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.pop(dialogContext),
+                  child: const Text('OK', style: TextStyle(fontFamily: _mono)),
+                ),
+              ],
+            );
+          }
+          return AlertDialog(
+            title: const Text('Open Worktree', style: TextStyle(fontFamily: _mono, fontSize: 16)),
+            content: SizedBox(
+              width: double.maxFinite,
+              child: ListView.separated(
+                shrinkWrap: true,
+                itemCount: list.length,
+                separatorBuilder: (_, __) => const Divider(color: Colors.white10, height: 1),
+                itemBuilder: (context, index) {
+                  final wt = list[index];
+                  final branch = wt['branch']?.toString() ?? wt['label']?.toString() ?? 'unknown';
+                  final openWsId = wt['open_workspace_id'];
+                  final isOpen = openWsId != null;
+                  return ListTile(
+                    dense: true,
+                    contentPadding: EdgeInsets.zero,
+                    leading: const Icon(Icons.call_split, size: 18, color: _dim),
+                    title: Text(
+                      branch,
+                      style: TextStyle(
+                        fontFamily: _mono,
+                        fontSize: 13,
+                        color: isOpen ? Colors.white70 : _text,
+                        fontWeight: isOpen ? FontWeight.normal : FontWeight.bold,
+                      ),
+                    ),
+                    subtitle: Text(
+                      isOpen ? 'already open' : (wt['path']?.toString() ?? ''),
+                      style: const TextStyle(fontFamily: _mono, fontSize: 11, color: _dim),
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                    trailing: isOpen ? const Icon(Icons.check, size: 16, color: Colors.greenAccent) : null,
+                    onTap: () {
+                      Navigator.pop(dialogContext);
+                      Navigator.pop(context);
+                      if (isOpen) {
+                        final targetWs = client.snapshot?.workspaces.where((w) => w.id == openWsId).firstOrNull;
+                        if (targetWs != null) {
+                          final panes = client.snapshot!.panes.where((p) => p.workspaceId == targetWs.id);
+                          final pane = panes.where((p) => p.tabId == targetWs.activeTabId && p.focused).firstOrNull ??
+                              panes.where((p) => p.tabId == targetWs.activeTabId).firstOrNull ??
+                              panes.firstOrNull;
+                          if (pane != null) client.selectPane(pane.id);
+                        }
+                      } else {
+                        client.openWorktree(
+                          ws.id,
+                          branch: wt['branch']?.toString(),
+                          path: wt['path']?.toString(),
+                        );
+                      }
+                    },
+                  );
+                },
+              ),
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(dialogContext),
+                child: const Text('Cancel', style: TextStyle(fontFamily: _mono, color: _dim)),
+              ),
+            ],
+          );
+        },
+      ),
+    );
+  }
+
+  void _showDeleteDialog(BuildContext context, WorkspaceModel ws) {
+    final isLinked = ws.isLinkedWorktree;
+    showDialog(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: Text(isLinked ? 'Delete Worktree' : 'Delete Workspace',
+            style: const TextStyle(fontFamily: _mono, fontSize: 16)),
+        content: Text(
+          isLinked
+              ? 'Delete worktree "${ws.displayName}"?\nThis will remove the worktree checkout.'
+              : 'Close workspace "${ws.displayName}"?',
+          style: const TextStyle(fontFamily: _mono, fontSize: 13, color: _text),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext),
+            child: const Text('Cancel', style: TextStyle(fontFamily: _mono, color: _dim)),
+          ),
+          TextButton(
+            onPressed: () {
+              Navigator.pop(dialogContext);
+              client.deleteWorkspace(ws.id, removeWorktree: isLinked);
+            },
+            child: const Text('Delete', style: TextStyle(fontFamily: _mono, color: Colors.redAccent)),
+          ),
+        ],
       ),
     );
   }
