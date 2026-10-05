@@ -51,3 +51,37 @@ jobs:
         with:
           files: mobile/build/app/outputs/flutter-apk/app-release.apk
           generate_release_notes: true
+
+  bridge:
+    strategy:
+      matrix:
+        include:
+          - runner: ubuntu-22.04
+            arch: x86_64
+          - runner: ubuntu-22.04-arm
+            arch: aarch64
+    runs-on: ${{ matrix.runner }}
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Build Bridge
+        run: |
+          cd bridge
+          cargo build --release
+          cp target/release/herdr-bridge ../herdr-bridge-linux-${{ matrix.arch }}
+
+      - name: Upload Bridge Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: herdr-bridge-linux-${{ matrix.arch }}
+          path: herdr-bridge-linux-${{ matrix.arch }}
+
+      - name: Publish Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: herdr-bridge-linux-${{ matrix.arch }}
