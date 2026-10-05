@@ -474,12 +474,12 @@ class _TerminalScreenState extends State<TerminalScreen> {
                         _terminal,
                         controller: _controller,
                         backgroundOpacity: 1.0,
-                        // Bundled mono font with full box-drawing coverage; line height 1.0 keeps
-                        // vertical lines continuous between rows.
+                        // Bundled mono font with full box-drawing coverage. Anything above 1.0
+                        // leaves small gaps in vertical box lines between rows.
                         textStyle: TerminalStyle(
                           fontSize: client.fontSize,
                           fontFamily: 'MesloLGS Nerd Font Mono',
-                          height: 1.0,
+                          height: 1.1,
                         ),
                         autofocus: true,
                         // Drags scroll herdr's history instead (_scroll); don't turn them into arrow keys.
