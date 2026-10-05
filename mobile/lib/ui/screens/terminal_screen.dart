@@ -1,8 +1,10 @@
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:xterm/xterm.dart';
 import '../../changelog.dart';
+import '../../models/agent_status.dart';
 import '../../models/session.dart';
 import '../../services/herdr_client.dart';
 import '../../services/pty_channel.dart';
@@ -21,16 +23,30 @@ class TerminalScreen extends StatefulWidget {
 }
 
 class _TerminalScreenState extends State<TerminalScreen> {
-  late Terminal _terminal;
+  final _terminal = Terminal(maxLines: 10000);
+  final _controller = TerminalController();
+  final _compose = TextEditingController();
   PtyChannel? _ptyChannel;
+  bool _ctrl = false;
+  bool _alt = false;
+
+  // Pinch-to-zoom and history scrolling, tracked from raw pointers so they don't fight the
+  // terminal's own gestures.
+  final _pointers = <int, Offset>{};
+  double? _pinchDistance;
+  double _pinchFont = 0;
+  Offset _downAt = Offset.zero;
+  Duration _downTime = Duration.zero;
+  double? _dragY; // set once a one-finger drag counts as a scroll
+  bool _pinched = false; // the rest of a gesture that pinched never scrolls
 
   @override
   void initState() {
     super.initState();
-    _terminal = Terminal(maxLines: 10000);
-    _terminal.onOutput = (data) => _ptyChannel?.sendInput(data);
+    _terminal.onOutput = _send;
     _terminal.onResize = (cols, rows, _, __) => _ptyChannel?.sendResize(cols, rows);
 
+    widget.client.onError = _showError;
     widget.client.addListener(_onClientUpdate);
     HardwareKeyboard.instance.addHandler(_onHardwareKey);
     _connectTerminal();
@@ -51,7 +67,6 @@ class _TerminalScreenState extends State<TerminalScreen> {
     final addMachine = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
-        backgroundColor: const Color(0xFF1E1E1E),
         title: Text(firstRun ? 'Welcome to Herdr Mobile' : "What's new"),
         content: SingleChildScrollView(
           child: firstRun
@@ -62,7 +77,8 @@ class _TerminalScreenState extends State<TerminalScreen> {
                   '2. Make sure this phone is on the same Tailscale network.\n'
                   '3. Add each computer here as a machine, using its Tailscale IP or MagicDNS name.\n\n'
                   'Switch machines from the menu at the top right. Open the drawer (☰) to pick a '
-                  'workspace or agent. The volume keys change the font size.',
+                  'workspace or agent. Tap ✎ in the key bar to type a message with autocorrect and voice. '
+                  'Pinch or use the volume keys to change the font size.',
                   style: body,
                 )
               : Column(
@@ -104,6 +120,127 @@ class _TerminalScreenState extends State<TerminalScreen> {
     return true;
   }
 
+  void _showError(String message) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(message)));
+  }
+
+  /// Everything typed or tapped reaches the pane here, with an armed CTRL/ALT applied once.
+  void _send(String data) {
+    if (_ctrl || _alt) {
+      final c = data.length == 1 ? data.codeUnitAt(0) : -1;
+      if (_ctrl && (c == 0x20 || (c >= 0x40 && c < 0x7f))) data = String.fromCharCode(c & 0x1f);
+      if (_alt) data = '\x1b$data';
+      setState(() => _ctrl = _alt = false);
+    }
+    _ptyChannel?.sendInput(data);
+  }
+
+  /// Special keys go through xterm so they follow the pane's cursor-key mode.
+  void _key(TerminalKey key, {bool shift = false}) {
+    final ctrl = _ctrl, alt = _alt;
+    setState(() => _ctrl = _alt = false);
+    _terminal.keyInput(key, shift: shift, ctrl: ctrl, alt: alt);
+  }
+
+  /// Sends [text] as one paste, so multi-line text doesn't submit line by line.
+  void _paste(String text) {
+    _ptyChannel?.sendInput(_terminal.bracketedPasteMode ? '\x1b[200~$text\x1b[201~' : text);
+  }
+
+  Future<void> _pasteClipboard() async {
+    final text = (await Clipboard.getData(Clipboard.kTextPlain))?.text;
+    if (text != null && text.isNotEmpty) _paste(text);
+  }
+
+  void _copySelection() {
+    final range = _controller.selection;
+    if (range == null) return _showError('Long-press the terminal to select text first');
+    Clipboard.setData(ClipboardData(text: _terminal.buffer.getText(range)));
+    _controller.clearSelection();
+  }
+
+  /// A plain text field, so the phone keyboard's autocorrect, swipe and voice input work.
+  /// The draft survives dismissing the sheet.
+  Future<void> _openCompose() async {
+    final send = await showModalBottomSheet<bool>(
+      context: context,
+      isScrollControlled: true,
+      builder: (context) => Padding(
+        padding: EdgeInsets.fromLTRB(12, 12, 12, 12 + MediaQuery.of(context).viewInsets.bottom),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.end,
+          children: [
+            Expanded(
+              child: TextField(
+                controller: _compose,
+                autofocus: true,
+                minLines: 1,
+                maxLines: 8,
+                keyboardType: TextInputType.multiline,
+                textCapitalization: TextCapitalization.sentences,
+                decoration: const InputDecoration(hintText: 'Message to send', border: OutlineInputBorder()),
+              ),
+            ),
+            const SizedBox(width: 8),
+            IconButton.filled(
+              tooltip: 'Send',
+              icon: const Icon(Icons.send),
+              onPressed: () => Navigator.pop(context, true),
+            ),
+          ],
+        ),
+      ),
+    );
+    if (send != true || _compose.text.isEmpty) return;
+    _paste(_compose.text);
+    _ptyChannel?.sendInput('\r');
+    _compose.clear();
+  }
+
+  void _trackPointer(PointerEvent e) {
+    if (e is PointerUpEvent || e is PointerCancelEvent) {
+      _pointers.remove(e.pointer);
+    } else {
+      _pointers[e.pointer] = e.position;
+    }
+    if (e is PointerDownEvent && _pointers.length == 1) {
+      _downAt = e.position;
+      _downTime = e.timeStamp;
+      _dragY = null;
+      _pinched = false;
+    }
+    if (e is PointerMoveEvent && _pointers.length == 1 && !_pinched) return _scroll(e);
+    if (_pointers.length != 2) {
+      _pinchDistance = null;
+      return;
+    }
+    final p = _pointers.values.toList();
+    final distance = (p[0] - p[1]).distance;
+    if (_pinchDistance == null) {
+      _pinched = true;
+      _pinchDistance = distance;
+      _pinchFont = widget.client.fontSize;
+      return;
+    }
+    widget.client.setFontSize((_pinchFont * distance / _pinchDistance!).roundToDouble());
+  }
+
+  /// Herdr holds the pane's history (see [PtyChannel.connect]), so dragging scrolls herdr's view a line
+  /// per text row moved. A press held still past the long-press timeout is text selection instead.
+  void _scroll(PointerMoveEvent e) {
+    final y = e.position.dy;
+    if (_dragY == null) {
+      if (e.timeStamp - _downTime >= kLongPressTimeout || (y - _downAt.dy).abs() < kTouchSlop) return;
+      _dragY = y;
+    }
+    final lineHeight = widget.client.fontSize; // TerminalStyle height is 1.0
+    final lines = (y - _dragY!) ~/ lineHeight;
+    if (lines == 0) return;
+    _ptyChannel?.sendScroll(lines);
+    _dragY = _dragY! + lines * lineHeight;
+  }
+
   void _onClientUpdate() {
     if (!mounted) return;
     setState(() {});
@@ -134,6 +271,9 @@ class _TerminalScreenState extends State<TerminalScreen> {
   @override
   void dispose() {
     widget.client.removeListener(_onClientUpdate);
+    widget.client.onError = null;
+    _controller.dispose();
+    _compose.dispose();
     HardwareKeyboard.instance.removeHandler(_onHardwareKey);
     _ptyChannel?.dispose();
     super.dispose();
@@ -146,6 +286,13 @@ class _TerminalScreenState extends State<TerminalScreen> {
     final currentPane = snapshot?.panes.where((p) => p.id == client.selectedPaneId).firstOrNull;
     final currentAgent = snapshot?.agents.where((a) => a.paneId == client.selectedPaneId).firstOrNull;
     final isBlocked = (currentAgent?.status == 'blocked' || currentPane?.agentStatus == 'blocked');
+    final blockedElsewhere = {
+      for (final p in snapshot?.panes ?? <PaneModel>[])
+        if (p.agentStatus == 'blocked') p.id,
+      for (final a in snapshot?.agents ?? <AgentModel>[])
+        if (a.status == 'blocked') a.paneId,
+    }..remove(client.selectedPaneId);
+    final blockedColor = AgentStatus.blocked.color;
     final workspaceId = currentPane?.workspaceId ?? snapshot?.focusedWorkspaceId;
     final currentWorkspace = snapshot?.workspaces.where((w) => w.id == workspaceId).firstOrNull;
     final workspaceTabs = snapshot?.tabs.where((t) => t.workspaceId == workspaceId).toList() ?? [];
@@ -156,8 +303,6 @@ class _TerminalScreenState extends State<TerminalScreen> {
       backgroundColor: Colors.black,
       drawer: WorkspaceDrawer(client: client),
       appBar: AppBar(
-        backgroundColor: const Color(0xFF181818),
-        elevation: 0,
         title: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
@@ -178,7 +323,6 @@ class _TerminalScreenState extends State<TerminalScreen> {
           if (workspaceTabs.isNotEmpty)
             PopupMenuButton<String>(
               tooltip: 'Switch tab',
-              color: const Color(0xFF222222),
               onSelected: (tabId) {
                 if (tabId.isEmpty) {
                   client.createTab(workspaceId!);
@@ -199,11 +343,11 @@ class _TerminalScreenState extends State<TerminalScreen> {
                             tabLabel(tab),
                             style: TextStyle(
                               fontWeight: tab.id == currentTab?.id ? FontWeight.bold : FontWeight.normal,
-                              color: tab.id == currentTab?.id ? Colors.blueAccent : Colors.white,
+                              color: tab.id == currentTab?.id ? Theme.of(context).colorScheme.primary : Colors.white,
                             ),
                           ),
                         ),
-                        AgentStatusBadge(status: tab.agentStatus, compact: true),
+                        AgentStatusBadge(status: tab.agentStatus),
                       ],
                     ),
                   ),
@@ -237,6 +381,13 @@ class _TerminalScreenState extends State<TerminalScreen> {
                 ),
               ),
             ),
+          if (blockedElsewhere.isNotEmpty)
+            TextButton.icon(
+              style: TextButton.styleFrom(padding: const EdgeInsets.symmetric(horizontal: 6), minimumSize: Size.zero),
+              onPressed: () => client.selectPane(blockedElsewhere.first),
+              icon: Icon(Icons.warning_amber_rounded, size: 18, color: blockedColor),
+              label: Text('${blockedElsewhere.length}', style: TextStyle(color: blockedColor)),
+            ),
           if (currentPane != null)
             Padding(
               padding: const EdgeInsets.only(right: 12),
@@ -251,7 +402,6 @@ class _TerminalScreenState extends State<TerminalScreen> {
           PopupMenuButton<String>(
             tooltip: 'Machines',
             icon: Icon(Icons.dns, color: client.connected ? Colors.greenAccent : Colors.white54),
-            color: const Color(0xFF222222),
             onSelected: (value) {
               if (value.isEmpty) {
                 _openSettings();
@@ -268,10 +418,10 @@ class _TerminalScreenState extends State<TerminalScreen> {
                       Icon(
                         m == client.machine ? Icons.radio_button_checked : Icons.radio_button_unchecked,
                         size: 18,
-                        color: m == client.machine ? Colors.blueAccent : Colors.white54,
+                        color: m == client.machine ? Theme.of(context).colorScheme.primary : Colors.white54,
                       ),
                       const SizedBox(width: 8),
-                      Flexible(child: Text(m, overflow: TextOverflow.ellipsis)),
+                      Flexible(child: Text(client.nameOf(m), overflow: TextOverflow.ellipsis)),
                     ],
                   ),
                 ),
@@ -293,7 +443,26 @@ class _TerminalScreenState extends State<TerminalScreen> {
       body: SafeArea(
         child: Column(
           children: [
-            // Blocked / Approval Banner
+            if (client.machines.isNotEmpty && !client.connected)
+              Container(
+                color: Colors.white10,
+                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
+                child: Row(
+                  children: [
+                    const SizedBox.square(dimension: 12, child: CircularProgressIndicator(strokeWidth: 2)),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: Text(
+                        'Connecting to ${client.nameOf(client.machine)}…',
+                        style: const TextStyle(color: Colors.white70, fontSize: 12),
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+
+            // Agents prompt with menus answered by Enter (highlighted option) or Esc, not y/n.
             if (isBlocked)
               Container(
                 color: Colors.amber.shade900.withOpacity(0.9),
@@ -304,29 +473,26 @@ class _TerminalScreenState extends State<TerminalScreen> {
                     const SizedBox(width: 8),
                     const Expanded(
                       child: Text(
-                        'Agent waiting for your input / approval',
+                        'Agent waiting for input',
                         style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 13),
                       ),
                     ),
-                    ElevatedButton(
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: Colors.green,
-                        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-                        minimumSize: Size.zero,
+                    for (final (label, key, color) in [
+                      ('Enter', TerminalKey.enter, Colors.green),
+                      ('Esc', TerminalKey.escape, Colors.red),
+                    ]) ...[
+                      const SizedBox(width: 6),
+                      ElevatedButton(
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: color,
+                          foregroundColor: Colors.white,
+                          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+                          minimumSize: Size.zero,
+                        ),
+                        onPressed: () => _key(key),
+                        child: Text(label, style: const TextStyle(fontSize: 12)),
                       ),
-                      onPressed: () => client.sendPaneInput(client.selectedPaneId!, text: 'y\n'),
-                      child: const Text('Approve (y)', style: TextStyle(fontSize: 12, color: Colors.white)),
-                    ),
-                    const SizedBox(width: 6),
-                    ElevatedButton(
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: Colors.red,
-                        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-                        minimumSize: Size.zero,
-                      ),
-                      onPressed: () => client.sendPaneInput(client.selectedPaneId!, text: 'n\n'),
-                      child: const Text('Reject (n)', style: TextStyle(fontSize: 12, color: Colors.white)),
-                    ),
+                    ],
                   ],
                 ),
               ),
@@ -341,23 +507,40 @@ class _TerminalScreenState extends State<TerminalScreen> {
                         label: const Text('Add a machine to get started'),
                       ),
                     )
-                  : TerminalView(
-                      _terminal,
-                      backgroundOpacity: 1.0,
-                      // Bundled mono font with full box-drawing coverage; line height 1.0 keeps
-                      // vertical lines continuous between rows.
-                      textStyle: TerminalStyle(
-                        fontSize: client.fontSize,
-                        fontFamily: 'MesloLGS Nerd Font Mono',
-                        height: 1.0,
+                  : Listener(
+                      onPointerDown: _trackPointer,
+                      onPointerMove: _trackPointer,
+                      onPointerUp: _trackPointer,
+                      onPointerCancel: _trackPointer,
+                      child: TerminalView(
+                        _terminal,
+                        controller: _controller,
+                        backgroundOpacity: 1.0,
+                        // Bundled mono font with full box-drawing coverage; line height 1.0 keeps
+                        // vertical lines continuous between rows.
+                        textStyle: TerminalStyle(
+                          fontSize: client.fontSize,
+                          fontFamily: 'MesloLGS Nerd Font Mono',
+                          height: 1.0,
+                        ),
+                        autofocus: true,
+                        // Drags scroll herdr's history instead (_scroll); don't turn them into arrow keys.
+                        simulateScroll: false,
                       ),
-                      autofocus: true,
                     ),
             ),
 
             // Pinned Quick Keyboard Accessory Toolbar
             KeyboardAccessoryBar(
-              onSendInput: (input) => _ptyChannel?.sendInput(input),
+              ctrl: _ctrl,
+              alt: _alt,
+              onCtrl: () => setState(() => _ctrl = !_ctrl),
+              onAlt: () => setState(() => _alt = !_alt),
+              onKey: _key,
+              onText: _send,
+              onPaste: _pasteClipboard,
+              onCopy: _copySelection,
+              onCompose: _openCompose,
             ),
           ],
         ),

@@ -10,7 +10,7 @@ void main() async {
 
   final client = HerdrClientService();
   client.setFontSize(prefs.getDouble('terminal_font_size') ?? 14);
-  client.setMachines(prefs.getStringList('herdr_machines') ?? []);
+  client.setMachines(prefs.getStringList('herdr_machines') ?? [], prefs.getStringList('herdr_machine_names') ?? []);
   // Nothing to connect to until the first machine is added.
   if (host != null) client.configure(host: host, port: prefs.getInt('herdr_port') ?? 7788);
 
@@ -24,17 +24,22 @@ class HerdrMobileApp extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    // One surface colour for every piece of chrome around the black terminal.
+    const surface = Color(0xFF16181D);
     return MaterialApp(
       title: 'Herdr Mobile',
       debugShowCheckedModeBanner: false,
-      themeMode: ThemeMode.dark,
-      darkTheme: ThemeData.dark().copyWith(
-        scaffoldBackgroundColor: Colors.black,
-        primaryColor: Colors.blueAccent,
-        appBarTheme: const AppBarTheme(
-          backgroundColor: Color(0xFF181818),
-          elevation: 0,
+      theme: ThemeData(
+        colorScheme: ColorScheme.fromSeed(
+          seedColor: Colors.blueAccent,
+          brightness: Brightness.dark,
+          surface: surface,
+          surfaceContainerLow: surface, // drawer, bottom sheet
+          surfaceContainer: const Color(0xFF22252B), // popup menus
+          surfaceContainerHigh: const Color(0xFF22252B), // dialogs
         ),
+        scaffoldBackgroundColor: Colors.black,
+        appBarTheme: const AppBarTheme(backgroundColor: surface, elevation: 0, scrolledUnderElevation: 0),
       ),
       home: TerminalScreen(client: client),
     );

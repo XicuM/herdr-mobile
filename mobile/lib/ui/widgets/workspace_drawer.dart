@@ -51,7 +51,7 @@ class WorkspaceDrawer extends StatelessWidget {
       onTap: onTap,
       child: Container(
         color: selected ? _selected : null,
-        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 3),
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
@@ -126,7 +126,6 @@ class WorkspaceDrawer extends StatelessWidget {
 
     return Drawer(
       width: 260,
-      backgroundColor: const Color(0xFF16181D),
       shape: const RoundedRectangleBorder(),
       child: SafeArea(
         child: ListView(
@@ -142,8 +141,8 @@ class WorkspaceDrawer extends StatelessWidget {
                   },
                   child: Container(
                     color: m == client.machine ? _selected : null,
-                    padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 3),
-                    child: Text(m,
+                    padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+                    child: Text(client.nameOf(m),
                         style: const TextStyle(fontFamily: _mono, fontSize: 13, color: _text),
                         overflow: TextOverflow.ellipsis),
                   ),
@@ -177,33 +176,30 @@ class WorkspaceDrawer extends StatelessWidget {
                 selected: ws.id == selectedPane?.workspaceId,
                 onTap: () => selectWorkspace(ws),
               ),
-            Padding(
-              padding: const EdgeInsets.fromLTRB(14, 8, 14, 0),
-              child: Row(
-                children: [
-                  InkWell(
-                    onTap: () {
-                      Navigator.pop(context);
-                      client.createWorkspace();
-                    },
-                    child: const Padding(
-                      padding: EdgeInsets.symmetric(vertical: 4),
-                      child: Text('new', style: TextStyle(fontFamily: _mono, fontSize: 13, color: _dim)),
-                    ),
+            Row(
+              children: [
+                InkWell(
+                  onTap: () {
+                    Navigator.pop(context);
+                    client.createWorkspace();
+                  },
+                  child: const Padding(
+                    padding: EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+                    child: Text('new', style: TextStyle(fontFamily: _mono, fontSize: 13, color: _dim)),
                   ),
-                  const Spacer(),
-                  InkWell(
-                    onTap: () {
-                      Navigator.pop(context);
-                      Navigator.push(context, MaterialPageRoute(builder: (_) => SettingsScreen(client: client)));
-                    },
-                    child: const Padding(
-                      padding: EdgeInsets.symmetric(vertical: 4),
-                      child: Text('settings', style: TextStyle(fontFamily: _mono, fontSize: 13, color: _dim)),
-                    ),
+                ),
+                const Spacer(),
+                InkWell(
+                  onTap: () {
+                    Navigator.pop(context);
+                    Navigator.push(context, MaterialPageRoute(builder: (_) => SettingsScreen(client: client)));
+                  },
+                  child: const Padding(
+                    padding: EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+                    child: Text('settings', style: TextStyle(fontFamily: _mono, fontSize: 13, color: _dim)),
                   ),
-                ],
-              ),
+                ),
+              ],
             ),
             if (snapshot != null && snapshot.agents.isNotEmpty) ...[
               const Divider(color: Colors.white12, height: 20),

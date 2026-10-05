@@ -29,13 +29,13 @@ extension AgentStatusExtension on AgentStatus {
       case AgentStatus.working:
         return 'Working';
       case AgentStatus.blocked:
-        return 'Blocked (Needs Input)';
+        return 'Blocked';
       case AgentStatus.done:
         return 'Done';
       case AgentStatus.idle:
         return 'Idle';
       case AgentStatus.unknown:
-        return 'Shell';
+        return 'No agent';
     }
   }
 

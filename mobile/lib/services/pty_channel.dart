@@ -26,6 +26,10 @@ class PtyChannel {
 
   void connect() {
     if (_disposed) return;
+    // Herdr sends rendered frames of its own viewport (absolute cursor moves, no newlines), so the
+    // pane's history lives in herdr, not here. Keep xterm on the alt screen, which has no scrollback,
+    // and start each attach from a blank screen; herdr repaints the whole pane on attach.
+    terminal.write('\x1b[?1049h\x1b[0m\x1b[H\x1b[2J');
     final uri = Uri.parse(
         'ws://$host:$port/ws/term/${Uri.encodeComponent(paneId)}?cols=${terminal.viewWidth}&rows=${terminal.viewHeight}');
     _channel = WebSocketChannel.connect(uri);
@@ -37,14 +41,14 @@ class PtyChannel {
         .cast<List<int>>()
         .transform(const Utf8Decoder(allowMalformed: true))
         .listen(
-          terminal.write,
-          onError: (err) {
-            debugPrint('Terminal WS error: $err');
-            _scheduleReconnect();
-          },
-          onDone: _scheduleReconnect,
-          cancelOnError: true,
-        );
+      terminal.write,
+      onError: (err) {
+        debugPrint('Terminal WS error: $err');
+        _scheduleReconnect();
+      },
+      onDone: _scheduleReconnect,
+      cancelOnError: true,
+    );
   }
 
   void _scheduleReconnect() {
@@ -58,6 +62,12 @@ class PtyChannel {
 
   void sendResize(int cols, int rows) {
     _channel?.sink.add(jsonEncode({'cols': cols, 'rows': rows}));
+  }
+
+  /// Scrolls herdr's view of the pane through its history; positive [lines] go back in time.
+  void sendScroll(int lines) {
+    _channel?.sink
+        .add(jsonEncode({'type': 'terminal.scroll', 'direction': lines > 0 ? 'up' : 'down', 'lines': lines.abs()}));
   }
 
   void dispose() {

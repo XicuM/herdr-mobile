@@ -14,6 +14,7 @@ class HerdrClientService extends ChangeNotifier {
   String? _selectedPaneId;
   double _fontSize = 14;
   List<String> _machines = [];
+  Map<String, String> _names = {};
 
   WebSocketChannel? _channel;
   Timer? _reconnectTimer;
@@ -30,6 +31,12 @@ class HerdrClientService extends ChangeNotifier {
   /// Saved bridges as `host:port`, one per machine running herdr-bridge.
   List<String> get machines => _machines;
 
+  /// The name given to [machine] when it was added, or its address.
+  String nameOf(String machine) => _names[machine] ?? machine;
+
+  /// Reports failed bridge requests; set by the screen that shows them.
+  void Function(String message)? onError;
+
   static const double minFontSize = 6;
   static const double maxFontSize = 32;
 
@@ -42,11 +49,12 @@ class HerdrClientService extends ChangeNotifier {
   }
 
   /// Switches to the bridge at [host]:[port], remembering it in the machine list.
-  void configure({required String host, required int port}) {
+  void configure({required String host, required int port, String? name}) {
     final changed = host != _host || port != _port;
     _host = host;
     _port = port;
     if (!_machines.contains(machine)) _machines = [..._machines, machine];
+    if (name != null && name.isNotEmpty) _names = {..._names, machine: name};
     if (changed) {
       _snapshot = null;
       _selectedPaneId = null;
@@ -54,14 +62,39 @@ class HerdrClientService extends ChangeNotifier {
     SharedPreferences.getInstance().then((p) => p
       ..setString('herdr_host', host)
       ..setInt('herdr_port', port)
-      ..setStringList('herdr_machines', _machines));
+      ..setStringList('herdr_machines', _machines)
+      ..setStringList('herdr_machine_names', [for (final e in _names.entries) '${e.key}=${e.value}']));
     reconnect();
   }
 
-  void setMachines(List<String> machines) {
+  /// [machines] are `host:port`; [names] are `host:port=name`, as stored in prefs.
+  void setMachines(List<String> machines, List<String> names) {
     _machines = machines;
+    _names = {
+      for (final n in names)
+        if (n.contains('=')) n.substring(0, n.indexOf('=')): n.substring(n.indexOf('=') + 1)
+    };
     notifyListeners();
-    SharedPreferences.getInstance().then((p) => p.setStringList('herdr_machines', machines));
+  }
+
+  /// Forgets [m]; removing the active machine switches to another, or disconnects if none is left.
+  void removeMachine(String m) {
+    _machines = _machines.where((x) => x != m).toList();
+    _names = {..._names}..remove(m);
+    SharedPreferences.getInstance().then((p) => p
+      ..setStringList('herdr_machines', _machines)
+      ..setStringList('herdr_machine_names', [for (final e in _names.entries) '${e.key}=${e.value}']));
+    if (m != machine) return notifyListeners();
+    if (_machines.isNotEmpty) return switchMachine(_machines.first);
+    SharedPreferences.getInstance().then((p) => p..remove('herdr_host')..remove('herdr_port'));
+    _reconnectTimer?.cancel();
+    final old = _channel;
+    _channel = null;
+    old?.sink.close();
+    _connected = false;
+    _snapshot = null;
+    _selectedPaneId = null;
+    notifyListeners();
   }
 
   /// [machine] is `host:port` as stored in [machines].
@@ -175,26 +208,12 @@ class HerdrClientService extends ChangeNotifier {
         headers: {'Content-Type': 'application/json'},
         body: jsonEncode(params),
       );
+      if (res.statusCode != 200) throw res.body;
       final paneId = jsonDecode(res.body)['root_pane']?['pane_id'];
       await _fetchSnapshotHttp();
       if (paneId is String) selectPane(paneId);
     } catch (e) {
-      debugPrint('Failed to create $kind: $e');
-    }
-  }
-
-  Future<void> sendPaneInput(String paneId, {String? text, List<String>? keys}) async {
-    try {
-      await http.post(
-        Uri.parse('http://$_host:$_port/api/pane/$paneId/input'),
-        headers: {'Content-Type': 'application/json'},
-        body: jsonEncode({
-          if (text != null) 'text': text,
-          if (keys != null) 'keys': keys,
-        }),
-      );
-    } catch (e) {
-      debugPrint('Failed to send input: $e');
+      onError?.call('Could not create $kind: $e');
     }
   }
 
