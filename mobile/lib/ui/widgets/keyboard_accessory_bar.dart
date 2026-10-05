@@ -2,12 +2,10 @@ import 'package:flutter/material.dart';
 
 class KeyboardAccessoryBar extends StatefulWidget {
   final Function(String input) onSendInput;
-  final Function(String key) onSendKey;
 
   const KeyboardAccessoryBar({
     super.key,
     required this.onSendInput,
-    required this.onSendKey,
   });
 
   @override
@@ -17,21 +15,6 @@ class KeyboardAccessoryBar extends StatefulWidget {
 class _KeyboardAccessoryBarState extends State<KeyboardAccessoryBar> {
   bool _ctrlActive = false;
   bool _altActive = false;
-
-  void _handleKey(String key, String fallbackEsc) {
-    if (_ctrlActive) {
-      // Send Ctrl sequence
-      if (key.length == 1) {
-        int code = key.toUpperCase().codeUnitAt(0) - 64;
-        if (code >= 1 && code <= 26) {
-          widget.onSendInput(String.fromCharCode(code));
-        }
-      }
-      setState(() => _ctrlActive = false);
-    } else {
-      widget.onSendKey(fallbackEsc);
-    }
-  }
 
   @override
   Widget build(BuildContext context) {

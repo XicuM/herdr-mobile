@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:xterm/xterm.dart';
+import '../../models/session.dart';
 import '../../services/herdr_client.dart';
 import '../../services/pty_channel.dart';
 import '../widgets/workspace_drawer.dart';
@@ -18,47 +20,57 @@ class TerminalScreen extends StatefulWidget {
 class _TerminalScreenState extends State<TerminalScreen> {
   late Terminal _terminal;
   PtyChannel? _ptyChannel;
-  String? _currentPaneId;
 
   @override
   void initState() {
     super.initState();
     _terminal = Terminal(maxLines: 10000);
-    _terminal.onOutput = (data) {
-      _ptyChannel?.sendInput(data);
-    };
+    _terminal.onOutput = (data) => _ptyChannel?.sendInput(data);
+    _terminal.onResize = (cols, rows, _, __) => _ptyChannel?.sendResize(cols, rows);
 
     widget.client.addListener(_onClientUpdate);
-    _checkActivePane();
+    HardwareKeyboard.instance.addHandler(_onHardwareKey);
+    _connectTerminal();
+  }
+
+  /// Volume keys zoom the terminal font while this screen is on top.
+  bool _onHardwareKey(KeyEvent event) {
+    final key = event.logicalKey;
+    if (key != LogicalKeyboardKey.audioVolumeUp && key != LogicalKeyboardKey.audioVolumeDown) return false;
+    if (!mounted || ModalRoute.of(context)?.isCurrent != true) return false;
+    if (event is! KeyUpEvent) {
+      final client = widget.client;
+      client.setFontSize(client.fontSize + (key == LogicalKeyboardKey.audioVolumeUp ? 1 : -1));
+    }
+    return true;
   }
 
   void _onClientUpdate() {
-    if (mounted) {
-      setState(() {});
-      _checkActivePane();
-    }
+    if (!mounted) return;
+    setState(() {});
+    _connectTerminal();
   }
 
-  void _checkActivePane() {
-    final paneId = widget.client.selectedPaneId;
-    if (paneId != null && paneId != _currentPaneId) {
-      _currentPaneId = paneId;
-      _ptyChannel?.dispose();
-      _terminal.eraseDisplay();
-
-      _ptyChannel = PtyChannel(
-        host: widget.client.host,
-        port: widget.client.port,
-        paneId: paneId,
-        terminal: _terminal,
-      );
-      _ptyChannel!.connect();
-    }
+  /// (Re)attaches when the selected pane or bridge address changes.
+  void _connectTerminal() {
+    final client = widget.client;
+    final paneId = client.selectedPaneId;
+    final pty = _ptyChannel;
+    if (paneId == null) return;
+    if (pty != null && pty.paneId == paneId && pty.host == client.host && pty.port == client.port) return;
+    pty?.dispose();
+    _ptyChannel = PtyChannel(
+      host: client.host,
+      port: client.port,
+      paneId: paneId,
+      terminal: _terminal,
+    )..connect();
   }
 
   @override
   void dispose() {
     widget.client.removeListener(_onClientUpdate);
+    HardwareKeyboard.instance.removeHandler(_onHardwareKey);
     _ptyChannel?.dispose();
     super.dispose();
   }
@@ -74,6 +86,11 @@ class _TerminalScreenState extends State<TerminalScreen> {
         .where((a) => a.paneId == client.selectedPaneId)
         .firstOrNull;
     final isBlocked = (currentAgent?.status == 'blocked' || currentPane?.agentStatus == 'blocked');
+    final workspaceId = currentPane?.workspaceId ?? snapshot?.focusedWorkspaceId;
+    final currentWorkspace = snapshot?.workspaces.where((w) => w.id == workspaceId).firstOrNull;
+    final workspaceTabs = snapshot?.tabs.where((t) => t.workspaceId == workspaceId).toList() ?? [];
+    final currentTab = workspaceTabs.where((t) => t.id == currentPane?.tabId).firstOrNull;
+    String tabLabel(TabModel t) => t.label.isNotEmpty ? t.label : 'Tab ${t.number}';
 
     return Scaffold(
       backgroundColor: Colors.black,
@@ -85,20 +102,81 @@ class _TerminalScreenState extends State<TerminalScreen> {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Text(
-              currentPane?.terminalTitle.isNotEmpty == true
-                  ? currentPane!.terminalTitle
-                  : (client.selectedPaneId ?? 'Herdr Mobile'),
+              currentWorkspace?.displayName ?? 'Herdr Mobile',
               style: const TextStyle(fontSize: 15, fontWeight: FontWeight.bold),
               overflow: TextOverflow.ellipsis,
             ),
-            if (client.selectedPaneId != null)
+            if (currentWorkspace?.gitBranch != null)
               Text(
-                'Pane ${client.selectedPaneId}',
+                currentWorkspace!.gitBranch!,
                 style: const TextStyle(fontSize: 11, color: Colors.white54),
+                overflow: TextOverflow.ellipsis,
               ),
           ],
         ),
         actions: [
+          if (workspaceTabs.isNotEmpty)
+            PopupMenuButton<String>(
+              tooltip: 'Switch tab',
+              color: const Color(0xFF222222),
+              onSelected: (tabId) {
+                if (tabId.isEmpty) {
+                  client.createTab(workspaceId!);
+                  return;
+                }
+                final tabPanes = snapshot!.panes.where((p) => p.tabId == tabId);
+                final pane = tabPanes.where((p) => p.focused).firstOrNull ?? tabPanes.firstOrNull;
+                if (pane != null) client.selectPane(pane.id);
+              },
+              itemBuilder: (_) => [
+                for (final tab in workspaceTabs)
+                  PopupMenuItem(
+                    value: tab.id,
+                    child: Row(
+                      children: [
+                        Expanded(
+                          child: Text(
+                            tabLabel(tab),
+                            style: TextStyle(
+                              fontWeight: tab.id == currentTab?.id ? FontWeight.bold : FontWeight.normal,
+                              color: tab.id == currentTab?.id ? Colors.blueAccent : Colors.white,
+                            ),
+                          ),
+                        ),
+                        AgentStatusBadge(status: tab.agentStatus, compact: true),
+                      ],
+                    ),
+                  ),
+                const PopupMenuDivider(),
+                const PopupMenuItem(
+                  value: '', // sentinel: create a new tab
+                  child: Row(
+                    children: [
+                      Icon(Icons.add, size: 18, color: Colors.white70),
+                      SizedBox(width: 8),
+                      Text('New tab'),
+                    ],
+                  ),
+                ),
+              ],
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 8),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    ConstrainedBox(
+                      constraints: const BoxConstraints(maxWidth: 100),
+                      child: Text(
+                        currentTab != null ? tabLabel(currentTab) : 'Tabs',
+                        style: const TextStyle(fontSize: 13),
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ),
+                    const Icon(Icons.arrow_drop_down),
+                  ],
+                ),
+              ),
+            ),
           if (currentPane != null)
             Padding(
               padding: const EdgeInsets.only(right: 12),
@@ -135,7 +213,7 @@ class _TerminalScreenState extends State<TerminalScreen> {
                         padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
                         minimumSize: Size.zero,
                       ),
-                      onPressed: () => _ptyChannel?.sendInput('y\n'),
+                      onPressed: () => client.sendPaneInput(client.selectedPaneId!, text: 'y\n'),
                       child: const Text('Approve (y)', style: TextStyle(fontSize: 12, color: Colors.white)),
                     ),
                     const SizedBox(width: 6),
@@ -145,7 +223,7 @@ class _TerminalScreenState extends State<TerminalScreen> {
                         padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
                         minimumSize: Size.zero,
                       ),
-                      onPressed: () => _ptyChannel?.sendInput('n\n'),
+                      onPressed: () => client.sendPaneInput(client.selectedPaneId!, text: 'n\n'),
                       child: const Text('Reject (n)', style: TextStyle(fontSize: 12, color: Colors.white)),
                     ),
                   ],
@@ -157,6 +235,13 @@ class _TerminalScreenState extends State<TerminalScreen> {
               child: TerminalView(
                 _terminal,
                 backgroundOpacity: 1.0,
+                // Bundled mono font with full box-drawing coverage; line height 1.0 keeps
+                // vertical lines continuous between rows.
+                textStyle: TerminalStyle(
+                  fontSize: client.fontSize,
+                  fontFamily: 'MesloLGS Nerd Font Mono',
+                  height: 1.0,
+                ),
                 autofocus: true,
               ),
             ),
@@ -164,7 +249,6 @@ class _TerminalScreenState extends State<TerminalScreen> {
             // Pinned Quick Keyboard Accessory Toolbar
             KeyboardAccessoryBar(
               onSendInput: (input) => _ptyChannel?.sendInput(input),
-              onSendKey: (key) => _ptyChannel?.sendKey(key),
             ),
           ],
         ),

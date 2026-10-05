@@ -14,7 +14,6 @@ class SettingsScreen extends StatefulWidget {
 class _SettingsScreenState extends State<SettingsScreen> {
   late TextEditingController _hostController;
   late TextEditingController _portController;
-  late TextEditingController _ntfyController;
   bool _saving = false;
 
   @override
@@ -22,7 +21,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
     super.initState();
     _hostController = TextEditingController(text: widget.client.host);
     _portController = TextEditingController(text: widget.client.port.toString());
-    _ntfyController = TextEditingController();
     _loadPreferences();
   }
 
@@ -31,7 +29,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
     setState(() {
       _hostController.text = prefs.getString('herdr_host') ?? widget.client.host;
       _portController.text = (prefs.getInt('herdr_port') ?? widget.client.port).toString();
-      _ntfyController.text = prefs.getString('ntfy_topic') ?? '';
     });
   }
 
@@ -40,11 +37,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
     final prefs = await SharedPreferences.getInstance();
     final host = _hostController.text.trim();
     final port = int.tryParse(_portController.text.trim()) ?? 7788;
-    final ntfy = _ntfyController.text.trim();
 
     await prefs.setString('herdr_host', host);
     await prefs.setInt('herdr_port', port);
-    await prefs.setString('ntfy_topic', ntfy);
 
     widget.client.configure(host: host, port: port);
 
@@ -61,7 +56,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
   void dispose() {
     _hostController.dispose();
     _portController.dispose();
-    _ntfyController.dispose();
     super.dispose();
   }
 
@@ -109,7 +103,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
           ),
           const SizedBox(height: 28),
           const Text(
-            'Push Notifications (ntfy.sh)',
+            'Terminal',
             style: TextStyle(
               fontSize: 16,
               fontWeight: FontWeight.bold,
@@ -117,20 +111,17 @@ class _SettingsScreenState extends State<SettingsScreen> {
             ),
           ),
           const SizedBox(height: 8),
-          const Text(
-            'Enter your private ntfy.sh topic name to receive phone alerts when an agent is waiting for approval or finishes a task.',
-            style: TextStyle(color: Colors.white54, fontSize: 13),
+          Text(
+            'Font size: ${widget.client.fontSize.round()}  (volume keys also adjust it)',
+            style: const TextStyle(color: Colors.white54, fontSize: 13),
           ),
-          const SizedBox(height: 12),
-          TextField(
-            controller: _ntfyController,
-            style: const TextStyle(color: Colors.white),
-            decoration: const InputDecoration(
-              labelText: 'ntfy Topic',
-              hintText: 'e.g. my-private-agents-1234',
-              labelStyle: TextStyle(color: Colors.white70),
-              border: OutlineInputBorder(),
-            ),
+          Slider(
+            value: widget.client.fontSize,
+            min: HerdrClientService.minFontSize,
+            max: HerdrClientService.maxFontSize,
+            divisions: (HerdrClientService.maxFontSize - HerdrClientService.minFontSize).round(),
+            label: widget.client.fontSize.round().toString(),
+            onChanged: (v) => setState(() => widget.client.setFontSize(v)),
           ),
           const SizedBox(height: 32),
           ElevatedButton.icon(

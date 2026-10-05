@@ -54,6 +54,11 @@ class WorkspaceModel {
   final int tabCount;
   final String? activeTabId;
   final String agentStatus;
+  /// Git repo identity from `worktree.repo_key`; linked worktrees nest under the repo's main workspace.
+  final String? repoKey;
+  final bool isLinkedWorktree;
+  /// Added by the bridge (`git branch --show-current` in the workspace's directory).
+  final String? gitBranch;
 
   WorkspaceModel({
     required this.id,
@@ -64,7 +69,18 @@ class WorkspaceModel {
     required this.tabCount,
     this.activeTabId,
     required this.agentStatus,
+    this.repoKey,
+    this.isLinkedWorktree = false,
+    this.gitBranch,
   });
+
+  /// Name as Herdr's sidebar shows it: worktrees by branch, minus Herdr's `worktree/` prefix.
+  String get displayName {
+    if (isLinkedWorktree) {
+      return gitBranch?.replaceFirst('worktree/', '') ?? label.replaceFirst('worktree-', '');
+    }
+    return label.isNotEmpty ? label : 'workspace $number';
+  }
 
   factory WorkspaceModel.fromJson(Map<String, dynamic> json) {
     return WorkspaceModel(
@@ -76,6 +92,9 @@ class WorkspaceModel {
       tabCount: json['tab_count'] ?? 0,
       activeTabId: json['active_tab_id'],
       agentStatus: json['agent_status'] ?? 'unknown',
+      repoKey: json['worktree']?['repo_key'],
+      isLinkedWorktree: json['worktree']?['is_linked_worktree'] ?? false,
+      gitBranch: json['git_branch'],
     );
   }
 }

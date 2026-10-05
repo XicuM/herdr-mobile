@@ -1,145 +1,210 @@
 import 'package:flutter/material.dart';
+import '../../models/agent_status.dart';
+import '../../models/session.dart';
 import '../../services/herdr_client.dart';
-import 'agent_status_badge.dart';
 import '../screens/settings_screen.dart';
 
+const _mono = 'MesloLGS Nerd Font Mono';
+const _dim = Color(0xFF7A7F8A);
+const _text = Color(0xFFD8DEE9);
+const _selected = Color(0xFF3A3D45);
+
+/// Compact sidebar modelled on Herdr's own: workspaces, then agents.
 class WorkspaceDrawer extends StatelessWidget {
   final HerdrClientService client;
 
-  const WorkspaceDrawer({
-    super.key,
-    required this.client,
-  });
+  const WorkspaceDrawer({super.key, required this.client});
+
+  /// Herdr-style status glyph: `·` no agent, `○` idle, `●` coloured otherwise.
+  static Widget _glyph(String status) {
+    final s = AgentStatusExtension.fromString(status);
+    return SizedBox(
+      width: 18,
+      child: Text(
+        s == AgentStatus.unknown ? '·' : (s == AgentStatus.idle ? '○' : '●'),
+        style: TextStyle(fontFamily: _mono, fontSize: 13, color: s == AgentStatus.unknown ? _dim : s.color),
+      ),
+    );
+  }
+
+  static Widget _header(String title, {Widget? trailing}) => Padding(
+        padding: const EdgeInsets.fromLTRB(14, 14, 14, 6),
+        child: Row(
+          children: [
+            Text(title, style: const TextStyle(fontFamily: _mono, fontSize: 13, color: _dim, fontWeight: FontWeight.bold)),
+            const Spacer(),
+            if (trailing != null) trailing,
+          ],
+        ),
+      );
+
+  Widget _row({
+    String? tree,
+    required String status,
+    required List<InlineSpan> spans,
+    String? subtitle,
+    required bool selected,
+    required VoidCallback onTap,
+  }) {
+    return InkWell(
+      onTap: onTap,
+      child: Container(
+        color: selected ? _selected : null,
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 3),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                if (tree != null) Text(tree, style: const TextStyle(fontFamily: _mono, fontSize: 13, color: _dim)),
+                _glyph(status),
+                Expanded(
+                  child: Text.rich(
+                    TextSpan(children: spans),
+                    style: const TextStyle(fontFamily: _mono, fontSize: 13, color: _text),
+                    overflow: TextOverflow.ellipsis,
+                    maxLines: 1,
+                  ),
+                ),
+              ],
+            ),
+            if (subtitle != null)
+              Padding(
+                padding: const EdgeInsets.only(left: 18),
+                child: Text(
+                  subtitle,
+                  style: const TextStyle(fontFamily: _mono, fontSize: 12, color: _dim),
+                  overflow: TextOverflow.ellipsis,
+                  maxLines: 1,
+                ),
+              ),
+          ],
+        ),
+      ),
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
     final snapshot = client.snapshot;
+    final selectedPane = snapshot?.panes.where((p) => p.id == client.selectedPaneId).firstOrNull;
+
+    void select(String paneId) {
+      client.selectPane(paneId);
+      Navigator.pop(context);
+    }
+
+    void selectWorkspace(WorkspaceModel ws) {
+      final panes = snapshot!.panes.where((p) => p.workspaceId == ws.id);
+      final pane = panes.where((p) => p.tabId == ws.activeTabId && p.focused).firstOrNull ??
+          panes.where((p) => p.tabId == ws.activeTabId).firstOrNull ??
+          panes.firstOrNull;
+      if (pane != null) select(pane.id);
+    }
+
+    // Herdr's order: each workspace, with its linked worktrees nested right after it.
+    final workspaces = snapshot?.workspaces ?? <WorkspaceModel>[];
+    final parentKeys = {for (final w in workspaces) if (!w.isLinkedWorktree && w.repoKey != null) w.repoKey};
+    final rows = <(WorkspaceModel, String?)>[];
+    for (final w in workspaces) {
+      if (w.isLinkedWorktree && parentKeys.contains(w.repoKey)) continue;
+      rows.add((w, null));
+      if (w.isLinkedWorktree || w.repoKey == null) continue;
+      final children = workspaces.where((c) => c.isLinkedWorktree && c.repoKey == w.repoKey).toList();
+      for (final c in children) {
+        rows.add((c, c == children.last ? '└─ ' : '├─ '));
+      }
+    }
+
+    final paneById = {for (final p in snapshot?.panes ?? <PaneModel>[]) p.id: p};
+    final tabNumber = {for (final t in snapshot?.tabs ?? <TabModel>[]) t.id: t.number};
+    final wsLabel = {for (final w in workspaces) w.id: w.displayName};
 
     return Drawer(
-      backgroundColor: const Color(0xFF181818),
+      width: 260,
+      backgroundColor: const Color(0xFF16181D),
+      shape: const RoundedRectangleBorder(),
       child: SafeArea(
-        child: Column(
-          children: [
-            Container(
-              padding: const EdgeInsets.all(16),
-              alignment: Alignment.centerLeft,
-              decoration: const BoxDecoration(
-                border: Border(bottom: BorderSide(color: Colors.white12)),
-              ),
-              child: Row(
+        child: snapshot == null
+            ? const Center(
+                child: Text('connecting…', style: TextStyle(fontFamily: _mono, color: _dim)),
+              )
+            : ListView(
+                padding: EdgeInsets.zero,
                 children: [
-                  const Icon(Icons.hub_outlined, color: Colors.blueAccent),
-                  const SizedBox(width: 10),
-                  const Text(
-                    'Herdr Workspaces',
-                    style: TextStyle(
-                      fontSize: 18,
-                      fontWeight: FontWeight.bold,
-                      color: Colors.white,
+                  _header(
+                    'workspaces',
+                    trailing: Text(
+                      client.connected ? '●' : '○',
+                      style: TextStyle(fontSize: 11, color: client.connected ? Colors.greenAccent : Colors.redAccent),
                     ),
                   ),
-                  const Spacer(),
-                  Container(
-                    width: 10,
-                    height: 10,
-                    decoration: BoxDecoration(
-                      shape: BoxShape.circle,
-                      color: client.connected ? Colors.greenAccent : Colors.redAccent,
+                  for (final (ws, tree) in rows)
+                    _row(
+                      tree: tree,
+                      status: ws.agentStatus,
+                      spans: [
+                        TextSpan(
+                          text: ws.displayName,
+                          style: TextStyle(fontWeight: tree == null ? FontWeight.bold : FontWeight.normal),
+                        ),
+                        if (ws.tabCount > 1) TextSpan(text: ' · ${ws.tabCount}', style: const TextStyle(color: _dim)),
+                      ],
+                      subtitle: tree == null ? ws.gitBranch : null,
+                      selected: ws.id == selectedPane?.workspaceId,
+                      onTap: () => selectWorkspace(ws),
+                    ),
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(14, 8, 14, 0),
+                    child: Row(
+                      children: [
+                        InkWell(
+                          onTap: () {
+                            Navigator.pop(context);
+                            client.createWorkspace();
+                          },
+                          child: const Padding(
+                            padding: EdgeInsets.symmetric(vertical: 4),
+                            child: Text('new', style: TextStyle(fontFamily: _mono, fontSize: 13, color: _dim)),
+                          ),
+                        ),
+                        const Spacer(),
+                        InkWell(
+                          onTap: () {
+                            Navigator.pop(context);
+                            Navigator.push(context, MaterialPageRoute(builder: (_) => SettingsScreen(client: client)));
+                          },
+                          child: const Padding(
+                            padding: EdgeInsets.symmetric(vertical: 4),
+                            child: Text('settings', style: TextStyle(fontFamily: _mono, fontSize: 13, color: _dim)),
+                          ),
+                        ),
+                      ],
                     ),
                   ),
+                  if (snapshot.agents.isNotEmpty) ...[
+                    const Divider(color: Colors.white12, height: 20),
+                    _header('agents'),
+                    for (final agent in snapshot.agents)
+                      _row(
+                        status: agent.status,
+                        spans: [
+                          TextSpan(
+                            text: wsLabel[paneById[agent.paneId]?.workspaceId] ?? '?',
+                            style: const TextStyle(fontWeight: FontWeight.bold),
+                          ),
+                          TextSpan(
+                            text: ' · ${tabNumber[paneById[agent.paneId]?.tabId] ?? '?'}',
+                            style: const TextStyle(color: _dim),
+                          ),
+                        ],
+                        subtitle: agent.name,
+                        selected: agent.paneId == client.selectedPaneId,
+                        onTap: () => select(agent.paneId),
+                      ),
+                  ],
                 ],
               ),
-            ),
-            Expanded(
-              child: snapshot == null
-                  ? const Center(
-                      child: Text(
-                        'Connecting to Herdr...',
-                        style: TextStyle(color: Colors.white54),
-                      ),
-                    )
-                  : ListView.builder(
-                      itemCount: snapshot.workspaces.length,
-                      itemBuilder: (context, wsIndex) {
-                        final ws = snapshot.workspaces[wsIndex];
-                        final wsPanes = snapshot.panes
-                            .where((p) => p.workspaceId == ws.id)
-                            .toList();
-
-                        return ExpansionTile(
-                          initiallyExpanded: true,
-                          leading: const Icon(Icons.folder_outlined, color: Colors.white70),
-                          title: Text(
-                            ws.label.isNotEmpty ? ws.label : 'Workspace ${ws.number}',
-                            style: const TextStyle(
-                              color: Colors.white,
-                              fontWeight: FontWeight.w600,
-                            ),
-                          ),
-                          subtitle: Text(
-                            '${ws.tabCount} tabs · ${ws.paneCount} panes',
-                            style: const TextStyle(color: Colors.white38, fontSize: 12),
-                          ),
-                          children: wsPanes.map((pane) {
-                            final isSelected = client.selectedPaneId == pane.id;
-                            final agent = snapshot.agents
-                                .where((a) => a.paneId == pane.id)
-                                .firstOrNull;
-
-                            return ListTile(
-                              selected: isSelected,
-                              selectedTileColor: Colors.blueAccent.withOpacity(0.15),
-                              contentPadding: const EdgeInsets.only(left: 36, right: 16),
-                              leading: Icon(
-                                Icons.terminal,
-                                size: 18,
-                                color: isSelected ? Colors.blueAccent : Colors.white54,
-                              ),
-                              title: Text(
-                                pane.terminalTitle.isNotEmpty
-                                    ? pane.terminalTitle
-                                    : 'Pane ${pane.id}',
-                                style: TextStyle(
-                                  color: isSelected ? Colors.blueAccent : Colors.white,
-                                  fontSize: 14,
-                                  fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
-                                ),
-                              ),
-                              trailing: AgentStatusBadge(
-                                status: agent?.status ?? pane.agentStatus,
-                                agentName: agent?.name,
-                                compact: true,
-                              ),
-                              onTap: () {
-                                client.selectPane(pane.id);
-                                Navigator.pop(context);
-                              },
-                            );
-                          }).toList(),
-                        );
-                      },
-                    ),
-            ),
-            Container(
-              decoration: const BoxDecoration(
-                border: Border(top: BorderSide(color: Colors.white12)),
-              ),
-              child: ListTile(
-                leading: const Icon(Icons.settings_outlined, color: Colors.white70),
-                title: const Text('Settings', style: TextStyle(color: Colors.white70)),
-                onTap: () {
-                  Navigator.pop(context);
-                  Navigator.push(
-                    context,
-                    MaterialPageRoute(
-                      builder: (_) => SettingsScreen(client: client),
-                    ),
-                  );
-                },
-              ),
-            ),
-          ],
-        ),
       ),
     );
   }

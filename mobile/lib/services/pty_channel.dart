@@ -4,6 +4,8 @@ import 'package:flutter/foundation.dart';
 import 'package:web_socket_channel/web_socket_channel.dart';
 import 'package:xterm/xterm.dart';
 
+/// Streams one herdr pane, sized to this terminal, through the bridge.
+/// Binary frames carry terminal bytes both ways; text frames carry resize control.
 class PtyChannel {
   final String host;
   final int port;
@@ -12,6 +14,7 @@ class PtyChannel {
 
   WebSocketChannel? _channel;
   StreamSubscription? _sub;
+  Timer? _reconnectTimer;
   bool _disposed = false;
 
   PtyChannel({
@@ -23,61 +26,41 @@ class PtyChannel {
 
   void connect() {
     if (_disposed) return;
-    _channel?.sink.close();
+    final uri = Uri.parse(
+        'ws://$host:$port/ws/term/${Uri.encodeComponent(paneId)}?cols=${terminal.viewWidth}&rows=${terminal.viewHeight}');
+    _channel = WebSocketChannel.connect(uri);
+    // Utf8Decoder as a stream transformer keeps multi-byte characters split across frames intact.
+    _sub = _channel!.stream
+        .where((data) => data is List<int>)
+        .cast<List<int>>()
+        .transform(const Utf8Decoder(allowMalformed: true))
+        .listen(
+          terminal.write,
+          onError: (err) {
+            debugPrint('Terminal WS error: $err');
+            _scheduleReconnect();
+          },
+          onDone: _scheduleReconnect,
+          cancelOnError: true,
+        );
+  }
 
-    final uri = Uri.parse('ws://$host:$port/ws/pane/$paneId');
-    try {
-      _channel = WebSocketChannel.connect(uri);
-      _sub = _channel!.stream.listen(
-        (data) {
-          if (data is String) {
-            terminal.write(data);
-          } else if (data is List<int>) {
-            terminal.write(utf8.decode(data, allowMalformed: true));
-          }
-        },
-        onError: (err) {
-          debugPrint('PTY WS error for pane $paneId: $err');
-        },
-        onDone: () {
-          debugPrint('PTY WS closed for pane $paneId');
-        },
-      );
-    } catch (e) {
-      debugPrint('Failed to connect PTY channel: $e');
-    }
+  void _scheduleReconnect() {
+    if (_disposed) return;
+    _reconnectTimer = Timer(const Duration(seconds: 2), connect);
   }
 
   void sendInput(String input) {
-    if (_channel != null) {
-      _channel!.sink.add(jsonEncode({
-        'type': 'input',
-        'text': input,
-      }));
-    }
-  }
-
-  void sendKey(String key) {
-    if (_channel != null) {
-      _channel!.sink.add(jsonEncode({
-        'type': 'input',
-        'keys': [key],
-      }));
-    }
+    _channel?.sink.add(utf8.encode(input));
   }
 
   void sendResize(int cols, int rows) {
-    if (_channel != null) {
-      _channel!.sink.add(jsonEncode({
-        'type': 'resize',
-        'cols': cols,
-        'rows': rows,
-      }));
-    }
+    _channel?.sink.add(jsonEncode({'cols': cols, 'rows': rows}));
   }
 
   void dispose() {
     _disposed = true;
+    _reconnectTimer?.cancel();
     _sub?.cancel();
     _channel?.sink.close();
   }

@@ -10,6 +10,7 @@ void main() async {
   final port = prefs.getInt('herdr_port') ?? 7788;
 
   final client = HerdrClientService();
+  client.setFontSize(prefs.getDouble('terminal_font_size') ?? 14);
   client.configure(host: host, port: port);
   client.connect();
 

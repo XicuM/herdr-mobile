@@ -24,3 +24,9 @@ dev_dependencies:
 
 flutter:
   uses-material-design: true
+  fonts:
+    - family: MesloLGS Nerd Font Mono
+      fonts:
+        - asset: assets/fonts/MesloLGSNerdFontMono-Regular.ttf
+        - asset: assets/fonts/MesloLGSNerdFontMono-Bold.ttf
+          weight: 700
