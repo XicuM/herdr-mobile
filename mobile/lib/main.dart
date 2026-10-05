@@ -6,13 +6,13 @@ import 'ui/screens/terminal_screen.dart';
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
   final prefs = await SharedPreferences.getInstance();
-  final host = prefs.getString('herdr_host') ?? '127.0.0.1';
-  final port = prefs.getInt('herdr_port') ?? 7788;
+  final host = prefs.getString('herdr_host');
 
   final client = HerdrClientService();
   client.setFontSize(prefs.getDouble('terminal_font_size') ?? 14);
-  client.configure(host: host, port: port);
-  client.connect();
+  client.setMachines(prefs.getStringList('herdr_machines') ?? []);
+  // Nothing to connect to until the first machine is added.
+  if (host != null) client.configure(host: host, port: prefs.getInt('herdr_port') ?? 7788);
 
   runApp(HerdrMobileApp(client: client));
 }

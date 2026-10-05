@@ -1,5 +1,4 @@
 import 'package:flutter/material.dart';
-import 'package:shared_preferences/shared_preferences.dart';
 import '../../services/herdr_client.dart';
 
 class SettingsScreen extends StatefulWidget {
@@ -12,44 +11,17 @@ class SettingsScreen extends StatefulWidget {
 }
 
 class _SettingsScreenState extends State<SettingsScreen> {
-  late TextEditingController _hostController;
-  late TextEditingController _portController;
-  bool _saving = false;
+  final _hostController = TextEditingController();
+  final _portController = TextEditingController(text: '7788');
 
-  @override
-  void initState() {
-    super.initState();
-    _hostController = TextEditingController(text: widget.client.host);
-    _portController = TextEditingController(text: widget.client.port.toString());
-    _loadPreferences();
-  }
-
-  Future<void> _loadPreferences() async {
-    final prefs = await SharedPreferences.getInstance();
-    setState(() {
-      _hostController.text = prefs.getString('herdr_host') ?? widget.client.host;
-      _portController.text = (prefs.getInt('herdr_port') ?? widget.client.port).toString();
-    });
-  }
-
-  Future<void> _savePreferences() async {
-    setState(() => _saving = true);
-    final prefs = await SharedPreferences.getInstance();
+  void _addMachine() {
     final host = _hostController.text.trim();
-    final port = int.tryParse(_portController.text.trim()) ?? 7788;
-
-    await prefs.setString('herdr_host', host);
-    await prefs.setInt('herdr_port', port);
-
-    widget.client.configure(host: host, port: port);
-
-    if (mounted) {
-      setState(() => _saving = false);
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Settings saved & reconnecting...')),
-      );
-      Navigator.pop(context);
-    }
+    if (host.isEmpty) return;
+    widget.client.configure(host: host, port: int.tryParse(_portController.text.trim()) ?? 7788);
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text('Connecting to ${widget.client.machine}...')),
+    );
+    Navigator.pop(context);
   }
 
   @override
@@ -71,13 +43,33 @@ class _SettingsScreenState extends State<SettingsScreen> {
         padding: const EdgeInsets.all(20),
         children: [
           const Text(
-            'Connection Configuration',
+            'Machines',
             style: TextStyle(
               fontSize: 16,
               fontWeight: FontWeight.bold,
               color: Colors.blueAccent,
             ),
           ),
+          for (final m in widget.client.machines)
+            ListTile(
+              contentPadding: EdgeInsets.zero,
+              leading: Icon(
+                m == widget.client.machine ? Icons.radio_button_checked : Icons.radio_button_unchecked,
+                color: m == widget.client.machine ? Colors.blueAccent : Colors.white54,
+              ),
+              title: Text(m, style: const TextStyle(color: Colors.white)),
+              onTap: () {
+                widget.client.switchMachine(m);
+                Navigator.pop(context);
+              },
+              trailing: m == widget.client.machine
+                  ? null
+                  : IconButton(
+                      icon: const Icon(Icons.delete_outline, color: Colors.white54),
+                      onPressed: () => setState(() =>
+                          widget.client.setMachines(widget.client.machines.where((x) => x != m).toList())),
+                    ),
+            ),
           const SizedBox(height: 12),
           TextField(
             controller: _hostController,
@@ -101,6 +93,16 @@ class _SettingsScreenState extends State<SettingsScreen> {
               border: OutlineInputBorder(),
             ),
           ),
+          const SizedBox(height: 16),
+          ElevatedButton.icon(
+            onPressed: _addMachine,
+            style: ElevatedButton.styleFrom(
+              backgroundColor: Colors.blueAccent,
+              padding: const EdgeInsets.symmetric(vertical: 16),
+            ),
+            icon: const Icon(Icons.add),
+            label: const Text('Add & Connect'),
+          ),
           const SizedBox(height: 28),
           const Text(
             'Terminal',
@@ -122,16 +124,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
             divisions: (HerdrClientService.maxFontSize - HerdrClientService.minFontSize).round(),
             label: widget.client.fontSize.round().toString(),
             onChanged: (v) => setState(() => widget.client.setFontSize(v)),
-          ),
-          const SizedBox(height: 32),
-          ElevatedButton.icon(
-            onPressed: _saving ? null : _savePreferences,
-            style: ElevatedButton.styleFrom(
-              backgroundColor: Colors.blueAccent,
-              padding: const EdgeInsets.symmetric(vertical: 16),
-            ),
-            icon: const Icon(Icons.save),
-            label: Text(_saving ? 'Saving...' : 'Save & Reconnect'),
           ),
         ],
       ),

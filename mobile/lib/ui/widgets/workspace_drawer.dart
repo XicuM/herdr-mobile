@@ -31,7 +31,8 @@ class WorkspaceDrawer extends StatelessWidget {
         padding: const EdgeInsets.fromLTRB(14, 14, 14, 6),
         child: Row(
           children: [
-            Text(title, style: const TextStyle(fontFamily: _mono, fontSize: 13, color: _dim, fontWeight: FontWeight.bold)),
+            Text(title,
+                style: const TextStyle(fontFamily: _mono, fontSize: 13, color: _dim, fontWeight: FontWeight.bold)),
             const Spacer(),
             if (trailing != null) trailing,
           ],
@@ -104,7 +105,10 @@ class WorkspaceDrawer extends StatelessWidget {
 
     // Herdr's order: each workspace, with its linked worktrees nested right after it.
     final workspaces = snapshot?.workspaces ?? <WorkspaceModel>[];
-    final parentKeys = {for (final w in workspaces) if (!w.isLinkedWorktree && w.repoKey != null) w.repoKey};
+    final parentKeys = {
+      for (final w in workspaces)
+        if (!w.isLinkedWorktree && w.repoKey != null) w.repoKey
+    };
     final rows = <(WorkspaceModel, String?)>[];
     for (final w in workspaces) {
       if (w.isLinkedWorktree && parentKeys.contains(w.repoKey)) continue;
@@ -125,86 +129,105 @@ class WorkspaceDrawer extends StatelessWidget {
       backgroundColor: const Color(0xFF16181D),
       shape: const RoundedRectangleBorder(),
       child: SafeArea(
-        child: snapshot == null
-            ? const Center(
-                child: Text('connecting…', style: TextStyle(fontFamily: _mono, color: _dim)),
-              )
-            : ListView(
-                padding: EdgeInsets.zero,
+        child: ListView(
+          padding: EdgeInsets.zero,
+          children: [
+            if (client.machines.length > 1) ...[
+              _header('machines'),
+              for (final m in client.machines)
+                InkWell(
+                  onTap: () {
+                    Navigator.pop(context);
+                    if (m != client.machine) client.switchMachine(m);
+                  },
+                  child: Container(
+                    color: m == client.machine ? _selected : null,
+                    padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 3),
+                    child: Text(m,
+                        style: const TextStyle(fontFamily: _mono, fontSize: 13, color: _text),
+                        overflow: TextOverflow.ellipsis),
+                  ),
+                ),
+              const Divider(color: Colors.white12, height: 20),
+            ],
+            _header(
+              'workspaces',
+              trailing: Text(
+                client.connected ? '●' : '○',
+                style: TextStyle(fontSize: 11, color: client.connected ? Colors.greenAccent : Colors.redAccent),
+              ),
+            ),
+            if (snapshot == null)
+              const Padding(
+                padding: EdgeInsets.symmetric(horizontal: 14, vertical: 3),
+                child: Text('connecting…', style: TextStyle(fontFamily: _mono, fontSize: 13, color: _dim)),
+              ),
+            for (final (ws, tree) in rows)
+              _row(
+                tree: tree,
+                status: ws.agentStatus,
+                spans: [
+                  TextSpan(
+                    text: ws.displayName,
+                    style: TextStyle(fontWeight: tree == null ? FontWeight.bold : FontWeight.normal),
+                  ),
+                  if (ws.tabCount > 1) TextSpan(text: ' · ${ws.tabCount}', style: const TextStyle(color: _dim)),
+                ],
+                subtitle: tree == null ? ws.gitBranch : null,
+                selected: ws.id == selectedPane?.workspaceId,
+                onTap: () => selectWorkspace(ws),
+              ),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(14, 8, 14, 0),
+              child: Row(
                 children: [
-                  _header(
-                    'workspaces',
-                    trailing: Text(
-                      client.connected ? '●' : '○',
-                      style: TextStyle(fontSize: 11, color: client.connected ? Colors.greenAccent : Colors.redAccent),
+                  InkWell(
+                    onTap: () {
+                      Navigator.pop(context);
+                      client.createWorkspace();
+                    },
+                    child: const Padding(
+                      padding: EdgeInsets.symmetric(vertical: 4),
+                      child: Text('new', style: TextStyle(fontFamily: _mono, fontSize: 13, color: _dim)),
                     ),
                   ),
-                  for (final (ws, tree) in rows)
-                    _row(
-                      tree: tree,
-                      status: ws.agentStatus,
-                      spans: [
-                        TextSpan(
-                          text: ws.displayName,
-                          style: TextStyle(fontWeight: tree == null ? FontWeight.bold : FontWeight.normal),
-                        ),
-                        if (ws.tabCount > 1) TextSpan(text: ' · ${ws.tabCount}', style: const TextStyle(color: _dim)),
-                      ],
-                      subtitle: tree == null ? ws.gitBranch : null,
-                      selected: ws.id == selectedPane?.workspaceId,
-                      onTap: () => selectWorkspace(ws),
-                    ),
-                  Padding(
-                    padding: const EdgeInsets.fromLTRB(14, 8, 14, 0),
-                    child: Row(
-                      children: [
-                        InkWell(
-                          onTap: () {
-                            Navigator.pop(context);
-                            client.createWorkspace();
-                          },
-                          child: const Padding(
-                            padding: EdgeInsets.symmetric(vertical: 4),
-                            child: Text('new', style: TextStyle(fontFamily: _mono, fontSize: 13, color: _dim)),
-                          ),
-                        ),
-                        const Spacer(),
-                        InkWell(
-                          onTap: () {
-                            Navigator.pop(context);
-                            Navigator.push(context, MaterialPageRoute(builder: (_) => SettingsScreen(client: client)));
-                          },
-                          child: const Padding(
-                            padding: EdgeInsets.symmetric(vertical: 4),
-                            child: Text('settings', style: TextStyle(fontFamily: _mono, fontSize: 13, color: _dim)),
-                          ),
-                        ),
-                      ],
+                  const Spacer(),
+                  InkWell(
+                    onTap: () {
+                      Navigator.pop(context);
+                      Navigator.push(context, MaterialPageRoute(builder: (_) => SettingsScreen(client: client)));
+                    },
+                    child: const Padding(
+                      padding: EdgeInsets.symmetric(vertical: 4),
+                      child: Text('settings', style: TextStyle(fontFamily: _mono, fontSize: 13, color: _dim)),
                     ),
                   ),
-                  if (snapshot.agents.isNotEmpty) ...[
-                    const Divider(color: Colors.white12, height: 20),
-                    _header('agents'),
-                    for (final agent in snapshot.agents)
-                      _row(
-                        status: agent.status,
-                        spans: [
-                          TextSpan(
-                            text: wsLabel[paneById[agent.paneId]?.workspaceId] ?? '?',
-                            style: const TextStyle(fontWeight: FontWeight.bold),
-                          ),
-                          TextSpan(
-                            text: ' · ${tabNumber[paneById[agent.paneId]?.tabId] ?? '?'}',
-                            style: const TextStyle(color: _dim),
-                          ),
-                        ],
-                        subtitle: agent.name,
-                        selected: agent.paneId == client.selectedPaneId,
-                        onTap: () => select(agent.paneId),
-                      ),
-                  ],
                 ],
               ),
+            ),
+            if (snapshot != null && snapshot.agents.isNotEmpty) ...[
+              const Divider(color: Colors.white12, height: 20),
+              _header('agents'),
+              for (final agent in snapshot.agents)
+                _row(
+                  status: agent.status,
+                  spans: [
+                    TextSpan(
+                      text: wsLabel[paneById[agent.paneId]?.workspaceId] ?? '?',
+                      style: const TextStyle(fontWeight: FontWeight.bold),
+                    ),
+                    TextSpan(
+                      text: ' · ${tabNumber[paneById[agent.paneId]?.tabId] ?? '?'}',
+                      style: const TextStyle(color: _dim),
+                    ),
+                  ],
+                  subtitle: agent.name,
+                  selected: agent.paneId == client.selectedPaneId,
+                  onTap: () => select(agent.paneId),
+                ),
+            ],
+          ],
+        ),
       ),
     );
   }

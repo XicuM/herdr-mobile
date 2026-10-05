@@ -1,12 +1,15 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:xterm/xterm.dart';
+import '../../changelog.dart';
 import '../../models/session.dart';
 import '../../services/herdr_client.dart';
 import '../../services/pty_channel.dart';
 import '../widgets/workspace_drawer.dart';
 import '../widgets/keyboard_accessory_bar.dart';
 import '../widgets/agent_status_badge.dart';
+import 'settings_screen.dart';
 
 class TerminalScreen extends StatefulWidget {
   final HerdrClientService client;
@@ -31,6 +34,62 @@ class _TerminalScreenState extends State<TerminalScreen> {
     widget.client.addListener(_onClientUpdate);
     HardwareKeyboard.instance.addHandler(_onHardwareKey);
     _connectTerminal();
+    WidgetsBinding.instance.addPostFrameCallback((_) => _showIntroOrChangelog());
+  }
+
+  /// Welcome on first launch; afterwards, the changelog entries newer than the last one seen.
+  Future<void> _showIntroOrChangelog() async {
+    final prefs = await SharedPreferences.getInstance();
+    final seen = prefs.getString('last_seen_changelog');
+    final latest = changelog.first.$1;
+    if (seen == latest || !mounted) return;
+    await prefs.setString('last_seen_changelog', latest);
+    final firstRun = seen == null && widget.client.machines.isEmpty;
+    final entries = changelog.takeWhile((e) => e.$1 != seen).toList();
+    const body = TextStyle(color: Colors.white70, height: 1.4);
+    if (!mounted) return;
+    final addMachine = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        backgroundColor: const Color(0xFF1E1E1E),
+        title: Text(firstRun ? 'Welcome to Herdr Mobile' : "What's new"),
+        content: SingleChildScrollView(
+          child: firstRun
+              ? const Text(
+                  'Herdr Mobile is a remote control for Herdr, the terminal multiplexer for AI coding agents.\n\n'
+                  '1. On each computer running Herdr, start herdr-bridge (deploy/start-bridge.sh). '
+                  'It listens on port 7788 on the computer\'s Tailscale IP.\n'
+                  '2. Make sure this phone is on the same Tailscale network.\n'
+                  '3. Add each computer here as a machine, using its Tailscale IP or MagicDNS name.\n\n'
+                  'Switch machines from the menu at the top right. Open the drawer (☰) to pick a '
+                  'workspace or agent. The volume keys change the font size.',
+                  style: body,
+                )
+              : Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    for (final (version, notes) in entries) ...[
+                      Text(version, style: const TextStyle(fontWeight: FontWeight.bold)),
+                      for (final n in notes) Text('• $n', style: body),
+                      const SizedBox(height: 12),
+                    ],
+                  ],
+                ),
+        ),
+        actions: [
+          if (firstRun)
+            ElevatedButton(onPressed: () => Navigator.pop(context, true), child: const Text('Add a machine'))
+          else
+            TextButton(onPressed: () => Navigator.pop(context), child: const Text('OK')),
+        ],
+      ),
+    );
+    if (addMachine == true) _openSettings();
+  }
+
+  void _openSettings() {
+    Navigator.push(context, MaterialPageRoute(builder: (_) => SettingsScreen(client: widget.client)));
   }
 
   /// Volume keys zoom the terminal font while this screen is on top.
@@ -56,7 +115,12 @@ class _TerminalScreenState extends State<TerminalScreen> {
     final client = widget.client;
     final paneId = client.selectedPaneId;
     final pty = _ptyChannel;
-    if (paneId == null) return;
+    if (paneId == null) {
+      // Machine switched: detach so keystrokes can't reach the old machine's pane.
+      pty?.dispose();
+      _ptyChannel = null;
+      return;
+    }
     if (pty != null && pty.paneId == paneId && pty.host == client.host && pty.port == client.port) return;
     pty?.dispose();
     _ptyChannel = PtyChannel(
@@ -79,12 +143,8 @@ class _TerminalScreenState extends State<TerminalScreen> {
   Widget build(BuildContext context) {
     final client = widget.client;
     final snapshot = client.snapshot;
-    final currentPane = snapshot?.panes
-        .where((p) => p.id == client.selectedPaneId)
-        .firstOrNull;
-    final currentAgent = snapshot?.agents
-        .where((a) => a.paneId == client.selectedPaneId)
-        .firstOrNull;
+    final currentPane = snapshot?.panes.where((p) => p.id == client.selectedPaneId).firstOrNull;
+    final currentAgent = snapshot?.agents.where((a) => a.paneId == client.selectedPaneId).firstOrNull;
     final isBlocked = (currentAgent?.status == 'blocked' || currentPane?.agentStatus == 'blocked');
     final workspaceId = currentPane?.workspaceId ?? snapshot?.focusedWorkspaceId;
     final currentWorkspace = snapshot?.workspaces.where((w) => w.id == workspaceId).firstOrNull;
@@ -187,6 +247,47 @@ class _TerminalScreenState extends State<TerminalScreen> {
                 ),
               ),
             ),
+          // Always reachable, even while disconnected, so machines can be added or switched.
+          PopupMenuButton<String>(
+            tooltip: 'Machines',
+            icon: Icon(Icons.dns, color: client.connected ? Colors.greenAccent : Colors.white54),
+            color: const Color(0xFF222222),
+            onSelected: (value) {
+              if (value.isEmpty) {
+                _openSettings();
+              } else if (value != client.machine || !client.connected) {
+                client.switchMachine(value);
+              }
+            },
+            itemBuilder: (_) => [
+              for (final m in client.machines)
+                PopupMenuItem(
+                  value: m,
+                  child: Row(
+                    children: [
+                      Icon(
+                        m == client.machine ? Icons.radio_button_checked : Icons.radio_button_unchecked,
+                        size: 18,
+                        color: m == client.machine ? Colors.blueAccent : Colors.white54,
+                      ),
+                      const SizedBox(width: 8),
+                      Flexible(child: Text(m, overflow: TextOverflow.ellipsis)),
+                    ],
+                  ),
+                ),
+              if (client.machines.isNotEmpty) const PopupMenuDivider(),
+              const PopupMenuItem(
+                value: '', // sentinel: open settings
+                child: Row(
+                  children: [
+                    Icon(Icons.add, size: 18, color: Colors.white70),
+                    SizedBox(width: 8),
+                    Text('Add machine…'),
+                  ],
+                ),
+              ),
+            ],
+          ),
         ],
       ),
       body: SafeArea(
@@ -232,18 +333,26 @@ class _TerminalScreenState extends State<TerminalScreen> {
 
             // Terminal View
             Expanded(
-              child: TerminalView(
-                _terminal,
-                backgroundOpacity: 1.0,
-                // Bundled mono font with full box-drawing coverage; line height 1.0 keeps
-                // vertical lines continuous between rows.
-                textStyle: TerminalStyle(
-                  fontSize: client.fontSize,
-                  fontFamily: 'MesloLGS Nerd Font Mono',
-                  height: 1.0,
-                ),
-                autofocus: true,
-              ),
+              child: client.machines.isEmpty
+                  ? Center(
+                      child: TextButton.icon(
+                        onPressed: _openSettings,
+                        icon: const Icon(Icons.add),
+                        label: const Text('Add a machine to get started'),
+                      ),
+                    )
+                  : TerminalView(
+                      _terminal,
+                      backgroundOpacity: 1.0,
+                      // Bundled mono font with full box-drawing coverage; line height 1.0 keeps
+                      // vertical lines continuous between rows.
+                      textStyle: TerminalStyle(
+                        fontSize: client.fontSize,
+                        fontFamily: 'MesloLGS Nerd Font Mono',
+                        height: 1.0,
+                      ),
+                      autofocus: true,
+                    ),
             ),
 
             // Pinned Quick Keyboard Accessory Toolbar

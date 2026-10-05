@@ -13,6 +13,7 @@ class HerdrClientService extends ChangeNotifier {
   SessionSnapshot? _snapshot;
   String? _selectedPaneId;
   double _fontSize = 14;
+  List<String> _machines = [];
 
   WebSocketChannel? _channel;
   Timer? _reconnectTimer;
@@ -24,6 +25,10 @@ class HerdrClientService extends ChangeNotifier {
   SessionSnapshot? get snapshot => _snapshot;
   String? get selectedPaneId => _selectedPaneId;
   double get fontSize => _fontSize;
+  String get machine => '$_host:$_port';
+
+  /// Saved bridges as `host:port`, one per machine running herdr-bridge.
+  List<String> get machines => _machines;
 
   static const double minFontSize = 6;
   static const double maxFontSize = 32;
@@ -36,10 +41,33 @@ class HerdrClientService extends ChangeNotifier {
     SharedPreferences.getInstance().then((p) => p.setDouble('terminal_font_size', clamped));
   }
 
+  /// Switches to the bridge at [host]:[port], remembering it in the machine list.
   void configure({required String host, required int port}) {
+    final changed = host != _host || port != _port;
     _host = host;
     _port = port;
+    if (!_machines.contains(machine)) _machines = [..._machines, machine];
+    if (changed) {
+      _snapshot = null;
+      _selectedPaneId = null;
+    }
+    SharedPreferences.getInstance().then((p) => p
+      ..setString('herdr_host', host)
+      ..setInt('herdr_port', port)
+      ..setStringList('herdr_machines', _machines));
     reconnect();
+  }
+
+  void setMachines(List<String> machines) {
+    _machines = machines;
+    notifyListeners();
+    SharedPreferences.getInstance().then((p) => p.setStringList('herdr_machines', machines));
+  }
+
+  /// [machine] is `host:port` as stored in [machines].
+  void switchMachine(String machine) {
+    final i = machine.lastIndexOf(':');
+    configure(host: machine.substring(0, i), port: int.parse(machine.substring(i + 1)));
   }
 
   void selectPane(String paneId) {
@@ -53,9 +81,14 @@ class HerdrClientService extends ChangeNotifier {
 
     final wsUri = Uri.parse('ws://$_host:$_port/ws/session');
     try {
-      _channel = WebSocketChannel.connect(wsUri);
-      _channel!.stream.listen(
+      final channel = WebSocketChannel.connect(wsUri);
+      _channel = channel;
+      // Connection failures also reach the stream's onError, which reconnects.
+      channel.ready.ignore();
+      // Ignore a replaced socket's late frames so they can't leak into another machine's state.
+      channel.stream.listen(
         (message) {
+          if (channel != _channel) return;
           if (!_connected) {
             _connected = true;
             notifyListeners();
@@ -63,10 +96,10 @@ class HerdrClientService extends ChangeNotifier {
           _handleMessage(message);
         },
         onError: (error) {
-          _handleDisconnect();
+          if (channel == _channel) _handleDisconnect();
         },
         onDone: () {
-          _handleDisconnect();
+          if (channel == _channel) _handleDisconnect();
         },
       );
     } catch (e) {
@@ -97,9 +130,10 @@ class HerdrClientService extends ChangeNotifier {
   }
 
   Future<void> _fetchSnapshotHttp() async {
+    final from = machine;
     try {
-      final res = await http.get(Uri.parse('http://$_host:$_port/api/snapshot'));
-      if (res.statusCode == 200) {
+      final res = await http.get(Uri.parse('http://$from/api/snapshot'));
+      if (res.statusCode == 200 && from == machine) {
         final data = jsonDecode(res.body);
         _applySnapshot(SessionSnapshot.fromJson(data));
       }
@@ -112,6 +146,7 @@ class HerdrClientService extends ChangeNotifier {
       notifyListeners();
     }
     _channel = null;
+    _reconnectTimer?.cancel();
     if (!_disposed) {
       _reconnectTimer = Timer(const Duration(seconds: 3), () {
         connect();
@@ -120,8 +155,12 @@ class HerdrClientService extends ChangeNotifier {
   }
 
   void reconnect() {
-    _channel?.sink.close();
-    _handleDisconnect();
+    final old = _channel;
+    _channel = null;
+    old?.sink.close();
+    _connected = false;
+    notifyListeners();
+    connect();
   }
 
   Future<void> createTab(String workspaceId) => _create('tab', {'workspace_id': workspaceId});

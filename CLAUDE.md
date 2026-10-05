@@ -36,7 +36,6 @@ CI (`.github/workflows/build-apk.yml`) runs only `flutter build apk --release` o
 **Bridge data flow** (`bridge/src/`):
 - `herdr.rs` `HerdrClient`: each `call()` opens a new Unix socket connection, writes one newline-delimited JSON request `{id, method, params}`, and reads one response line. The methods used are `session.snapshot`, `pane.read` (visible screen, ANSI), `pane.send_input` (`text` and/or `keys`) and `pane.resize`. A separate long-lived connection runs `events.subscribe` and fans the events out through a `tokio::broadcast` channel. It reconnects forever.
 - `server.rs` routes:
-  - `GET /`, `/app`: the embedded `index.html` web client (`include_str!`, so rebuild after you edit it)
   - `GET /health`, `GET /api/snapshot`
   - `POST /api/pane/{id}/input`, `POST /api/pane/{id}/resize`
   - `WS /ws/session`: sends the initial `{"type":"snapshot","data":…}`, then forwards every Herdr event as `{"type":"event","data":…}`
@@ -46,7 +45,8 @@ CI (`.github/workflows/build-apk.yml`) runs only `flutter build apk --release` o
 
 **Mobile** (`mobile/lib/`):
 - State lives in `HerdrClientService` (a `ChangeNotifier` created in `main.dart` and passed down through constructors). `flutter_riverpod` is a dependency but isn't used.
-- `HerdrClientService` holds the `/ws/session` socket. On any `event` it re-fetches `/api/snapshot` over HTTP instead of applying the event. It reconnects every 3 s. Host and port come from `SharedPreferences` keys `herdr_host` and `herdr_port`.
+- `HerdrClientService` holds the `/ws/session` socket. On any `event` it re-fetches `/api/snapshot` over HTTP instead of applying the event. It reconnects every 3 s. It talks to one bridge (machine) at a time: the active host and port are in `SharedPreferences` keys `herdr_host` and `herdr_port`, and saved machines are in `herdr_machines` (a list of `host:port`). `configure()` switches machines and clears the snapshot and the selected pane.
 - `PtyChannel` holds one `/ws/pane/{id}` socket per selected pane and writes incoming frames straight into the xterm `Terminal`. Terminal output (keystrokes) goes back as `input` JSON. `TerminalScreen` rebuilds the channel and clears the display whenever `selectedPaneId` changes.
 - Input travels two ways: terminal keystrokes over the pane WS, and the accessory bar and approval banner over `HerdrClientService.sendPaneInput` (HTTP POST).
+- `lib/changelog.dart` (newest first) drives the first-launch welcome and the one-time "What's new" dialog, keyed by the `last_seen_changelog` pref. When releasing, bump the version in both `pubspec.yaml` and `android/app/build.gradle`, then add a changelog entry.
 - `models/session.dart` mirrors the Herdr snapshot schema (`workspaces`/`tabs`/`panes`/`agents`, snake_case ids like `w1:p1`). Agent statuses are `working | blocked | done | idle | unknown`.

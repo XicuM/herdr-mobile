@@ -29,6 +29,8 @@ class PtyChannel {
     final uri = Uri.parse(
         'ws://$host:$port/ws/term/${Uri.encodeComponent(paneId)}?cols=${terminal.viewWidth}&rows=${terminal.viewHeight}');
     _channel = WebSocketChannel.connect(uri);
+    // Connection failures also reach the stream's onError, which reconnects.
+    _channel!.ready.ignore();
     // Utf8Decoder as a stream transformer keeps multi-byte characters split across frames intact.
     _sub = _channel!.stream
         .where((data) => data is List<int>)
