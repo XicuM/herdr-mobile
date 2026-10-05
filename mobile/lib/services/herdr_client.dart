@@ -34,6 +34,11 @@ class HerdrClientService extends ChangeNotifier {
       if (m == machine) selectPane(call.arguments['pane']);
     });
     _native('ready');
+    // Back from sleep, a connect attempt made while the network was down may still be pending, or the
+    // retry timer frozen; try again right away instead of waiting on either.
+    AppLifecycleListener(onResume: () {
+      if (!_connected && _machines.contains(machine)) reconnect();
+    });
   }
 
   /// Fails harmlessly off Android (e.g. in tests).
@@ -165,7 +170,9 @@ class HerdrClientService extends ChangeNotifier {
     final wsUri = Uri.parse('ws://$_host:$_port/ws/session');
     try {
       // Pings notice a connection that died silently (e.g. the phone changed networks), so it reconnects.
-      final channel = IOWebSocketChannel.connect(wsUri, pingInterval: const Duration(seconds: 20));
+      // Without a timeout, an attempt made while the network is down can hang and never retry.
+      final channel = IOWebSocketChannel.connect(wsUri,
+          pingInterval: const Duration(seconds: 20), connectTimeout: const Duration(seconds: 5));
       _channel = channel;
       // Connection failures also reach the stream's onError, which reconnects.
       channel.ready.ignore();

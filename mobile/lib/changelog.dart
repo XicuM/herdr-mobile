@@ -2,6 +2,12 @@
 /// in pubspec.yaml and android/app/build.gradle.
 const changelog = <(String, List<String>)>[
   (
+    '1.3.1',
+    [
+      'Fixed the app getting stuck on "Connecting…" after the phone wakes from sleep.',
+    ]
+  ),
+  (
     '1.3.0',
     [
       'Notifications: get an alert when an agent needs you or finishes, even with the app closed. Tap it to open that pane.',
