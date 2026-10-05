@@ -25,10 +25,9 @@ class TerminalScreen extends StatefulWidget {
 class _TerminalScreenState extends State<TerminalScreen> {
   final _terminal = Terminal(maxLines: 10000);
   final _controller = TerminalController();
-  final _compose = TextEditingController();
+  final _message = TextEditingController();
   PtyChannel? _ptyChannel;
   bool _ctrl = false;
-  bool _alt = false;
 
   // Pinch-to-zoom and history scrolling, tracked from raw pointers so they don't fight the
   // terminal's own gestures.
@@ -47,6 +46,7 @@ class _TerminalScreenState extends State<TerminalScreen> {
     _terminal.onResize = (cols, rows, _, __) => _ptyChannel?.sendResize(cols, rows);
 
     widget.client.onError = _showError;
+    _controller.addListener(() => setState(() {})); // shows the copy button while text is selected
     widget.client.addListener(_onClientUpdate);
     HardwareKeyboard.instance.addHandler(_onHardwareKey);
     _connectTerminal();
@@ -77,7 +77,7 @@ class _TerminalScreenState extends State<TerminalScreen> {
                   '2. Make sure this phone is on the same Tailscale network.\n'
                   '3. Add each computer here as a machine, using its Tailscale IP or MagicDNS name.\n\n'
                   'Switch machines from the menu at the top right. Open the drawer (☰) to pick a '
-                  'workspace or agent. Tap ✎ in the key bar to type a message with autocorrect and voice. '
+                  'workspace or agent. Type messages in the box at the bottom, with autocorrect and voice. '
                   'Pinch or use the volume keys to change the font size.',
                   style: body,
                 )
@@ -125,77 +125,35 @@ class _TerminalScreenState extends State<TerminalScreen> {
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(message)));
   }
 
-  /// Everything typed or tapped reaches the pane here, with an armed CTRL/ALT applied once.
+  /// Everything typed or tapped reaches the pane here, with an armed CTRL applied once.
   void _send(String data) {
-    if (_ctrl || _alt) {
+    if (_ctrl) {
       final c = data.length == 1 ? data.codeUnitAt(0) : -1;
-      if (_ctrl && (c == 0x20 || (c >= 0x40 && c < 0x7f))) data = String.fromCharCode(c & 0x1f);
-      if (_alt) data = '\x1b$data';
-      setState(() => _ctrl = _alt = false);
+      if (c == 0x20 || (c >= 0x40 && c < 0x7f)) data = String.fromCharCode(c & 0x1f);
+      setState(() => _ctrl = false);
     }
     _ptyChannel?.sendInput(data);
   }
 
   /// Special keys go through xterm so they follow the pane's cursor-key mode.
   void _key(TerminalKey key, {bool shift = false}) {
-    final ctrl = _ctrl, alt = _alt;
-    setState(() => _ctrl = _alt = false);
-    _terminal.keyInput(key, shift: shift, ctrl: ctrl, alt: alt);
+    final ctrl = _ctrl;
+    setState(() => _ctrl = false);
+    _terminal.keyInput(key, shift: shift, ctrl: ctrl);
   }
 
-  /// Sends [text] as one paste, so multi-line text doesn't submit line by line.
-  void _paste(String text) {
-    _ptyChannel?.sendInput(_terminal.bracketedPasteMode ? '\x1b[200~$text\x1b[201~' : text);
-  }
-
-  Future<void> _pasteClipboard() async {
-    final text = (await Clipboard.getData(Clipboard.kTextPlain))?.text;
-    if (text != null && text.isNotEmpty) _paste(text);
+  /// Sends the message box as one paste (so multi-line text doesn't submit line by line), then Enter.
+  /// An empty box just sends Enter.
+  void _sendMessage() {
+    final text = _message.text;
+    if (text.isNotEmpty) _ptyChannel?.sendInput(_terminal.bracketedPasteMode ? '\x1b[200~$text\x1b[201~' : text);
+    _ptyChannel?.sendInput('\r');
+    _message.clear();
   }
 
   void _copySelection() {
-    final range = _controller.selection;
-    if (range == null) return _showError('Long-press the terminal to select text first');
-    Clipboard.setData(ClipboardData(text: _terminal.buffer.getText(range)));
+    Clipboard.setData(ClipboardData(text: _terminal.buffer.getText(_controller.selection)));
     _controller.clearSelection();
-  }
-
-  /// A plain text field, so the phone keyboard's autocorrect, swipe and voice input work.
-  /// The draft survives dismissing the sheet.
-  Future<void> _openCompose() async {
-    final send = await showModalBottomSheet<bool>(
-      context: context,
-      isScrollControlled: true,
-      builder: (context) => Padding(
-        padding: EdgeInsets.fromLTRB(12, 12, 12, 12 + MediaQuery.of(context).viewInsets.bottom),
-        child: Row(
-          crossAxisAlignment: CrossAxisAlignment.end,
-          children: [
-            Expanded(
-              child: TextField(
-                controller: _compose,
-                autofocus: true,
-                minLines: 1,
-                maxLines: 8,
-                keyboardType: TextInputType.multiline,
-                textCapitalization: TextCapitalization.sentences,
-                decoration: const InputDecoration(hintText: 'Message to send', border: OutlineInputBorder()),
-              ),
-            ),
-            const SizedBox(width: 8),
-            IconButton.filled(
-              tooltip: 'Send',
-              icon: const Icon(Icons.send),
-              onPressed: () => Navigator.pop(context, true),
-            ),
-          ],
-        ),
-      ),
-    );
-    if (send != true || _compose.text.isEmpty) return;
-    _paste(_compose.text);
-    _ptyChannel?.sendInput('\r');
-    _compose.clear();
   }
 
   void _trackPointer(PointerEvent e) {
@@ -273,7 +231,7 @@ class _TerminalScreenState extends State<TerminalScreen> {
     widget.client.removeListener(_onClientUpdate);
     widget.client.onError = null;
     _controller.dispose();
-    _compose.dispose();
+    _message.dispose();
     HardwareKeyboard.instance.removeHandler(_onHardwareKey);
     _ptyChannel?.dispose();
     super.dispose();
@@ -530,17 +488,40 @@ class _TerminalScreenState extends State<TerminalScreen> {
                     ),
             ),
 
-            // Pinned Quick Keyboard Accessory Toolbar
             KeyboardAccessoryBar(
               ctrl: _ctrl,
-              alt: _alt,
               onCtrl: () => setState(() => _ctrl = !_ctrl),
-              onAlt: () => setState(() => _alt = !_alt),
               onKey: _key,
               onText: _send,
-              onPaste: _pasteClipboard,
-              onCopy: _copySelection,
-              onCompose: _openCompose,
+            ),
+
+            // A normal text field, so the phone keyboard's autocorrect, swipe and voice input work.
+            Container(
+              color: Theme.of(context).colorScheme.surface,
+              padding: const EdgeInsets.fromLTRB(8, 0, 4, 8),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: TextField(
+                      controller: _message,
+                      minLines: 1,
+                      maxLines: 4,
+                      textCapitalization: TextCapitalization.sentences,
+                      textInputAction: TextInputAction.send,
+                      onEditingComplete: _sendMessage, // keeps the keyboard up, unlike onSubmitted
+                      decoration: const InputDecoration(
+                        hintText: 'Message',
+                        isDense: true,
+                        border: OutlineInputBorder(),
+                      ),
+                    ),
+                  ),
+                  if (_controller.selection != null)
+                    IconButton(
+                        tooltip: 'Copy selection', icon: const Icon(Icons.content_copy), onPressed: _copySelection),
+                  IconButton(tooltip: 'Send (Enter when empty)', icon: const Icon(Icons.send), onPressed: _sendMessage),
+                ],
+              ),
             ),
           ],
         ),
