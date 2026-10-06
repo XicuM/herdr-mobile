@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'services/herdr_client.dart';
-import 'ui/screens/terminal_screen.dart';
+import 'ui/screens/agents_home_screen.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -39,7 +39,7 @@ class HerdrMobileApp extends StatelessWidget {
         },
         home: home,
       ),
-      child: TerminalScreen(client: client),
+      child: AgentsHomeScreen(client: client),
     );
   }
 }

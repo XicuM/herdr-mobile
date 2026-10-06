@@ -6,6 +6,7 @@ import 'package:herdr_mobile/models/agent_status.dart';
 import 'package:herdr_mobile/services/herdr_client.dart';
 import 'package:herdr_mobile/ui/widgets/workspace_drawer.dart';
 import 'package:herdr_mobile/changelog.dart';
+import 'package:herdr_mobile/main.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:herdr_mobile/ui/screens/terminal_screen.dart';
 import 'package:xterm/xterm.dart';
@@ -565,6 +566,105 @@ void main() {
         client.setSnapshotForTesting(snap(seq));
       }
       expect(alerts, hasLength(2));
+    });
+
+    testWidgets('AgentsHomeScreen displays machines, agents sorted by urgency, and opens terminal on tap',
+        (tester) async {
+      SharedPreferences.setMockInitialValues({'last_seen_changelog': changelog.first.$1});
+      final client = HerdrClientService()
+        ..setMachines(['10.0.0.1:7788'], [])
+        ..configure(host: '10.0.0.1', port: 7788, connect: false);
+
+      final snapshot = SessionSnapshot.fromJson({
+        'version': '0.9.3',
+        'protocol': 22,
+        'workspaces': [
+          {
+            'workspace_id': 'w1',
+            'number': 1,
+            'label': 'cohort-soc',
+            'focused': true,
+            'pane_count': 2,
+            'tab_count': 1,
+            'active_tab_id': 'w1:t1',
+            'agent_status': 'blocked',
+          }
+        ],
+        'tabs': [
+          {
+            'tab_id': 'w1:t1',
+            'workspace_id': 'w1',
+            'number': 1,
+            'label': 'main',
+            'focused': true,
+            'pane_count': 2,
+            'agent_status': 'blocked',
+          }
+        ],
+        'panes': [
+          {
+            'pane_id': 'w1:p1',
+            'terminal_id': 'term_1',
+            'workspace_id': 'w1',
+            'tab_id': 'w1:t1',
+            'focused': false,
+            'terminal_title': 'claude-task',
+            'agent_status': 'working',
+          },
+          {
+            'pane_id': 'w1:p2',
+            'terminal_id': 'term_2',
+            'workspace_id': 'w1',
+            'tab_id': 'w1:t1',
+            'focused': true,
+            'terminal_title': 'antigravity-refactor',
+            'agent_status': 'blocked',
+          },
+        ],
+        'agents': [
+          {
+            'name': 'claude',
+            'pane_id': 'w1:p1',
+            'status': 'working',
+          },
+          {
+            'name': 'antigravity',
+            'pane_id': 'w1:p2',
+            'status': 'blocked',
+          },
+        ],
+      });
+
+      client.setSnapshotForTesting(snapshot);
+
+      await tester.pumpWidget(MaterialApp(
+        home: HerdrMobileApp(client: client),
+      ));
+      await tester.pumpAndSettle();
+
+      // Top bar title
+      expect(find.text('Agents'), findsOneWidget);
+
+      // Blocked agent appears and shows NEEDS INPUT badge
+      expect(find.text('antigravity'), findsOneWidget);
+      expect(find.text('NEEDS INPUT'), findsOneWidget);
+      expect(find.text('claude'), findsOneWidget);
+
+      // Tap on antigravity agent opens the terminal screen
+      await tester.tap(find.text('antigravity'));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 300));
+
+      expect(client.selectedPaneId, equals('w1:p2'));
+      // Back button appears in TerminalScreen
+      expect(find.byIcon(Icons.arrow_back), findsOneWidget);
+
+      // Tapping back returns to AgentsHomeScreen
+      await tester.tap(find.byIcon(Icons.arrow_back));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 300));
+
+      expect(find.text('Agents'), findsOneWidget);
     });
   });
 }

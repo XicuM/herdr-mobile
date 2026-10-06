@@ -574,7 +574,14 @@ class _TerminalScreenState extends State<TerminalScreen> with SingleTickerProvid
       // The app bar's own menu button opens it: workspaces and machines.
       drawer: WorkspaceDrawer(client: client),
       appBar: AppBar(
-        titleSpacing: 0,
+        leading: ModalRoute.of(context)?.canPop == true
+            ? IconButton(
+                icon: const Icon(Icons.arrow_back),
+                tooltip: 'Back to agents',
+                onPressed: () => Navigator.pop(context),
+              )
+            : null,
+        titleSpacing: ModalRoute.of(context)?.canPop == true ? 0 : 0,
         // Just tall enough for the title and branch, so the tabs sit right under them.
         toolbarHeight: 48,
         // The terminal isn't content scrolling under the bar: keep the bar's colour when it scrolls.
