@@ -38,7 +38,7 @@ class _TerminalScreenState extends State<TerminalScreen> with SingleTickerProvid
   late final AppLifecycleListener _lifecycle;
   bool _ctrl = false;
   List<String> _history = []; // sent messages, newest first
-  int _scrolledUp = 0; // lines scrolled back into herdr's history; 0 is live
+  int _scrolledUp = 0; // scrolls back into the pane's history; 0 is live
 
   // Pinch-to-zoom and history scrolling, tracked from raw pointers so they don't fight the
   // terminal's own gestures.
@@ -59,6 +59,9 @@ class _TerminalScreenState extends State<TerminalScreen> with SingleTickerProvid
 
   // The current tab in the top bar's strip, scrolled into view when it changes.
   final _currentTab = GlobalKey();
+  // The tab being dragged, and how far, to tell a drag from a long-press let go in place.
+  String? _draggedTab;
+  double _dragDistance = 0;
   String? _shownTabId;
 
   // The terminal's true background: the colour most of the screen's edges are painted, since full-screen agents
@@ -295,13 +298,13 @@ class _TerminalScreenState extends State<TerminalScreen> with SingleTickerProvid
     if (background != _background) setState(() => _background = background);
   }
 
-  /// Back to the bottom of the pane's history. Herdr's own scrollback takes a scroll's line count but
-  /// stays pinned while new output arrives, so the way back may be longer than [_scrolledUp]; an app on
-  /// the alternate screen (Claude Code) gets each scroll as one wheel tick whatever its count. So send
-  /// a scroll per line counted, each long enough to reach the bottom (herdr caps it at a u16).
+  /// Back to the bottom of the pane's history. Herdr's own scrollback takes a scroll's line count, so
+  /// one scroll long enough reaches the bottom (herdr caps it at a u16); an app on the alternate screen
+  /// (Claude Code) gets each scroll as one wheel tick whatever its count, so it needs as many ticks back
+  /// as went up. Send twice that: going past the bottom does nothing, falling short leaves the view up.
   void _toLive() {
     if (_scrolledUp == 0) return;
-    for (var i = 0; i < _scrolledUp; i++) {
+    for (var i = 0; i < 2 * _scrolledUp; i++) {
       _ptyChannel?.sendScroll(-65535);
     }
     setState(() => _scrolledUp = 0);
@@ -337,43 +340,9 @@ class _TerminalScreenState extends State<TerminalScreen> with SingleTickerProvid
     }
   }
 
-  void _tabActions(TabModel tab) {
-    final client = widget.client;
-    final error = Theme.of(context).colorScheme.error;
-    showModalBottomSheet(
-      context: context,
-      builder: (sheetContext) {
-        void run(VoidCallback action) {
-          Navigator.pop(sheetContext);
-          action();
-        }
-
-        return SafeArea(
-          child: ListView(
-            shrinkWrap: true,
-            children: [
-              ListTile(title: Text(tab.displayName, style: Theme.of(sheetContext).textTheme.titleMedium)),
-              const Divider(),
-              ListTile(
-                leading: const Icon(Icons.edit_outlined),
-                title: const Text('Rename'),
-                onTap: () => run(() async {
-                  final name = await WorkspaceDrawer.prompt(context, 'Rename tab', 'Tab name', initial: tab.label);
-                  if (name != null) client.renameTab(tab.id, name);
-                }),
-              ),
-              ListTile(
-                iconColor: error,
-                textColor: error,
-                leading: const Icon(Icons.close),
-                title: const Text('Close'),
-                onTap: () => run(() => client.closeTab(tab.id)),
-              ),
-            ],
-          ),
-        );
-      },
-    );
+  Future<void> _renameTab(TabModel tab) async {
+    final name = await WorkspaceDrawer.prompt(context, 'Rename tab', 'Tab name', initial: tab.label);
+    if (name != null) widget.client.renameTab(tab.id, name);
   }
 
   /// The names of the agents in a tab, or null if it runs none.
@@ -520,9 +489,11 @@ class _TerminalScreenState extends State<TerminalScreen> with SingleTickerProvid
     if (lines == 0) return;
     _ptyChannel?.sendScroll(lines);
     _scrollRest -= lines * lineHeight;
-    // Herdr stops at the bottom, so the count does too; it may overshoot the top, which only means the
-    // way back to live scrolls further than needed. Capped, since the way back sends a scroll per line.
-    setState(() => _scrolledUp = (_scrolledUp + lines).clamp(0, 1000));
+    // Counts scrolls, not lines: an app on the alternate screen moves a wheel tick per scroll, however
+    // many lines it carries (see [_toLive]). Herdr stops at the bottom, so the count does too; it may
+    // overshoot the top, which only means the way back scrolls further than needed. Capped, since the
+    // way back sends a scroll per count.
+    setState(() => _scrolledUp = (_scrolledUp + lines.sign).clamp(0, 1000));
   }
 
   void _onClientUpdate() {
@@ -657,7 +628,7 @@ class _TerminalScreenState extends State<TerminalScreen> with SingleTickerProvid
         ],
         // The workspace's tabs, like Vivaldi's: a thin strip of tabs as wide as their names (64-200dp),
         // scrolling when they overflow. The current one is rounded on top and takes the terminal's color,
-        // joined to it below. Each shows its label and its agents. Long-press a tab to rename or close it.
+        // joined to it below. Each shows its label and its agents. Long-press a tab to move, rename or close it.
         bottom: PreferredSize(
           preferredSize: const Size.fromHeight(32),
           // While connecting, a thin progress bar over the strip's top edge, taking no room of its own.
@@ -676,21 +647,13 @@ class _TerminalScreenState extends State<TerminalScreen> with SingleTickerProvid
                               children: [
                                 for (final (j, t) in tabs.indexed)
                                   if (_tabAgents(t) case final agents)
-                                    Container(
-                                      key: j == i ? _currentTab : null,
-                                      constraints: const BoxConstraints(minWidth: 64, maxWidth: 200),
-                                      decoration: j == i
-                                          ? BoxDecoration(
-                                              color: background,
-                                              borderRadius: const BorderRadius.vertical(top: Radius.circular(10)),
-                                            )
-                                          : null,
-                                      child: InkWell(
-                                        customBorder: const RoundedRectangleBorder(
-                                            borderRadius: BorderRadius.vertical(top: Radius.circular(10))),
-                                        onTap: () => client.selectTab(t.id),
-                                        onLongPress: () => _tabActions(t),
-                                        child: Padding(
+                                    // Long-press and drag a tab onto another to take its place, or onto
+                                    // the bin; long-press and let go to rename it.
+                                    DragTarget<String>(
+                                      onWillAcceptWithDetails: (d) => d.data != t.id,
+                                      onAcceptWithDetails: (d) => client.moveTab(d.data, t.id),
+                                      builder: (context, over, _) {
+                                        final label = Padding(
                                           padding: const EdgeInsets.symmetric(horizontal: 10),
                                           child: Row(
                                             mainAxisSize: MainAxisSize.min,
@@ -716,20 +679,65 @@ class _TerminalScreenState extends State<TerminalScreen> with SingleTickerProvid
                                               ),
                                             ],
                                           ),
-                                        ),
-                                      ),
+                                        );
+                                        const top = BorderRadius.vertical(top: Radius.circular(10));
+                                        return LongPressDraggable<String>(
+                                          data: t.id,
+                                          axis: Axis.horizontal,
+                                          onDragStarted: () => setState(() {
+                                            _draggedTab = t.id;
+                                            _dragDistance = 0;
+                                          }),
+                                          onDragUpdate: (d) => _dragDistance += d.delta.distance,
+                                          onDragEnd: (d) {
+                                            setState(() => _draggedTab = null);
+                                            if (!d.wasAccepted && _dragDistance < 8) _renameTab(t);
+                                          },
+                                          feedback: Material(
+                                            color: scheme.secondaryContainer,
+                                            elevation: 3,
+                                            borderRadius: top,
+                                            child: Container(
+                                              height: 32,
+                                              constraints: const BoxConstraints(minWidth: 64, maxWidth: 200),
+                                              child: label,
+                                            ),
+                                          ),
+                                          childWhenDragging: Opacity(opacity: 0.3, child: label),
+                                          child: Container(
+                                            key: j == i ? _currentTab : null,
+                                            constraints: const BoxConstraints(minWidth: 64, maxWidth: 200),
+                                            decoration: over.isNotEmpty
+                                                ? BoxDecoration(color: scheme.secondaryContainer, borderRadius: top)
+                                                : j == i
+                                                    ? BoxDecoration(color: background, borderRadius: top)
+                                                    : null,
+                                            child: InkWell(
+                                              customBorder: const RoundedRectangleBorder(borderRadius: top),
+                                              onTap: () => client.selectTab(t.id),
+                                              child: label,
+                                            ),
+                                          ),
+                                        );
+                                      },
                                     ),
                               ],
                             ),
                           ),
                         ),
-                        IconButton(
-                          tooltip: 'New tab',
-                          padding: EdgeInsets.zero,
-                          constraints: const BoxConstraints.tightFor(width: 44, height: 32),
-                          iconSize: 20,
-                          icon: const Icon(Icons.add),
-                          onPressed: () => client.createTab(tabs[i].workspaceId),
+                        // While a tab is dragged, a bin: drop it there to close it.
+                        DragTarget<String>(
+                          onAcceptWithDetails: (d) => client.closeTab(d.data),
+                          builder: (context, over, _) => IconButton(
+                            tooltip: _draggedTab == null ? 'New tab' : 'Close tab',
+                            padding: EdgeInsets.zero,
+                            constraints: const BoxConstraints.tightFor(width: 44, height: 32),
+                            iconSize: 20,
+                            color: _draggedTab == null ? null : scheme.error,
+                            style: over.isEmpty ? null : IconButton.styleFrom(backgroundColor: scheme.errorContainer),
+                            icon: Icon(_draggedTab == null ? Icons.add : Icons.delete_outline),
+                            onPressed: () => client.createTab(tabs[i].workspaceId),
+                          ),
                         ),
                       ],
                     ),

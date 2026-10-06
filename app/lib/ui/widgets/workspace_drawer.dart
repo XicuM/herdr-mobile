@@ -80,97 +80,108 @@ class WorkspaceDrawer extends StatelessWidget {
         child: SafeArea(
           child: Column(
             children: [
+              // Each half gets its own Material: a ListTile paints its pill on the nearest Material, which
+              // would otherwise be the Drawer's, unclipped by the scroll view, so a scrolled-off selected
+              // row would show over the other half.
               Expanded(
-                child: ListView(
-                  padding: EdgeInsets.zero,
-                  children: [
-                    Padding(
-                      padding: const EdgeInsets.fromLTRB(28, 16, 16, 10),
-                      child: Text('Workspaces', style: text.titleSmall?.copyWith(color: scheme.onSurfaceVariant)),
-                    ),
-                    if (snapshot == null)
+                child: Material(
+                  type: MaterialType.transparency,
+                  child: ListView(
+                    padding: EdgeInsets.zero,
+                    children: [
                       Padding(
-                        padding: const EdgeInsets.symmetric(horizontal: 28),
-                        child: Text(client.machines.isEmpty
-                            ? 'No machines yet'
-                            : client.isDisconnected
-                                ? 'Disconnected'
-                                : 'Connecting…'),
+                        padding: const EdgeInsets.fromLTRB(28, 16, 16, 10),
+                        child: Text('Workspaces', style: text.titleSmall?.copyWith(color: scheme.onSurfaceVariant)),
                       ),
-                    ReorderableListView(
-                      shrinkWrap: true,
-                      physics: const NeverScrollableScrollPhysics(),
-                      buildDefaultDragHandles: false,
-                      onReorder: (from, to) {
-                        if (to > from) to--;
-                        if (to == from) return;
-                        final moved = blocks.removeAt(from);
-                        client.moveWorkspaces(
-                            [for (final w in moved) w.id], to < blocks.length ? blocks[to].first.id : null);
-                      },
-                      children: [
-                        for (final (i, block) in blocks.indexed)
-                          Column(
-                            key: ValueKey(block.first.id),
-                            children: [
-                              row(
-                                status: block.first.agentStatus,
-                                title: block.first.displayName,
-                                subtitle: block.first.gitBranch,
-                                selected: block.first.id == selectedPane?.workspaceId,
-                                onTap: () => go(() => client.selectWorkspace(block.first.id)),
-                                onLongPress: () => _workspaceActions(context, block.first),
-                                trailing: blocks.length < 2
-                                    ? null
-                                    : ReorderableDragStartListener(index: i, child: const Icon(Icons.drag_handle)),
-                              ),
-                              // The worktrees reorder among themselves, staying under their workspace.
-                              ReorderableListView(
-                                shrinkWrap: true,
-                                physics: const NeverScrollableScrollPhysics(),
-                                buildDefaultDragHandles: false,
-                                onReorder: (from, to) {
-                                  final trees = block.sublist(1);
-                                  if (to > from) to--;
-                                  if (to == from) return;
-                                  final moved = trees.removeAt(from);
-                                  final after = i + 1 < blocks.length ? blocks[i + 1].first.id : null;
-                                  client.moveWorkspaces([moved.id], to < trees.length ? trees[to].id : after);
-                                },
-                                children: [
-                                  for (final (j, ws) in block.skip(1).indexed)
-                                    row(
-                                      key: ValueKey(ws.id),
-                                      indent: 24,
-                                      status: ws.agentStatus,
-                                      title: ws.displayName,
-                                      selected: ws.id == selectedPane?.workspaceId,
-                                      onTap: () => go(() => client.selectWorkspace(ws.id)),
-                                      onLongPress: () => _workspaceActions(context, ws),
-                                      trailing: block.length < 3
-                                          ? null
-                                          : ReorderableDragStartListener(
-                                              index: j, child: const Icon(Icons.drag_handle)),
-                                    ),
-                                ],
-                              ),
-                            ],
-                          ),
-                      ],
-                    ),
-                    Padding(
-                      padding: const EdgeInsets.fromLTRB(16, 8, 16, 12),
-                      child: FilledButton.tonalIcon(
-                        icon: const Icon(Icons.add),
-                        label: const Text('New workspace'),
-                        onPressed: () => go(client.createWorkspace),
+                      if (snapshot == null)
+                        Padding(
+                          padding: const EdgeInsets.symmetric(horizontal: 28),
+                          child: Text(client.machines.isEmpty
+                              ? 'No machines yet'
+                              : client.isDisconnected
+                                  ? 'Disconnected'
+                                  : 'Connecting…'),
+                        ),
+                      ReorderableListView(
+                        shrinkWrap: true,
+                        physics: const NeverScrollableScrollPhysics(),
+                        buildDefaultDragHandles: false,
+                        onReorder: (from, to) {
+                          if (to > from) to--;
+                          if (to == from) return;
+                          final moved = blocks.removeAt(from);
+                          client.moveWorkspaces(
+                              [for (final w in moved) w.id], to < blocks.length ? blocks[to].first.id : null);
+                        },
+                        children: [
+                          for (final (i, block) in blocks.indexed)
+                            Column(
+                              key: ValueKey(block.first.id),
+                              children: [
+                                row(
+                                  status: block.first.agentStatus,
+                                  title: block.first.displayName,
+                                  subtitle: block.first.gitBranch,
+                                  selected: block.first.id == selectedPane?.workspaceId,
+                                  onTap: () => go(() => client.selectWorkspace(block.first.id)),
+                                  onLongPress: () => _workspaceActions(context, block.first),
+                                  trailing: blocks.length < 2
+                                      ? null
+                                      : ReorderableDragStartListener(index: i, child: const Icon(Icons.drag_handle)),
+                                ),
+                                // The worktrees reorder among themselves, staying under their workspace.
+                                ReorderableListView(
+                                  shrinkWrap: true,
+                                  physics: const NeverScrollableScrollPhysics(),
+                                  buildDefaultDragHandles: false,
+                                  onReorder: (from, to) {
+                                    final trees = block.sublist(1);
+                                    if (to > from) to--;
+                                    if (to == from) return;
+                                    final moved = trees.removeAt(from);
+                                    final after = i + 1 < blocks.length ? blocks[i + 1].first.id : null;
+                                    client.moveWorkspaces([moved.id], to < trees.length ? trees[to].id : after);
+                                  },
+                                  children: [
+                                    for (final (j, ws) in block.skip(1).indexed)
+                                      row(
+                                        key: ValueKey(ws.id),
+                                        indent: 24,
+                                        status: ws.agentStatus,
+                                        title: ws.displayName,
+                                        selected: ws.id == selectedPane?.workspaceId,
+                                        onTap: () => go(() => client.selectWorkspace(ws.id)),
+                                        onLongPress: () => _workspaceActions(context, ws),
+                                        trailing: block.length < 3
+                                            ? null
+                                            : ReorderableDragStartListener(
+                                                index: j, child: const Icon(Icons.drag_handle)),
+                                      ),
+                                  ],
+                                ),
+                              ],
+                            ),
+                        ],
                       ),
-                    ),
-                  ],
+                      Padding(
+                        padding: const EdgeInsets.fromLTRB(16, 8, 16, 12),
+                        child: FilledButton.tonalIcon(
+                          icon: const Icon(Icons.add),
+                          label: const Text('New workspace'),
+                          onPressed: () => go(client.createWorkspace),
+                        ),
+                      ),
+                    ],
+                  ),
                 ),
               ),
               const Divider(height: 1),
-              Expanded(child: SingleChildScrollView(child: MachineList(client: client))),
+              Expanded(
+                child: Material(
+                  type: MaterialType.transparency,
+                  child: SingleChildScrollView(child: MachineList(client: client)),
+                ),
+              ),
               const Divider(height: 1),
               Padding(
                 padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),

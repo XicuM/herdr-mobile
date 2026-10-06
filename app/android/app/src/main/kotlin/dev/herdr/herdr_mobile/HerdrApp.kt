@@ -83,11 +83,15 @@ class HerdrApp : Application() {
         }
     }
 
+    @Suppress("DEPRECATION")
     fun statusNotification(): Notification = builder(STATUS)
         .setContentTitle(status?.first ?: "Herdr Mobile")
         .setContentText(status?.second)
         .setOngoing(true)
         .setContentIntent(openIntent(STATUS_ID, null, null))
+        .addAction(Notification.Action.Builder(0, "Disconnect", PendingIntent.getService(this, 0,
+            Intent(this, StatusService::class.java).setAction(DISCONNECT),
+            if (Build.VERSION.SDK_INT >= 23) PendingIntent.FLAG_IMMUTABLE else 0)).build())
         .build()
 
     /** One alert per [key] (machine/pane): a newer one replaces it. Tapping opens that pane. */
@@ -153,6 +157,7 @@ class HerdrApp : Application() {
         const val STATUS = "status"
         const val BLOCKED = "blocked"
         const val FINISHED = "finished"
+        const val DISCONNECT = "disconnect"
     }
 }
 
@@ -163,6 +168,11 @@ class StatusService : Service() {
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        // Disconnecting every machine leaves Dart no status to show, so it stops this service.
+        if (intent?.action == HerdrApp.DISCONNECT) {
+            app.channel.invokeMethod("disconnect", null)
+            return START_STICKY
+        }
         try {
             val notification = app.statusNotification()
             if (Build.VERSION.SDK_INT >= 34) {

@@ -53,6 +53,13 @@ class HerdrClientService extends ChangeNotifier {
 
   HerdrClientService() {
     _android.setMethodCallHandler((call) async {
+      // The ongoing notification's Disconnect: every machine goes off, which also stops the service.
+      if (call.method == 'disconnect') {
+        _off = {..._machines};
+        _machines.forEach(_close);
+        _saveMachines();
+        return notifyListeners();
+      }
       if (call.method != 'open') return;
       final String m = call.arguments['machine'];
       if (m != machine && _machines.contains(m)) switchMachine(m);
@@ -543,6 +550,23 @@ class HerdrClientService extends ChangeNotifier {
 
   Future<void> renameTab(String tabId, String label) =>
       _request('rename tab', 'POST', '/api/tab/$tabId/rename', body: {'label': label});
+
+  /// Moves a tab to [targetId]'s place in their workspace, reordering the local snapshot first like
+  /// [moveWorkspaces].
+  Future<void> moveTab(String tabId, String targetId) async {
+    final all = snapshot?.tabs;
+    final tab = all?.where((t) => t.id == tabId).firstOrNull;
+    if (all == null || tab == null) return;
+    final own = all.where((t) => t.workspaceId == tab.workspaceId).map((t) => t.id).toList();
+    final from = own.indexOf(tabId), to = own.indexOf(targetId);
+    if (to < 0 || to == from) return;
+    all.remove(tab);
+    all.insert(all.indexWhere((t) => t.id == targetId) + (from < to ? 1 : 0), tab);
+    notifyListeners();
+    // herdr's index is into the order before the move: the tab goes in front of the one there.
+    await _request('move tab', 'POST', '/api/tab/move',
+        body: {'tab_id': tabId, 'insert_index': from < to ? to + 1 : to});
+  }
 
   Future<void> createWorkspace() => _create('create workspace', '/api/workspace', {});
 
