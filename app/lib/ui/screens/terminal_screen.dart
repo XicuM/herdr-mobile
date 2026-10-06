@@ -453,6 +453,10 @@ class _TerminalScreenState extends State<TerminalScreen> with SingleTickerProvid
     }
     final p = _pointers.values.toList();
     final distance = (p[0] - p[1]).distance;
+    if (!widget.client.pinchZoom) {
+      _pinched = true;
+      return;
+    }
     if (_pinchDistance == null) {
       _pinched = true;
       _pinchDistance = distance;
@@ -517,11 +521,10 @@ class _TerminalScreenState extends State<TerminalScreen> with SingleTickerProvid
       _ptyChannel = null;
       return;
     }
-    if (pty != null && pty.paneId == paneId && pty.host == client.host && pty.port == client.port) return;
+    if (pty != null && pty.paneId == paneId && pty.machine == client.machine) return;
     pty?.dispose();
     _ptyChannel = PtyChannel(
-      host: client.host,
-      port: client.port,
+      machine: client.machine,
       paneId: paneId,
       terminal: _terminal,
       // Herdr shows a freshly attached pane live, also after the channel reconnects on its own.
@@ -769,110 +772,129 @@ class _TerminalScreenState extends State<TerminalScreen> with SingleTickerProvid
                             ],
                           ),
                         )
-                      : Stack(
-                          children: [
-                            // Revealed beside the terminal while it slides: where the swipe leads.
-                            if (_stops() case (final stops, final i) when i >= 0 && stops.length > 1)
-                              Positioned.fill(
-                                child: Padding(
-                                  padding: const EdgeInsets.symmetric(horizontal: 24),
-                                  child: Row(
-                                    children: [
-                                      const Icon(Icons.chevron_left),
-                                      Text(stops[(i - 1) % stops.length].$1,
-                                          style: Theme.of(context).textTheme.labelLarge),
-                                      const Spacer(),
-                                      Text(stops[(i + 1) % stops.length].$1,
-                                          style: Theme.of(context).textTheme.labelLarge),
-                                      const Icon(Icons.chevron_right),
-                                    ],
-                                  ),
+                      // Connected to its bridge, which can't show it: e.g. a machine it reaches over SSH is down.
+                      : client.errorOf(client.machine) != null && snapshot == null
+                          ? Center(
+                              child: Padding(
+                                padding: const EdgeInsets.all(24),
+                                child: Column(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    Icon(Icons.cloud_off, size: 48, color: scheme.onSurfaceVariant),
+                                    const SizedBox(height: 12),
+                                    Text("Can't reach ${client.nameOf(client.machine)}",
+                                        style: Theme.of(context).textTheme.titleMedium),
+                                    const SizedBox(height: 8),
+                                    Text(client.errorOf(client.machine)!,
+                                        textAlign: TextAlign.center, style: TextStyle(color: scheme.onSurfaceVariant)),
+                                  ],
                                 ),
                               ),
-                            Positioned.fill(
-                              child: AnimatedBuilder(
-                                animation: _slide,
-                                builder: (_, child) =>
-                                    FractionalTranslation(translation: Offset(_slide.value, 0), child: child),
-                                child: Listener(
-                                  onPointerDown: _trackPointer,
-                                  onPointerMove: _trackPointer,
-                                  onPointerUp: _trackPointer,
-                                  onPointerCancel: _trackPointer,
-                                  onPointerSignal: _scrollSignal,
-                                  onPointerPanZoomUpdate: _scrollSignal,
-                                  child: TerminalView(
-                                    _terminal,
-                                    key: _view,
-                                    controller: _controller,
-                                    backgroundOpacity: 1.0,
-                                    // xterm's default colours, on the app's surface.
-                                    theme: TerminalTheme(
-                                      cursor: _defaultTheme.cursor,
-                                      selection: _defaultTheme.selection,
-                                      foreground: scheme.onSurface,
-                                      background: scheme.surface,
-                                      black: _defaultTheme.black,
-                                      white: _defaultTheme.white,
-                                      red: _defaultTheme.red,
-                                      green: _defaultTheme.green,
-                                      yellow: _defaultTheme.yellow,
-                                      blue: _defaultTheme.blue,
-                                      magenta: _defaultTheme.magenta,
-                                      cyan: _defaultTheme.cyan,
-                                      brightBlack: _defaultTheme.brightBlack,
-                                      brightRed: _defaultTheme.brightRed,
-                                      brightGreen: _defaultTheme.brightGreen,
-                                      brightYellow: _defaultTheme.brightYellow,
-                                      brightBlue: _defaultTheme.brightBlue,
-                                      brightMagenta: _defaultTheme.brightMagenta,
-                                      brightCyan: _defaultTheme.brightCyan,
-                                      brightWhite: _defaultTheme.brightWhite,
-                                      searchHitBackground: _defaultTheme.searchHitBackground,
-                                      searchHitBackgroundCurrent: _defaultTheme.searchHitBackgroundCurrent,
-                                      searchHitForeground: _defaultTheme.searchHitForeground,
+                            )
+                          : Stack(
+                              children: [
+                                // Revealed beside the terminal while it slides: where the swipe leads.
+                                if (_stops() case (final stops, final i) when i >= 0 && stops.length > 1)
+                                  Positioned.fill(
+                                    child: Padding(
+                                      padding: const EdgeInsets.symmetric(horizontal: 24),
+                                      child: Row(
+                                        children: [
+                                          const Icon(Icons.chevron_left),
+                                          Text(stops[(i - 1) % stops.length].$1,
+                                              style: Theme.of(context).textTheme.labelLarge),
+                                          const Spacer(),
+                                          Text(stops[(i + 1) % stops.length].$1,
+                                              style: Theme.of(context).textTheme.labelLarge),
+                                          const Icon(Icons.chevron_right),
+                                        ],
+                                      ),
                                     ),
-                                    textStyle: TerminalStyle(
-                                      fontSize: client.fontSize,
-                                      fontFamily: 'MesloLGS Nerd Font Mono',
-                                      height: 1.1,
+                                  ),
+                                Positioned.fill(
+                                  child: AnimatedBuilder(
+                                    animation: _slide,
+                                    builder: (_, child) =>
+                                        FractionalTranslation(translation: Offset(_slide.value, 0), child: child),
+                                    child: Listener(
+                                      onPointerDown: _trackPointer,
+                                      onPointerMove: _trackPointer,
+                                      onPointerUp: _trackPointer,
+                                      onPointerCancel: _trackPointer,
+                                      onPointerSignal: _scrollSignal,
+                                      onPointerPanZoomUpdate: _scrollSignal,
+                                      child: TerminalView(
+                                        _terminal,
+                                        key: _view,
+                                        controller: _controller,
+                                        backgroundOpacity: 1.0,
+                                        // xterm's default colours, on the app's surface.
+                                        theme: TerminalTheme(
+                                          cursor: _defaultTheme.cursor,
+                                          selection: _defaultTheme.selection,
+                                          foreground: scheme.onSurface,
+                                          background: scheme.surface,
+                                          black: _defaultTheme.black,
+                                          white: _defaultTheme.white,
+                                          red: _defaultTheme.red,
+                                          green: _defaultTheme.green,
+                                          yellow: _defaultTheme.yellow,
+                                          blue: _defaultTheme.blue,
+                                          magenta: _defaultTheme.magenta,
+                                          cyan: _defaultTheme.cyan,
+                                          brightBlack: _defaultTheme.brightBlack,
+                                          brightRed: _defaultTheme.brightRed,
+                                          brightGreen: _defaultTheme.brightGreen,
+                                          brightYellow: _defaultTheme.brightYellow,
+                                          brightBlue: _defaultTheme.brightBlue,
+                                          brightMagenta: _defaultTheme.brightMagenta,
+                                          brightCyan: _defaultTheme.brightCyan,
+                                          brightWhite: _defaultTheme.brightWhite,
+                                          searchHitBackground: _defaultTheme.searchHitBackground,
+                                          searchHitBackgroundCurrent: _defaultTheme.searchHitBackgroundCurrent,
+                                          searchHitForeground: _defaultTheme.searchHitForeground,
+                                        ),
+                                        textStyle: TerminalStyle(
+                                          fontSize: client.fontSize,
+                                          fontFamily: 'MesloLGS Nerd Font Mono',
+                                          height: 1.1,
+                                        ),
+                                        autofocus: true,
+                                        simulateScroll: false,
+                                      ),
                                     ),
-                                    autofocus: true,
-                                    simulateScroll: false,
                                   ),
                                 ),
-                              ),
+                                if (_copyTop() case final top?)
+                                  // Copy floats by the selection, like Android's own text toolbar.
+                                  Positioned(
+                                    top: top,
+                                    left: 0,
+                                    right: 0,
+                                    child: Center(
+                                      child: FilledButton.tonalIcon(
+                                        onPressed: _copySelection,
+                                        icon: const Icon(Icons.content_copy, size: 18),
+                                        label: const Text('Copy'),
+                                      ),
+                                    ),
+                                  ),
+                                if (_scrolledUp > 0)
+                                  // Back to live: a small round arrow, centred at the bottom.
+                                  Positioned(
+                                    bottom: 12,
+                                    left: 0,
+                                    right: 0,
+                                    child: Center(
+                                      child: FloatingActionButton.small(
+                                        tooltip: 'Back to live',
+                                        onPressed: _toLive,
+                                        child: const Icon(Icons.arrow_downward),
+                                      ),
+                                    ),
+                                  ),
+                              ],
                             ),
-                            if (_copyTop() case final top?)
-                              // Copy floats by the selection, like Android's own text toolbar.
-                              Positioned(
-                                top: top,
-                                left: 0,
-                                right: 0,
-                                child: Center(
-                                  child: FilledButton.tonalIcon(
-                                    onPressed: _copySelection,
-                                    icon: const Icon(Icons.content_copy, size: 18),
-                                    label: const Text('Copy'),
-                                  ),
-                                ),
-                              ),
-                            if (_scrolledUp > 0)
-                              // Back to live: a small round arrow, centred at the bottom.
-                              Positioned(
-                                bottom: 12,
-                                left: 0,
-                                right: 0,
-                                child: Center(
-                                  child: FloatingActionButton.small(
-                                    tooltip: 'Back to live',
-                                    onPressed: _toLive,
-                                    child: const Icon(Icons.arrow_downward),
-                                  ),
-                                ),
-                              ),
-                          ],
-                        ),
             ),
             // Swipe sideways here to move between agents in herdr's order. The keyboard
             // button swaps the message box for the control keys and back. It takes the terminal's background.

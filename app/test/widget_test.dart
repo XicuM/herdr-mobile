@@ -399,7 +399,7 @@ void main() {
 
     test('Editing a machine renames it and moves it in place', () {
       final client = HerdrClientService()..setMachines(['10.0.0.1:7788', '10.0.0.2:7788'], ['10.0.0.1:7788=old']);
-      client.updateMachine('10.0.0.1:7788', host: 'laptop', port: 9000, name: 'work');
+      client.updateMachine('10.0.0.1:7788', to: 'laptop:9000', name: 'work');
       expect(client.machines, ['laptop:9000', '10.0.0.2:7788']);
       expect(client.nameOf('laptop:9000'), 'work');
       expect(client.nameOf('10.0.0.1:7788'), '10.0.0.1:7788');
@@ -459,7 +459,7 @@ void main() {
       SharedPreferences.setMockInitialValues({});
       final client = HerdrClientService()
         ..setMachines(['10.0.0.1:7788', '10.0.0.2:7788'], [], ['10.0.0.2:7788'])
-        ..configure(host: '10.0.0.1', port: 7788, connect: false);
+        ..configure('10.0.0.1:7788', connect: false);
       expect(client.isOff('10.0.0.1:7788'), isFalse);
       expect(client.isOff('10.0.0.2:7788'), isTrue);
 
@@ -488,7 +488,7 @@ void main() {
       SharedPreferences.setMockInitialValues({'last_seen_changelog': changelog.first.$1});
       final client = HerdrClientService()
         ..setMachines(['10.0.0.1:7788', '10.0.0.2:7788'], ['10.0.0.1:7788=laptop'], ['10.0.0.2:7788'])
-        ..configure(host: '10.0.0.1', port: 7788, connect: false);
+        ..configure('10.0.0.1:7788', connect: false);
       await tester.pumpWidget(MaterialApp(home: TerminalScreen(client: client)));
 
       await tester.tap(find.byIcon(Icons.menu));
@@ -508,10 +508,41 @@ void main() {
       SharedPreferences.setMockInitialValues({});
       final client = HerdrClientService()
         ..setMachines(['10.0.0.1:7788', '10.0.0.2:7788'], [], ['10.0.0.2:7788'])
-        ..configure(host: '10.0.0.1', port: 7788, connect: false);
+        ..configure('10.0.0.1:7788', connect: false);
       client.removeMachine('10.0.0.1:7788');
       expect(client.machine, '10.0.0.2:7788');
       expect(client.isOff('10.0.0.2:7788'), isTrue);
+    });
+
+    test('A bridge\'s switch and removal take the machines it reaches with it', () async {
+      SharedPreferences.setMockInitialValues({});
+      const laptop = '10.0.0.1:7788', sert = '10.0.0.1:7788/m/abc', other = '10.0.0.2:7788';
+      final client = HerdrClientService()
+        ..setMachines([laptop, sert, other], ['$sert=sert'])
+        ..switchMachine(sert);
+      expect(HerdrClientService.parentOf(sert), laptop);
+      expect(HerdrClientService.parentOf(laptop), isNull);
+
+      // Muting on the reached machine survives its bridge's own snapshot, where that pane doesn't exist.
+      client.setMuted('w1:p1', true);
+      client.setSnapshotForTesting(SessionSnapshot.fromJson({'panes': []}), laptop);
+      expect(client.isMuted('w1:p1'), isTrue);
+
+      client.disconnect(laptop);
+      expect(client.isOff(sert), isTrue);
+      expect(client.isOff(other), isFalse);
+      client.connect(laptop);
+      expect(client.isOff(sert), isFalse);
+
+      // The machine on screen is remembered with its path.
+      await pumpEventQueue();
+      final prefs = await SharedPreferences.getInstance();
+      expect(prefs.getString('herdr_path'), '/m/abc');
+      expect((HerdrClientService()..load(prefs)).machine, sert);
+
+      client.removeMachine(laptop);
+      expect(client.machines, [other]);
+      expect(client.machine, other);
     });
 
     testWidgets('A finished agent alerts once, even when an older snapshot lands in between', (tester) async {
