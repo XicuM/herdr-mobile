@@ -12,6 +12,20 @@ class SettingsScreen extends StatefulWidget {
 }
 
 class _SettingsScreenState extends State<SettingsScreen> {
+  /// Accent colours to pick from; the first is the default.
+  static const _seeds = [
+    Color(0xFF38BDF8), // sky
+    Color(0xFF6366F1), // indigo
+    Color(0xFFA855F7), // purple
+    Color(0xFFEC4899), // pink
+    Color(0xFFEF4444), // red
+    Color(0xFFF97316), // orange
+    Color(0xFFEAB308), // yellow
+    Color(0xFF22C55E), // green
+    Color(0xFF14B8A6), // teal
+    Color(0xFF94A3B8), // slate
+  ];
+
   /// Takes `host`, `host:port`, an IPv6 address (bare or `[addr]:port`) or a pasted URL; the port defaults
   /// to the bridge's 7788. An IPv6 host keeps its brackets, which `host:port` URLs need.
   static (String, int) _parseAddress(String text) {
@@ -119,6 +133,35 @@ class _SettingsScreenState extends State<SettingsScreen> {
             onTap: _machineDialog,
           ),
           const Divider(),
+          section('Appearance'),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 16),
+            child: SegmentedButton<Brightness?>(
+              segments: const [
+                ButtonSegment(value: null, label: Text('System'), icon: Icon(Icons.brightness_auto_outlined)),
+                ButtonSegment(value: Brightness.light, label: Text('Light'), icon: Icon(Icons.light_mode_outlined)),
+                ButtonSegment(value: Brightness.dark, label: Text('Dark'), icon: Icon(Icons.dark_mode_outlined)),
+              ],
+              selected: {client.brightness},
+              onSelectionChanged: (s) => setState(() => client.setBrightness(s.first)),
+            ),
+          ),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 16, 16, 0),
+            child: Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: [
+                for (final color in _seeds)
+                  IconButton.filled(
+                    style: IconButton.styleFrom(backgroundColor: color),
+                    icon: Icon(Icons.check, color: color == client.seed ? Colors.black : Colors.transparent),
+                    onPressed: () => setState(() => client.setSeed(color)),
+                  ),
+              ],
+            ),
+          ),
+          const Divider(),
           section('Notifications'),
           SwitchListTile(
             title: const Text('Agent alerts'),
@@ -131,7 +174,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
           section('Terminal'),
           ListTile(
             title: const Text('Font size'),
-            subtitle: const Text('Or pinch the terminal, or use the volume keys'),
+            subtitle: Text(client.volumeKeys == VolumeKeys.fontSize
+                ? 'Or pinch the terminal, or use the volume keys'
+                : 'Or pinch the terminal'),
             trailing: Text('${client.fontSize.round()}', style: Theme.of(context).textTheme.labelLarge),
           ),
           Padding(
@@ -145,6 +190,23 @@ class _SettingsScreenState extends State<SettingsScreen> {
               onChanged: (v) => setState(() => client.setFontSize(v)),
             ),
           ),
+          const ListTile(
+            title: Text('Volume keys'),
+            subtitle: Text('What the volume keys do while the terminal is on screen'),
+          ),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 16),
+            child: SegmentedButton<VolumeKeys>(
+              segments: const [
+                ButtonSegment(value: VolumeKeys.fontSize, label: Text('Font size'), icon: Icon(Icons.text_fields)),
+                ButtonSegment(value: VolumeKeys.arrows, label: Text('↑ / ↓'), icon: Icon(Icons.unfold_more)),
+                ButtonSegment(value: VolumeKeys.volume, label: Text('Volume'), icon: Icon(Icons.volume_up_outlined)),
+              ],
+              selected: {client.volumeKeys},
+              onSelectionChanged: (s) => setState(() => client.setVolumeKeys(s.first)),
+            ),
+          ),
+          const SizedBox(height: 16),
         ],
       ),
     );

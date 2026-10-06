@@ -38,7 +38,6 @@ class _KeyboardAccessoryBarState extends State<KeyboardAccessoryBar> {
     final style = FilledButton.styleFrom(
       minimumSize: const Size(0, 48),
       padding: EdgeInsets.zero,
-      textStyle: Theme.of(context).textTheme.labelMedium,
       backgroundColor: danger ? scheme.errorContainer : null,
       foregroundColor: danger ? scheme.onErrorContainer : null,
     );
@@ -47,7 +46,7 @@ class _KeyboardAccessoryBarState extends State<KeyboardAccessoryBar> {
       onTap();
     }
 
-    // Shrunk to fit when the row is narrow, beside the message box's buttons.
+    // Shrunk to fit when the row is narrow, beside the keyboard button.
     final text = FittedBox(fit: BoxFit.scaleDown, child: Text(label));
     Widget key = active
         ? FilledButton(style: style, onPressed: tap, child: text)

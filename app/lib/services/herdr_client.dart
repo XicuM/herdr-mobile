@@ -8,6 +8,9 @@ import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 import '../models/session.dart';
 
+/// What the volume keys do on the terminal screen; [volume] leaves them to the system.
+enum VolumeKeys { fontSize, arrows, volume }
+
 /// One machine's `/ws/session` link, its last snapshot, and the pane last viewed on it.
 class _Conn {
   WebSocketChannel? channel;
@@ -28,6 +31,8 @@ class HerdrClientService extends ChangeNotifier {
   String _host = '127.0.0.1';
   int _port = 7788;
   double _fontSize = 14;
+  Color _seed = const Color(0xFF38BDF8);
+  Brightness? _brightness;
   List<String> _machines = [];
   Map<String, String> _names = {};
 
@@ -38,6 +43,7 @@ class HerdrClientService extends ChangeNotifier {
   /// Panes that never raise an alert, as `host:port/pane_id`.
   Set<String> _muted = {};
   bool _keyBar = false;
+  VolumeKeys _volumeKeys = VolumeKeys.fontSize;
   bool _started = false;
   bool _disposed = false;
   final _conns = <String, _Conn>{};
@@ -76,6 +82,12 @@ class HerdrClientService extends ChangeNotifier {
   String? get selectedPaneId => _conns[machine]?.selectedPaneId;
   PaneModel? get selectedPane => snapshot?.panes.where((p) => p.id == selectedPaneId).firstOrNull;
   double get fontSize => _fontSize;
+
+  /// The app's accent colour, the seed of its Material colour scheme.
+  Color get seed => _seed;
+
+  /// Light or dark; null follows the system.
+  Brightness? get brightness => _brightness;
 
   bool isConnected(String m) => _conns[m]?.connected ?? false;
 
@@ -136,6 +148,14 @@ class HerdrClientService extends ChangeNotifier {
   void setKeyBar(bool on) {
     _keyBar = on;
     SharedPreferences.getInstance().then((p) => p.setBool('show_keys', on));
+    notifyListeners();
+  }
+
+  VolumeKeys get volumeKeys => _volumeKeys;
+
+  void setVolumeKeys(VolumeKeys v) {
+    _volumeKeys = v;
+    SharedPreferences.getInstance().then((p) => p.setString('volume_keys', v.name));
     notifyListeners();
   }
 
@@ -234,6 +254,19 @@ class HerdrClientService extends ChangeNotifier {
     _fontSize = clamped;
     notifyListeners();
     SharedPreferences.getInstance().then((p) => p.setDouble('terminal_font_size', clamped));
+  }
+
+  void setSeed(Color seed) {
+    _seed = seed;
+    notifyListeners();
+    SharedPreferences.getInstance().then((p) => p.setInt('theme_seed', seed.value));
+  }
+
+  void setBrightness(Brightness? brightness) {
+    _brightness = brightness;
+    notifyListeners();
+    SharedPreferences.getInstance()
+        .then((p) => brightness == null ? p.remove('theme_mode') : p.setString('theme_mode', brightness.name));
   }
 
   void _setActive(String host, int port) {

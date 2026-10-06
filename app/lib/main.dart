@@ -10,7 +10,11 @@ void main() async {
 
   final client = HerdrClientService();
   client.setFontSize(prefs.getDouble('terminal_font_size') ?? 14);
+  final seed = prefs.getInt('theme_seed');
+  if (seed != null) client.setSeed(Color(seed));
+  client.setBrightness(Brightness.values.asNameMap()[prefs.getString('theme_mode')]);
   client.setKeyBar(prefs.getBool('show_keys') ?? false);
+  client.setVolumeKeys(VolumeKeys.values.asNameMap()[prefs.getString('volume_keys')] ?? VolumeKeys.fontSize);
   client.setMutedPanes(prefs.getStringList('muted_panes') ?? []);
   client.setMachines(
     prefs.getStringList('herdr_machines') ?? [],
@@ -34,17 +38,27 @@ class HerdrMobileApp extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final scheme = ColorScheme.fromSeed(seedColor: const Color(0xFF38BDF8), brightness: Brightness.dark);
-    return MaterialApp(
-      title: 'Herdr Mobile',
-      debugShowCheckedModeBanner: false,
-      // Material 3 throughout: colors come from the scheme's roles and text from its type scale. Only the
-      // terminal uses the mono font.
-      theme: ThemeData(
-        colorScheme: scheme,
-        bottomSheetTheme: const BottomSheetThemeData(showDragHandle: true),
+    // Material 3 throughout: colors come from the scheme's roles and text from its type scale. Only the
+    // terminal uses the mono font.
+    ThemeData theme(Brightness brightness) => ThemeData(
+          colorScheme: ColorScheme.fromSeed(seedColor: client.seed, brightness: brightness),
+          bottomSheetTheme: const BottomSheetThemeData(showDragHandle: true),
+        );
+    return ListenableBuilder(
+      listenable: client,
+      builder: (_, home) => MaterialApp(
+        title: 'Herdr Mobile',
+        debugShowCheckedModeBanner: false,
+        theme: theme(Brightness.light),
+        darkTheme: theme(Brightness.dark),
+        themeMode: switch (client.brightness) {
+          Brightness.light => ThemeMode.light,
+          Brightness.dark => ThemeMode.dark,
+          null => ThemeMode.system,
+        },
+        home: home,
       ),
-      home: TerminalScreen(client: client),
+      child: TerminalScreen(client: client),
     );
   }
 }

@@ -112,7 +112,7 @@ class _TerminalScreenState extends State<TerminalScreen> with SingleTickerProvid
                   'the top bar; long-press one to rename or close it. Swipe the message bar sideways to go from '
                   'agent to agent. The circle right of the message box lists every agent. Type messages '
                   'in the box at the bottom, with autocorrect and voice; the history button brings back earlier '
-                  'ones. Pinch or use the volume keys to change the font size.',
+                  'ones. Pinch or use the volume keys to change the font size (Settings can make them ↑/↓ instead).',
                 )
               : Column(
                   mainAxisSize: MainAxisSize.min,
@@ -141,14 +141,20 @@ class _TerminalScreenState extends State<TerminalScreen> with SingleTickerProvid
     Navigator.push(context, MaterialPageRoute(builder: (_) => SettingsScreen(client: widget.client)));
   }
 
-  /// Volume keys zoom the terminal font while this screen is on top.
+  /// Volume keys zoom the terminal font or send ↑/↓ while this screen is on top, as set in Settings.
   bool _onHardwareKey(KeyEvent event) {
     final key = event.logicalKey;
     if (key != LogicalKeyboardKey.audioVolumeUp && key != LogicalKeyboardKey.audioVolumeDown) return false;
+    final client = widget.client;
+    if (client.volumeKeys == VolumeKeys.volume) return false;
     if (!mounted || ModalRoute.of(context)?.isCurrent != true) return false;
     if (event is! KeyUpEvent) {
-      final client = widget.client;
-      client.setFontSize(client.fontSize + (key == LogicalKeyboardKey.audioVolumeUp ? 1 : -1));
+      final up = key == LogicalKeyboardKey.audioVolumeUp;
+      if (client.volumeKeys == VolumeKeys.arrows) {
+        _key(up ? TerminalKey.arrowUp : TerminalKey.arrowDown);
+      } else {
+        client.setFontSize(client.fontSize + (up ? 1 : -1));
+      }
     }
     return true;
   }
@@ -571,12 +577,13 @@ class _TerminalScreenState extends State<TerminalScreen> with SingleTickerProvid
     final client = widget.client;
     final scheme = Theme.of(context).colorScheme;
     final background = _background ?? scheme.surface;
-    // The message bar's own buttons sit on the pane's background, which may be light: then they go dark.
-    final onBackground = ThemeData.estimateBrightnessForColor(background) == Brightness.dark
+    // The message bar's own buttons sit on the pane's background, which may be light in a dark theme or dark
+    // in a light one: then they take the inverse colour.
+    final onBackground = ThemeData.estimateBrightnessForColor(background) == scheme.brightness
         ? Theme.of(context)
         : Theme.of(context).copyWith(
-            colorScheme: scheme.copyWith(
-                onSurfaceVariant: scheme.surfaceContainerHighest, primary: scheme.surfaceContainerHighest),
+            colorScheme:
+                scheme.copyWith(onSurfaceVariant: scheme.onInverseSurface, primary: scheme.onInverseSurface),
           );
     final snapshot = client.snapshot;
     final pane = client.selectedPane;
@@ -614,7 +621,7 @@ class _TerminalScreenState extends State<TerminalScreen> with SingleTickerProvid
             if (workspace?.gitBranch != null)
               Text(
                 workspace!.gitBranch!,
-                style: Theme.of(context).textTheme.bodySmall?.copyWith(color: scheme.onSurfaceVariant),
+                style: Theme.of(context).textTheme.bodyMedium?.copyWith(color: scheme.onSurfaceVariant),
                 overflow: TextOverflow.ellipsis,
               ),
           ],
@@ -931,7 +938,8 @@ class _TerminalScreenState extends State<TerminalScreen> with SingleTickerProvid
                                 ),
                               ),
                       ),
-                      Theme(data: onBackground, child: AgentsButton(client: client)),
+                      // The control keys take its room.
+                      if (!client.keyBar) Theme(data: onBackground, child: AgentsButton(client: client)),
                     ],
                   ),
                 ),

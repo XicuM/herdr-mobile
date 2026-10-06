@@ -41,6 +41,7 @@ class WorkspaceDrawer extends StatelessWidget {
           padding: const EdgeInsets.symmetric(horizontal: 12),
           child: ListTile(
             contentPadding: EdgeInsets.only(left: 16 + indent, right: 16),
+            visualDensity: VisualDensity.compact,
             selected: selected,
             leading: StatusDot(status),
             minLeadingWidth: 8,

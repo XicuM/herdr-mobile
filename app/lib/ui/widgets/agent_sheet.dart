@@ -51,6 +51,7 @@ void showAgentSheet(BuildContext context, HerdrClientService client) {
                           Padding(
                             padding: const EdgeInsets.symmetric(horizontal: 12),
                             child: ListTile(
+                              visualDensity: VisualDensity.compact,
                               selected: agent.paneId == client.selectedPaneId,
                               leading: StatusDot(agent.status),
                               minLeadingWidth: 8,
