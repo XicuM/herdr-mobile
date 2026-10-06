@@ -15,7 +15,7 @@ import '../widgets/machine_drawer.dart';
 import '../widgets/tab_sheet.dart';
 import 'settings_screen.dart';
 
-/// Offered above the message history; picking one fills the message box.
+/// Offered below the message history; picking one fills the message box.
 const _quickReplies = ['yes', 'no', 'continue', '/clear'];
 
 class TerminalScreen extends StatefulWidget {
@@ -191,24 +191,32 @@ class _TerminalScreenState extends State<TerminalScreen> with SingleTickerProvid
     showModalBottomSheet(
       context: context,
       builder: (_) => SafeArea(
-        child: ListView(
-          shrinkWrap: true,
-          padding: const EdgeInsets.symmetric(vertical: 12),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
           children: [
+            Flexible(
+              child: ListView(
+                shrinkWrap: true,
+                padding: const EdgeInsets.only(top: 12),
+                children: [
+                  for (final h in _history)
+                    ListTile(
+                      dense: true,
+                      leading: const Icon(Icons.history, size: 18),
+                      title: Text(h, maxLines: 2, overflow: TextOverflow.ellipsis),
+                      onTap: () => pick(h),
+                    ),
+                ],
+              ),
+            ),
+            // Pinned under the history, nearest the thumb.
             Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 12),
+              padding: const EdgeInsets.all(12),
               child: Wrap(
                 spacing: 8,
                 children: [for (final r in _quickReplies) ActionChip(label: Text(r), onPressed: () => pick(r))],
               ),
             ),
-            for (final h in _history)
-              ListTile(
-                dense: true,
-                leading: const Icon(Icons.history, size: 18),
-                title: Text(h, maxLines: 2, overflow: TextOverflow.ellipsis),
-                onTap: () => pick(h),
-              ),
           ],
         ),
       ),
