@@ -8,9 +8,11 @@ import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
 import android.app.Service
+import android.content.ContentResolver
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.content.pm.ServiceInfo
+import android.media.AudioAttributes
 import android.net.Uri
 import android.os.Build
 import android.os.IBinder
@@ -39,10 +41,30 @@ class HerdrApp : Application() {
     override fun onCreate() {
         super.onCreate()
         if (Build.VERSION.SDK_INT >= 26) {
+            // Remove legacy channels to ensure custom sounds take effect
+            nm.deleteNotificationChannel("blocked")
+            nm.deleteNotificationChannel("finished")
+
+            val audioAttributes = AudioAttributes.Builder()
+                .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
+                .setUsage(AudioAttributes.USAGE_NOTIFICATION)
+                .build()
+
+            val blockedSound = Uri.parse("${ContentResolver.SCHEME_ANDROID_RESOURCE}://$packageName/${R.raw.herdr_blocked}")
+            val doneSound = Uri.parse("${ContentResolver.SCHEME_ANDROID_RESOURCE}://$packageName/${R.raw.herdr_done}")
+
+            val blockedChannel = NotificationChannel(BLOCKED, "Agent needs you", NotificationManager.IMPORTANCE_HIGH).apply {
+                setSound(blockedSound, audioAttributes)
+                enableVibration(true)
+            }
+            val finishedChannel = NotificationChannel(FINISHED, "Agent finished", NotificationManager.IMPORTANCE_DEFAULT).apply {
+                setSound(doneSound, audioAttributes)
+            }
+
             nm.createNotificationChannels(listOf(
                 NotificationChannel(STATUS, "Connection", NotificationManager.IMPORTANCE_MIN),
-                NotificationChannel(BLOCKED, "Agent needs you", NotificationManager.IMPORTANCE_HIGH),
-                NotificationChannel(FINISHED, "Agent finished", NotificationManager.IMPORTANCE_DEFAULT),
+                blockedChannel,
+                finishedChannel,
             ))
         }
         val engine = FlutterEngine(this)
@@ -156,8 +178,8 @@ class HerdrApp : Application() {
         const val ENGINE = "main"
         const val STATUS_ID = 1
         const val STATUS = "status"
-        const val BLOCKED = "blocked"
-        const val FINISHED = "finished"
+        const val BLOCKED = "blocked_v2"
+        const val FINISHED = "finished_v2"
         const val DISCONNECT = "disconnect"
     }
 }
