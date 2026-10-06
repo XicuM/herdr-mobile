@@ -5,7 +5,7 @@ const changelog = <(String, List<String>)>[
     [
       'Agents: the circle right of the message box shows how many agents are running; tap it for the list, the ones waiting for you first, and tap one to jump to it. Its badge shows the most urgent status elsewhere, with a count when agents are blocked.',
       'Tabs: the dots under the top bar show where you are among the workspace\'s tabs, coloured by their agents. Tap them, swipe down on the top bar or up on the message bar to switch, create, rename or close tabs, or pick a split pane.',
-      'Swipe the top bar left or right to slide to the next or previous tab; swiping past the last tab opens a new one. Swipe the message bar to go from agent to agent, across workspaces.',
+      'Swipe the top bar left or right to slide to the next or previous tab; swiping past the last tab opens a new one. Swipe the message bar to go from agent to agent, across workspaces; past the last agent it wraps back to the first.',
       'Tap the title for workspaces. Long-press a workspace for its actions.',
       'Material 3 look throughout.',
       'Agent status colours match herdr: yellow working, red waiting for you, green finished, grey idle.',
