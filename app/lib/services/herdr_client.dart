@@ -371,6 +371,12 @@ class HerdrClientService extends ChangeNotifier {
     }
     // After a dropout [before] is the last snapshot seen, so what changed meanwhile still alerts.
     if (before != null && _alerts) _alertChanges(m, before, snapshot);
+    // herdr reuses a closed pane's id, and the new pane mustn't come up muted.
+    final gone = _muted.where((k) => k.startsWith('$m/') && !snapshot.panes.any((p) => '$m/${p.id}' == k));
+    if (gone.isNotEmpty) {
+      _muted = _muted.difference(gone.toSet());
+      SharedPreferences.getInstance().then((p) => p.setStringList('muted_panes', _muted.toList()));
+    }
     notifyListeners();
   }
 

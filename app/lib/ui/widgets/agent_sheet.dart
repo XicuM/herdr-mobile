@@ -33,11 +33,12 @@ void showAgentSheet(BuildContext context, HerdrClientService client) {
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
                   Padding(
-                    padding: const EdgeInsets.fromLTRB(24, 0, 16, 8),
-                    child: Text('Agents', style: Theme.of(sheetContext).textTheme.titleMedium),
+                    padding: const EdgeInsets.fromLTRB(28, 0, 16, 10),
+                    child: Text('Agents',
+                        style: Theme.of(sheetContext).textTheme.titleSmall?.copyWith(color: scheme.onSurfaceVariant)),
                   ),
                   if (agents.isEmpty)
-                    const Padding(padding: EdgeInsets.fromLTRB(24, 8, 24, 24), child: Text('No agents running.')),
+                    const Padding(padding: EdgeInsets.fromLTRB(28, 0, 28, 24), child: Text('No agents running')),
                   Flexible(
                     child: ListView(
                       shrinkWrap: true,
@@ -96,8 +97,8 @@ void showAgentSheet(BuildContext context, HerdrClientService client) {
   );
 }
 
-/// Opens [showAgentSheet]. A ring with how many agents there are, badged in the most urgent status of
-/// the ones not on screen, with the count when some are blocked.
+/// Opens [showAgentSheet]. A square with how many agents there are, badged with how many of the ones
+/// not on screen and not muted are blocked.
 class AgentsButton extends StatelessWidget {
   final HerdrClientService client;
 
@@ -107,22 +108,21 @@ class AgentsButton extends StatelessWidget {
   Widget build(BuildContext context) {
     final color = Theme.of(context).colorScheme.onSurfaceVariant;
     final agents = client.snapshot?.agents ?? <AgentModel>[];
-    final others = agents.where((a) => a.paneId != client.selectedPaneId);
-    final top = _urgency.take(3).where((s) => others.any((a) => a.status == s)).firstOrNull;
+    final others = agents.where((a) => a.paneId != client.selectedPaneId && !client.isMuted(a.paneId));
     final blocked = others.where((a) => a.status == 'blocked').length;
     return IconButton(
       tooltip: 'Agents',
       onPressed: () => showAgentSheet(context, client),
       icon: Badge(
-        isLabelVisible: top != null,
-        backgroundColor: AgentStatus.fromString(top).color,
+        isLabelVisible: blocked > 0,
+        backgroundColor: AgentStatus.blocked.color,
         textColor: Theme.of(context).colorScheme.surface,
-        label: blocked > 0 ? Text('$blocked') : null,
+        label: Text('$blocked'),
         child: Container(
           width: 22,
           height: 22,
           alignment: Alignment.center,
-          decoration: BoxDecoration(shape: BoxShape.circle, border: Border.all(color: color, width: 2)),
+          decoration: BoxDecoration(borderRadius: BorderRadius.circular(4), border: Border.all(color: color, width: 2)),
           child: Text('${agents.length}', style: Theme.of(context).textTheme.labelMedium?.copyWith(color: color)),
         ),
       ),
