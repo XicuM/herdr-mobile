@@ -22,8 +22,8 @@ android {
         applicationId = "dev.herdr.herdr_mobile"
         minSdk = 21
         targetSdk = 34
-        versionCode = 7
-        versionName = "1.4.0"
+        versionCode = flutter.versionCode
+        versionName = flutter.versionName
     }
 
     buildTypes {

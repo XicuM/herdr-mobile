@@ -12,9 +12,8 @@ void showTabSheet(BuildContext context, HerdrClientService client) {
     builder: (sheetContext) => ListenableBuilder(
       listenable: client,
       builder: (_, __) {
-        final scheme = Theme.of(sheetContext).colorScheme;
         final snapshot = client.snapshot;
-        final pane = snapshot?.panes.where((p) => p.id == client.selectedPaneId).firstOrNull;
+        final pane = client.selectedPane;
         if (snapshot == null || pane == null) return const SizedBox(height: 120);
         final workspace = snapshot.workspaces.where((w) => w.id == pane.workspaceId).firstOrNull;
         final tabs = snapshot.tabs.where((t) => t.workspaceId == pane.workspaceId).toList();
@@ -39,11 +38,8 @@ void showTabSheet(BuildContext context, HerdrClientService client) {
             Padding(
               padding: const EdgeInsets.symmetric(horizontal: 12),
               child: ListTile(
-                shape: const StadiumBorder(),
                 contentPadding: EdgeInsets.only(left: 16 + indent, right: 4),
                 selected: selected,
-                selectedColor: scheme.onSecondaryContainer,
-                selectedTileColor: scheme.secondaryContainer,
                 leading: StatusDot(status),
                 minLeadingWidth: 8,
                 title: Text(title, overflow: TextOverflow.ellipsis),
@@ -92,7 +88,7 @@ void showTabSheet(BuildContext context, HerdrClientService client) {
                           title: () {
                             final agent = agentOf(t.id == pane.tabId ? pane.id : null) ??
                                 snapshot.agents.where((a) => tabOf[a.paneId] == t.id).firstOrNull?.name;
-                            return agent == null ? tabLabel(t) : '${tabLabel(t)} · $agent';
+                            return agent == null ? t.displayName : '${t.displayName} · $agent';
                           }(),
                           selected: t.id == pane.tabId,
                           onTap: () => go(() => client.selectTab(t.id)),

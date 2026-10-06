@@ -1,22 +1,21 @@
-/// Newest first. Shown once after an update; add an entry when bumping the version
-/// in pubspec.yaml and android/app/build.gradle.
+/// Newest first. Shown once after an update; add an entry when bumping the version in pubspec.yaml.
 const changelog = <(String, List<String>)>[
   (
     '1.4.0',
     [
-      'Agents: the circle left of the message box shows how many agents are running; tap it for the list, the ones waiting for you first, and tap one to jump to it. Its badge shows the most urgent status elsewhere, with a count when agents are blocked.',
-      'Tabs: the dots above the key bar show where you are among the workspace\'s tabs, coloured by their agents. Swipe up on the message bar (or tap the dots) to switch, create, rename or close tabs, or pick a split pane.',
-      'Swipe the message bar left or right to slide to the next or previous tab; swiping past the last tab opens a new one.',
-      'Tap the title (or ☰) for workspaces. Long-press a workspace for its actions.',
+      'Agents: the circle right of the message box shows how many agents are running; tap it for the list, the ones waiting for you first, and tap one to jump to it. Its badge shows the most urgent status elsewhere, with a count when agents are blocked.',
+      'Tabs: the dots under the top bar show where you are among the workspace\'s tabs, coloured by their agents. Tap them, swipe down on the top bar or up on the message bar to switch, create, rename or close tabs, or pick a split pane.',
+      'Swipe the top bar left or right to slide to the next or previous tab; swiping past the last tab opens a new one. Swipe the message bar to go from agent to agent, across workspaces.',
+      'Tap the title for workspaces. Long-press a workspace for its actions.',
       'Material 3 look throughout.',
       'Agent status colours match herdr: yellow working, red waiting for you, green finished, grey idle.',
       'While scrolled back through history, a ↓ button at the bottom (or typing anything) jumps back to live.',
-      '› in the message box offers quick replies and your earlier messages.',
+      'The history button in the message box offers quick replies and your earlier messages.',
       'Several machines can be connected at once. Tap the machine chip in the top bar for a panel with each machine\'s status; connect or disconnect each one on its own, and tap one to show it.',
       'Alerts come from every connected machine. Disconnected machines stay off, even after a restart, to save battery.',
       "Edit a saved machine's name or address in Settings (tap it). Add one with a single address field (host or host:port).",
       'Opening a pane on the phone marks it seen in herdr, so a finished agent goes from done to idle, and the desktop follows to that pane.',
-      'Needs the updated herdr-bridge for renaming tabs and marking panes seen.',
+      'Needs the updated herdr-bridge for renaming tabs and marking panes seen. Its start script now listens on the computer\'s Tailscale IP only.',
     ]
   ),
   (

@@ -1,8 +1,4 @@
 class SessionSnapshot {
-  final String version;
-  final int protocol;
-  final String? focusedWorkspaceId;
-  final String? focusedTabId;
   final String? focusedPaneId;
   final List<WorkspaceModel> workspaces;
   final List<TabModel> tabs;
@@ -10,10 +6,6 @@ class SessionSnapshot {
   final List<AgentModel> agents;
 
   SessionSnapshot({
-    required this.version,
-    required this.protocol,
-    this.focusedWorkspaceId,
-    this.focusedTabId,
     this.focusedPaneId,
     required this.workspaces,
     required this.tabs,
@@ -24,10 +16,6 @@ class SessionSnapshot {
   factory SessionSnapshot.fromJson(Map<String, dynamic> json) {
     var rawSnap = json['snapshot'] ?? json;
     return SessionSnapshot(
-      version: rawSnap['version']?.toString() ?? '',
-      protocol: rawSnap['protocol'] ?? 0,
-      focusedWorkspaceId: rawSnap['focused_workspace_id'],
-      focusedTabId: rawSnap['focused_tab_id'],
       focusedPaneId: rawSnap['focused_pane_id'],
       workspaces: (rawSnap['workspaces'] as List<dynamic>? ?? [])
           .map((e) => WorkspaceModel.fromJson(e as Map<String, dynamic>))
@@ -46,9 +34,6 @@ class WorkspaceModel {
   final String id;
   final int number;
   final String label;
-  final bool focused;
-  final int paneCount;
-  final int tabCount;
   final String? activeTabId;
   final String agentStatus;
 
@@ -63,9 +48,6 @@ class WorkspaceModel {
     required this.id,
     required this.number,
     required this.label,
-    required this.focused,
-    required this.paneCount,
-    required this.tabCount,
     this.activeTabId,
     required this.agentStatus,
     this.repoKey,
@@ -82,15 +64,12 @@ class WorkspaceModel {
   }
 
   factory WorkspaceModel.fromJson(Map<String, dynamic> json) {
-    // Outside a git repo the bridge sends an empty branch.
+    // The bridge leaves the branch out outside a git repo or on a detached HEAD; an empty one counts as none too.
     final branch = (json['git_branch'] as String?)?.trim();
     return WorkspaceModel(
       id: json['workspace_id'] ?? '',
       number: json['number'] ?? 0,
       label: json['label'] ?? '',
-      focused: json['focused'] ?? false,
-      paneCount: json['pane_count'] ?? 0,
-      tabCount: json['tab_count'] ?? 0,
       activeTabId: json['active_tab_id'],
       agentStatus: json['agent_status'] ?? 'unknown',
       repoKey: json['worktree']?['repo_key'],
@@ -105,8 +84,6 @@ class TabModel {
   final String workspaceId;
   final int number;
   final String label;
-  final bool focused;
-  final int paneCount;
   final String agentStatus;
 
   TabModel({
@@ -114,10 +91,10 @@ class TabModel {
     required this.workspaceId,
     required this.number,
     required this.label,
-    required this.focused,
-    required this.paneCount,
     required this.agentStatus,
   });
+
+  String get displayName => label.isNotEmpty ? label : 'Tab $number';
 
   factory TabModel.fromJson(Map<String, dynamic> json) {
     return TabModel(
@@ -125,8 +102,6 @@ class TabModel {
       workspaceId: json['workspace_id'] ?? '',
       number: json['number'] ?? 0,
       label: json['label'] ?? '',
-      focused: json['focused'] ?? false,
-      paneCount: json['pane_count'] ?? 0,
       agentStatus: json['agent_status'] ?? 'unknown',
     );
   }
@@ -137,7 +112,6 @@ class PaneModel {
   final String workspaceId;
   final String tabId;
   final bool focused;
-  final String cwd;
   final String terminalTitle;
   final String agentStatus;
 
@@ -146,7 +120,6 @@ class PaneModel {
     required this.workspaceId,
     required this.tabId,
     required this.focused,
-    required this.cwd,
     required this.terminalTitle,
     required this.agentStatus,
   });
@@ -157,7 +130,6 @@ class PaneModel {
       workspaceId: json['workspace_id'] ?? '',
       tabId: json['tab_id'] ?? '',
       focused: json['focused'] ?? false,
-      cwd: json['cwd'] ?? '',
       terminalTitle: json['terminal_title_stripped'] ?? json['terminal_title'] ?? '',
       agentStatus: json['agent_status'] ?? 'unknown',
     );

@@ -5,12 +5,15 @@ import 'package:web_socket_channel/web_socket_channel.dart';
 import 'package:xterm/xterm.dart';
 
 /// Streams one herdr pane, sized to this terminal, through the bridge.
-/// Binary frames carry terminal bytes both ways; text frames carry resize control.
+/// Binary frames carry terminal bytes both ways; text frames carry resizes and scrolls.
 class PtyChannel {
   final String host;
   final int port;
   final String paneId;
   final Terminal terminal;
+
+  /// Called with each attach's first frame, when herdr shows the pane live.
+  final VoidCallback? onAttach;
 
   WebSocketChannel? _channel;
   StreamSubscription? _sub;
@@ -22,14 +25,16 @@ class PtyChannel {
     required this.port,
     required this.paneId,
     required this.terminal,
+    this.onAttach,
   });
 
   void connect() {
     if (_disposed) return;
     // Herdr sends rendered frames of its own viewport (absolute cursor moves, no newlines), so the
     // pane's history lives in herdr, not here. Keep xterm on the alt screen, which has no scrollback,
-    // and start each attach from a blank screen; herdr repaints the whole pane on attach.
-    terminal.write('\x1b[?1049h\x1b[0m\x1b[H\x1b[2J');
+    // and start each attach from a blank screen; herdr repaints the whole pane on attach. The clear goes
+    // in front of the first frame, not here, so the old screen stays up until then instead of going black.
+    var reset = '\x1b[?1049h\x1b[0m\x1b[H\x1b[2J';
     final uri = Uri.parse(
         'ws://$host:$port/ws/term/${Uri.encodeComponent(paneId)}?cols=${terminal.viewWidth}&rows=${terminal.viewHeight}');
     _channel = WebSocketChannel.connect(uri);
@@ -41,7 +46,11 @@ class PtyChannel {
         .cast<List<int>>()
         .transform(const Utf8Decoder(allowMalformed: true))
         .listen(
-      terminal.write,
+      (data) {
+        terminal.write(reset + data);
+        if (reset.isNotEmpty) onAttach?.call();
+        reset = '';
+      },
       onError: (err) {
         debugPrint('Terminal WS error: $err');
         _scheduleReconnect();

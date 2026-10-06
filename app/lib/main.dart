@@ -10,7 +10,7 @@ void main() async {
 
   final client = HerdrClientService();
   client.setFontSize(prefs.getDouble('terminal_font_size') ?? 14);
-  client.setKeyBar(prefs.getBool('show_key_bar') ?? true);
+  client.setKeyBar(prefs.getBool('show_keys') ?? false);
   client.setMachines(
     prefs.getStringList('herdr_machines') ?? [],
     prefs.getStringList('herdr_machine_names') ?? [],
@@ -33,14 +33,21 @@ class HerdrMobileApp extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final scheme = ColorScheme.fromSeed(seedColor: const Color(0xFF38BDF8), brightness: Brightness.dark);
     return MaterialApp(
       title: 'Herdr Mobile',
       debugShowCheckedModeBanner: false,
       // Material 3 throughout: colors come from the scheme's roles and text from its type scale. Only the
       // terminal uses the mono font.
       theme: ThemeData(
-        colorScheme: ColorScheme.fromSeed(seedColor: const Color(0xFF38BDF8), brightness: Brightness.dark),
+        colorScheme: scheme,
         bottomSheetTheme: const BottomSheetThemeData(showDragHandle: true),
+        // M3 drawer destinations: pills, the selected one in secondaryContainer.
+        listTileTheme: ListTileThemeData(
+          shape: const StadiumBorder(),
+          selectedColor: scheme.onSecondaryContainer,
+          selectedTileColor: scheme.secondaryContainer,
+        ),
       ),
       home: TerminalScreen(client: client),
     );

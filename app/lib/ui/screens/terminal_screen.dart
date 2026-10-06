@@ -11,12 +11,11 @@ import '../../services/pty_channel.dart';
 import '../widgets/agent_sheet.dart';
 import '../widgets/workspace_drawer.dart';
 import '../widgets/keyboard_accessory_bar.dart';
-import '../widgets/machine_drawer.dart';
 import '../widgets/tab_sheet.dart';
 import 'settings_screen.dart';
 
 /// Offered below the message history; picking one fills the message box.
-const _quickReplies = ['yes', 'no', 'continue', '/clear'];
+const _quickReplies = ['yes', 'no', 'continue', '/clear', '/exit'];
 
 class TerminalScreen extends StatefulWidget {
   final HerdrClientService client;
@@ -29,8 +28,9 @@ class TerminalScreen extends StatefulWidget {
 
 class _TerminalScreenState extends State<TerminalScreen> with SingleTickerProviderStateMixin {
   final _scaffoldKey = GlobalKey<ScaffoldState>();
-  final _terminal = Terminal(maxLines: 10000);
+  final _terminal = Terminal();
   final _controller = TerminalController();
+  final _view = GlobalKey<TerminalViewState>();
   final _message = TextEditingController();
   PtyChannel? _ptyChannel;
   late final AppLifecycleListener _lifecycle;
@@ -49,11 +49,15 @@ class _TerminalScreenState extends State<TerminalScreen> with SingleTickerProvid
   double _scrollRest = 0; // scrolled pixels not yet a whole line
   bool _pinched = false; // the rest of a gesture that pinched never scrolls
 
-  // Swiping the bottom bar between tabs: the terminal's horizontal offset, in screen widths.
+  // Swiping the bottom bar between agents: the terminal's horizontal offset, in screen widths.
   late final _slide = AnimationController.unbounded(vsync: this);
   Offset? _swipeFrom;
   Duration _swipeTime = Duration.zero;
   bool _swiping = false;
+
+  // The current tab in the top bar's strip, scrolled into view when it changes.
+  final _currentTab = GlobalKey();
+  String? _shownTabId;
 
   @override
   void initState() {
@@ -62,7 +66,7 @@ class _TerminalScreenState extends State<TerminalScreen> with SingleTickerProvid
     _terminal.onResize = (cols, rows, _, __) => _ptyChannel?.sendResize(cols, rows);
 
     widget.client.onError = _showError;
-    _controller.addListener(() => setState(() {})); // shows the copy button while text is selected
+    _controller.addListener(() => setState(() {})); // shows the Copy button while text is selected
     widget.client.addListener(_onClientUpdate);
     HardwareKeyboard.instance.addHandler(_onHardwareKey);
     // The app now keeps running in the background (for alerts), so the pane is attached only while shown.
@@ -94,11 +98,11 @@ class _TerminalScreenState extends State<TerminalScreen> with SingleTickerProvid
                   'It listens on port 7788 on the computer\'s Tailscale IP.\n'
                   '2. Make sure this phone is on the same Tailscale network.\n'
                   '3. Add each computer here as a machine, using its Tailscale IP or MagicDNS name.\n\n'
-                  'Tap the title (or ☰) to pick a workspace or agent. The tabs button next to the message box '
-                  'lists, opens and creates tabs; swipe the message bar to go to the next or previous tab. Switch '
-                  'machines from the menu at the top right. Type messages in the box at the bottom, with '
-                  'autocorrect and voice; the history button brings back earlier ones. Pinch or use the volume '
-                  'keys to change the font size.',
+                  'Tap the title to pick a workspace. Swipe the top bar sideways to change tabs, or down for all '
+                  'of them; swipe the message bar sideways to go from agent to agent. The circle right of the '
+                  'message box lists every agent. Switch machines from the chip at the top right. Type messages '
+                  'in the box at the bottom, with autocorrect and voice; the history button brings back earlier '
+                  'ones. Pinch or use the volume keys to change the font size.',
                 )
               : Column(
                   mainAxisSize: MainAxisSize.min,
@@ -173,8 +177,17 @@ class _TerminalScreenState extends State<TerminalScreen> with SingleTickerProvid
       return;
     }
     _toLive();
-    if (text.isNotEmpty) _ptyChannel?.sendInput(_terminal.bracketedPasteMode ? '\x1b[200~$text\x1b[201~' : text);
-    _ptyChannel?.sendInput('\r');
+    final channel = _ptyChannel;
+    if (text.isEmpty) {
+      channel?.sendInput('\r');
+    } else {
+      channel?.sendInput(_terminal.bracketedPasteMode ? '\x1b[200~$text\x1b[201~' : text);
+      // An Enter in the same read as the paste is taken as part of it (Claude Code), so send it apart.
+      // Dropped if the pane was switched meanwhile: its channel is closed.
+      Future.delayed(const Duration(milliseconds: 150), () {
+        if (_ptyChannel == channel) channel?.sendInput('\r');
+      });
+    }
     _message.clear();
     if (text.trim().isEmpty) return;
     _history = [text, ..._history.where((h) => h != text)].take(30).toList();
@@ -223,10 +236,15 @@ class _TerminalScreenState extends State<TerminalScreen> with SingleTickerProvid
     );
   }
 
-  /// Back to the bottom of the pane's history.
+  /// Back to the bottom of the pane's history. Herdr's own scrollback takes a scroll's line count but
+  /// stays pinned while new output arrives, so the way back may be longer than [_scrolledUp]; an app on
+  /// the alternate screen (Claude Code) gets each scroll as one wheel tick whatever its count. So send
+  /// a scroll per line counted, each long enough to reach the bottom (herdr caps it at a u16).
   void _toLive() {
     if (_scrolledUp == 0) return;
-    _ptyChannel?.sendScroll(-_scrolledUp);
+    for (var i = 0; i < _scrolledUp; i++) {
+      _ptyChannel?.sendScroll(-65535);
+    }
     setState(() => _scrolledUp = 0);
   }
 
@@ -257,7 +275,7 @@ class _TerminalScreenState extends State<TerminalScreen> with SingleTickerProvid
     final ms = (e.timeStamp - _swipeTime).inMilliseconds.clamp(1, 1 << 30);
     final flung = d.dx.abs() > 40 && d.dx.abs() / ms > 0.5;
     if (e is PointerUpEvent && (flung || d.dx.abs() > width / 3)) {
-      _swipeTab(d.dx < 0 ? 1 : -1);
+      _swipe(d.dx < 0 ? 1 : -1);
     } else {
       _slide.animateTo(0, duration: const Duration(milliseconds: 150), curve: Curves.easeOut);
     }
@@ -266,30 +284,58 @@ class _TerminalScreenState extends State<TerminalScreen> with SingleTickerProvid
   /// The workspace's tabs, and the current one's index in them.
   (List<TabModel>, int)? _tabs() {
     final snapshot = widget.client.snapshot;
-    final pane = snapshot?.panes.where((p) => p.id == widget.client.selectedPaneId).firstOrNull;
+    final pane = widget.client.selectedPane;
     if (pane == null) return null;
     final tabs = snapshot!.tabs.where((t) => t.workspaceId == pane.workspaceId).toList();
     return (tabs, tabs.indexWhere((t) => t.id == pane.tabId));
   }
 
-  /// Slides the terminal out, switches [step] tabs (past the last one opens a new tab), and slides the
-  /// new one in from the other side. Before the first tab it just springs back.
-  Future<void> _swipeTab(int step) async {
-    const duration = Duration(milliseconds: 160);
+  /// Where a sideways swipe goes: every agent in herdr's order (workspace, tab, pane), as labels and
+  /// how to show each, with the current one's index. The pane on screen is among them even when it runs
+  /// no agent, so a plain shell still has neighbours.
+  (List<(String, VoidCallback)>, int)? _stops() {
     final client = widget.client;
-    final (tabs, i) = _tabs() ?? (<TabModel>[], -1);
-    final next = i + step;
-    if (i < 0 || next < 0) {
+    final snapshot = client.snapshot;
+    final current = client.selectedPane;
+    if (current == null) return null;
+    final ws = [for (final w in snapshot!.workspaces) w.id];
+    final tabs = [for (final t in snapshot.tabs) t.id];
+    final names = {for (final a in snapshot.agents) a.paneId: a.name};
+    final wsName = {for (final w in snapshot.workspaces) w.id: w.displayName};
+    final order = snapshot.panes.indexOf;
+    final panes = snapshot.panes.where((p) => names.containsKey(p.id) || p == current).toList()
+      ..sort((a, b) => [
+            ws.indexOf(a.workspaceId).compareTo(ws.indexOf(b.workspaceId)),
+            tabs.indexOf(a.tabId).compareTo(tabs.indexOf(b.tabId)),
+            order(a).compareTo(order(b)),
+          ].firstWhere((c) => c != 0, orElse: () => 0));
+    return (
+      [
+        for (final p in panes)
+          (
+            [if (p.workspaceId != current.workspaceId) wsName[p.workspaceId], names[p.id] ?? 'shell']
+                .whereType<String>()
+                .join(' · '),
+            () => client.selectPane(p.id),
+          ),
+      ],
+      panes.indexOf(current),
+    );
+  }
+
+  /// Slides the terminal out, moves [step] agents (wrapping around past either end), and slides the new
+  /// one in from the other side. With nowhere else to go it just springs back.
+  Future<void> _swipe(int step) async {
+    const duration = Duration(milliseconds: 160);
+    final (stops, i) = _stops() ?? (<(String, VoidCallback)>[], -1);
+    if (i < 0 || stops.length < 2) {
       await _slide.animateTo(0, duration: duration, curve: Curves.easeOut);
       return;
     }
+    final next = (i + step) % stops.length;
     HapticFeedback.selectionClick();
     await _slide.animateTo(-step.toDouble(), duration: duration, curve: Curves.easeIn);
-    if (next < tabs.length) {
-      client.selectTab(tabs[next].id);
-    } else {
-      await client.createTab(tabs[i].workspaceId);
-    }
+    stops[next].$2();
     _slide.value = step.toDouble();
     await _slide.animateTo(0, duration: duration * 1.5, curve: Curves.easeOutCubic);
   }
@@ -297,6 +343,16 @@ class _TerminalScreenState extends State<TerminalScreen> with SingleTickerProvid
   void _copySelection() {
     Clipboard.setData(ClipboardData(text: _terminal.buffer.getText(_controller.selection)));
     _controller.clearSelection();
+    ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Copied')));
+  }
+
+  /// Where the Copy button sits: just above the selection, or below it when that's off the top.
+  double? _copyTop() {
+    final selection = _controller.selection?.normalized;
+    final render = _view.currentState?.renderTerminal;
+    if (selection == null || render == null || !render.hasSize) return null;
+    final above = render.getOffset(selection.begin).dy - 48;
+    return above >= 0 ? above : render.getOffset(selection.end).dy + render.lineHeight + 8;
   }
 
   void _trackPointer(PointerEvent e) {
@@ -356,8 +412,8 @@ class _TerminalScreenState extends State<TerminalScreen> with SingleTickerProvid
     _ptyChannel?.sendScroll(lines);
     _scrollRest -= lines * lineHeight;
     // Herdr stops at the bottom, so the count does too; it may overshoot the top, which only means the
-    // way back to live scrolls further than needed.
-    setState(() => _scrolledUp = (_scrolledUp + lines).clamp(0, 1 << 30));
+    // way back to live scrolls further than needed. Capped, since the way back sends a scroll per line.
+    setState(() => _scrolledUp = (_scrolledUp + lines).clamp(0, 1000));
   }
 
   void _onClientUpdate() {
@@ -382,12 +438,15 @@ class _TerminalScreenState extends State<TerminalScreen> with SingleTickerProvid
     }
     if (pty != null && pty.paneId == paneId && pty.host == client.host && pty.port == client.port) return;
     pty?.dispose();
-    _scrolledUp = 0; // herdr shows a freshly attached pane live
     _ptyChannel = PtyChannel(
       host: client.host,
       port: client.port,
       paneId: paneId,
       terminal: _terminal,
+      // Herdr shows a freshly attached pane live, also after the channel reconnects on its own.
+      onAttach: () {
+        if (_scrolledUp > 0) setState(() => _scrolledUp = 0);
+      },
     )..connect();
   }
 
@@ -409,88 +468,72 @@ class _TerminalScreenState extends State<TerminalScreen> with SingleTickerProvid
     final client = widget.client;
     final scheme = Theme.of(context).colorScheme;
     final snapshot = client.snapshot;
-    final pane = snapshot?.panes.where((p) => p.id == client.selectedPaneId).firstOrNull;
-    final agent = snapshot?.agents.where((a) => a.paneId == client.selectedPaneId).firstOrNull;
-    final status = AgentStatusExtension.fromString(agent?.status ?? pane?.agentStatus);
+    final pane = client.selectedPane;
     final workspace = snapshot?.workspaces.where((w) => w.id == pane?.workspaceId).firstOrNull;
     final connecting = client.machines.isNotEmpty && !client.connected && !client.isDisconnected;
+    if (pane?.tabId != _shownTabId) {
+      _shownTabId = pane?.tabId;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        final tab = _currentTab.currentContext;
+        if (tab != null) Scrollable.ensureVisible(tab, alignment: 0.5, duration: const Duration(milliseconds: 200));
+      });
+    }
 
     return Scaffold(
       key: _scaffoldKey,
       drawer: WorkspaceDrawer(client: client),
-      endDrawer: MachineDrawer(client: client),
       appBar: AppBar(
         automaticallyImplyLeading: false,
-        titleSpacing: 12,
-        title: InkWell(
-          borderRadius: BorderRadius.circular(8),
-          onTap: () => _scaffoldKey.currentState?.openDrawer(),
-          child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 6),
-            child: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                if (pane != null)
-                  Tooltip(
-                    message: agent == null ? status.label : '${agent.name}: ${status.label}',
-                    child: Padding(
-                      padding: const EdgeInsets.only(right: 10),
-                      child: StatusDot(agent?.status ?? pane.agentStatus, size: 10),
-                    ),
-                  ),
-                // Like the drawer: the workspace, with its git branch underneath.
-                Flexible(
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    crossAxisAlignment: CrossAxisAlignment.start,
+        titleSpacing: 0,
+        title: Row(
+          children: [
+            // The workspace; tap for all workspaces and machines. Up to half the bar, the tabs get the rest.
+            ConstrainedBox(
+              constraints: BoxConstraints(maxWidth: MediaQuery.sizeOf(context).width / 2),
+              child: TextButton.icon(
+                onPressed: () => _scaffoldKey.currentState?.openDrawer(),
+                icon: const Icon(Icons.menu),
+                label: Text(workspace?.displayName ?? 'Herdr', overflow: TextOverflow.ellipsis),
+              ),
+            ),
+            // The workspace's tabs, like a browser's, in their agents' colors. Long-press for the tab sheet.
+            if (_tabs() case (final tabs, final i) when i >= 0)
+              Expanded(
+                child: SingleChildScrollView(
+                  scrollDirection: Axis.horizontal,
+                  padding: const EdgeInsets.symmetric(horizontal: 4),
+                  child: Row(
                     children: [
-                      Text(
-                        workspace?.displayName ?? 'Herdr Mobile',
-                        style: Theme.of(context).textTheme.titleMedium,
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                      if (workspace?.gitBranch != null)
-                        Text(
-                          workspace!.gitBranch!,
-                          style: Theme.of(context).textTheme.bodySmall?.copyWith(color: scheme.onSurfaceVariant),
-                          overflow: TextOverflow.ellipsis,
+                      for (final (j, t) in tabs.indexed)
+                        Padding(
+                          key: j == i ? _currentTab : null,
+                          padding: const EdgeInsets.symmetric(horizontal: 2),
+                          child: GestureDetector(
+                            onLongPress: () => showTabSheet(context, client),
+                            child: ChoiceChip(
+                              selected: j == i,
+                              showCheckmark: false,
+                              visualDensity: VisualDensity.compact,
+                              avatar: StatusDot(t.agentStatus),
+                              label: ConstrainedBox(
+                                constraints: const BoxConstraints(maxWidth: 120),
+                                child: Text(t.displayName, overflow: TextOverflow.ellipsis),
+                              ),
+                              onSelected: (_) => client.selectTab(t.id),
+                            ),
+                          ),
                         ),
+                      IconButton(
+                        tooltip: 'New tab',
+                        icon: const Icon(Icons.add),
+                        onPressed: () => client.createTab(tabs[i].workspaceId),
+                      ),
                     ],
                   ),
                 ),
-              ],
-            ),
-          ),
+              ),
+          ],
         ),
-        actions: [
-          // The machine on screen; tap for all machines and their connections.
-          Padding(
-            padding: const EdgeInsets.only(right: 8),
-            child: ActionChip(
-              tooltip: 'Machines',
-              visualDensity: VisualDensity.compact,
-              side: BorderSide.none,
-              backgroundColor: scheme.secondaryContainer,
-              labelStyle: TextStyle(color: scheme.onSecondaryContainer),
-              avatar: Center(
-                child: Container(
-                  width: 8,
-                  height: 8,
-                  decoration:
-                      BoxDecoration(shape: BoxShape.circle, color: machineColor(context, client, client.machine)),
-                ),
-              ),
-              label: ConstrainedBox(
-                constraints: const BoxConstraints(maxWidth: 110),
-                child: Text(
-                  client.machines.isEmpty ? 'No machine' : client.nameOf(client.machine),
-                  overflow: TextOverflow.ellipsis,
-                ),
-              ),
-              onPressed: () => _scaffoldKey.currentState?.openEndDrawer(),
-            ),
-          ),
-        ],
         bottom: connecting
             ? const PreferredSize(preferredSize: Size.fromHeight(4), child: LinearProgressIndicator())
             : null,
@@ -498,12 +541,6 @@ class _TerminalScreenState extends State<TerminalScreen> with SingleTickerProvid
       body: SafeArea(
         child: Column(
           children: [
-            if (client.machines.isNotEmpty && client.isDisconnected)
-              MaterialBanner(
-                leading: const Icon(Icons.link_off),
-                content: Text('Disconnected from ${client.nameOf(client.machine)}'),
-                actions: [TextButton(onPressed: client.connect, child: const Text('Connect'))],
-              ),
             Expanded(
               child: client.machines.isEmpty
                   ? Center(
@@ -513,175 +550,169 @@ class _TerminalScreenState extends State<TerminalScreen> with SingleTickerProvid
                         label: const Text('Add a machine to get started'),
                       ),
                     )
-                  : Stack(
-                      children: [
-                        // Revealed beside the terminal while it slides: where the swipe leads.
-                        if (_tabs() case (final tabs, final i) when i >= 0)
-                          Positioned.fill(
-                            child: Padding(
-                              padding: const EdgeInsets.symmetric(horizontal: 24),
-                              child: Row(
-                                children: [
-                                  if (i > 0) ...[
-                                    const Icon(Icons.chevron_left),
-                                    Text(tabLabel(tabs[i - 1]), style: Theme.of(context).textTheme.labelLarge),
-                                  ],
-                                  const Spacer(),
-                                  if (i + 1 < tabs.length)
-                                    Text(tabLabel(tabs[i + 1]), style: Theme.of(context).textTheme.labelLarge)
-                                  else ...[
-                                    const Icon(Icons.add),
-                                    Text(' New tab', style: Theme.of(context).textTheme.labelLarge),
-                                  ],
-                                  if (i + 1 < tabs.length) const Icon(Icons.chevron_right),
-                                ],
-                              ),
-                            ),
+                  // Switched off in the machine drawer: no terminal, just the way back.
+                  : client.isDisconnected
+                      ? Center(
+                          child: Column(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Icon(Icons.link_off, size: 48, color: scheme.onSurfaceVariant),
+                              const SizedBox(height: 12),
+                              Text('Disconnected from ${client.nameOf(client.machine)}'),
+                              const SizedBox(height: 16),
+                              FilledButton(onPressed: client.connect, child: const Text('Connect')),
+                            ],
                           ),
-                        Positioned.fill(
-                          child: AnimatedBuilder(
-                            animation: _slide,
-                            builder: (_, child) =>
-                                FractionalTranslation(translation: Offset(_slide.value, 0), child: child),
-                            child: Listener(
-                              onPointerDown: _trackPointer,
-                              onPointerMove: _trackPointer,
-                              onPointerUp: _trackPointer,
-                              onPointerCancel: _trackPointer,
-                              onPointerSignal: _scrollSignal,
-                              onPointerPanZoomUpdate: _scrollSignal,
-                              child: TerminalView(
-                                _terminal,
-                                controller: _controller,
-                                backgroundOpacity: 1.0,
-                                textStyle: TerminalStyle(
-                                  fontSize: client.fontSize,
-                                  fontFamily: 'MesloLGS Nerd Font Mono',
-                                  height: 1.1,
-                                ),
-                                autofocus: true,
-                                simulateScroll: false,
-                              ),
-                            ),
-                          ),
-                        ),
-                        if (_scrolledUp > 0)
-                          // Back to live: a small round arrow, centred at the bottom.
-                          Positioned(
-                            bottom: 12,
-                            left: 0,
-                            right: 0,
-                            child: Center(
-                              child: FloatingActionButton.small(
-                                tooltip: 'Back to live',
-                                backgroundColor: scheme.primary,
-                                foregroundColor: scheme.onPrimary,
-                                shape: const CircleBorder(),
-                                onPressed: _toLive,
-                                child: const Icon(Icons.arrow_downward),
-                              ),
-                            ),
-                          ),
-                      ],
-                    ),
-            ),
-            // The workspace's tabs as page dots in their agents' colors, the current one long. Tap (or
-            // swipe up on the message bar) for the tab sheet.
-            if (_tabs() case (final tabs, final i) when i >= 0)
-              GestureDetector(
-                behavior: HitTestBehavior.opaque,
-                onTap: () => showTabSheet(context, client),
-                child: SizedBox(
-                  height: 14,
-                  child: tabs.length > 8
-                      ? Center(child: Text('${i + 1}/${tabs.length}', style: Theme.of(context).textTheme.labelSmall))
-                      : Row(
-                          mainAxisAlignment: MainAxisAlignment.center,
+                        )
+                      : Stack(
                           children: [
-                            for (final (j, t) in tabs.indexed)
-                              AnimatedContainer(
-                                duration: const Duration(milliseconds: 200),
-                                margin: const EdgeInsets.symmetric(horizontal: 3),
-                                width: j == i ? 16 : 6,
-                                height: 6,
-                                decoration: BoxDecoration(
-                                  borderRadius: BorderRadius.circular(3),
-                                  color: AgentStatusExtension.fromString(t.agentStatus).color,
+                            // Revealed beside the terminal while it slides: where the swipe leads.
+                            if (_stops() case (final stops, final i) when i >= 0 && stops.length > 1)
+                              Positioned.fill(
+                                child: Padding(
+                                  padding: const EdgeInsets.symmetric(horizontal: 24),
+                                  child: Row(
+                                    children: [
+                                      const Icon(Icons.chevron_left),
+                                      Text(stops[(i - 1) % stops.length].$1,
+                                          style: Theme.of(context).textTheme.labelLarge),
+                                      const Spacer(),
+                                      Text(stops[(i + 1) % stops.length].$1,
+                                          style: Theme.of(context).textTheme.labelLarge),
+                                      const Icon(Icons.chevron_right),
+                                    ],
+                                  ),
+                                ),
+                              ),
+                            Positioned.fill(
+                              child: AnimatedBuilder(
+                                animation: _slide,
+                                builder: (_, child) =>
+                                    FractionalTranslation(translation: Offset(_slide.value, 0), child: child),
+                                child: Listener(
+                                  onPointerDown: _trackPointer,
+                                  onPointerMove: _trackPointer,
+                                  onPointerUp: _trackPointer,
+                                  onPointerCancel: _trackPointer,
+                                  onPointerSignal: _scrollSignal,
+                                  onPointerPanZoomUpdate: _scrollSignal,
+                                  child: TerminalView(
+                                    _terminal,
+                                    key: _view,
+                                    controller: _controller,
+                                    backgroundOpacity: 1.0,
+                                    textStyle: TerminalStyle(
+                                      fontSize: client.fontSize,
+                                      fontFamily: 'MesloLGS Nerd Font Mono',
+                                      height: 1.1,
+                                    ),
+                                    autofocus: true,
+                                    simulateScroll: false,
+                                  ),
+                                ),
+                              ),
+                            ),
+                            if (_copyTop() case final top?)
+                              // Copy floats by the selection, like Android's own text toolbar.
+                              Positioned(
+                                top: top,
+                                left: 0,
+                                right: 0,
+                                child: Center(
+                                  child: FilledButton.tonalIcon(
+                                    onPressed: _copySelection,
+                                    icon: const Icon(Icons.content_copy, size: 18),
+                                    label: const Text('Copy'),
+                                  ),
+                                ),
+                              ),
+                            if (_scrolledUp > 0)
+                              // Back to live: a small round arrow, centred at the bottom.
+                              Positioned(
+                                bottom: 12,
+                                left: 0,
+                                right: 0,
+                                child: Center(
+                                  child: FloatingActionButton.small(
+                                    tooltip: 'Back to live',
+                                    backgroundColor: scheme.primary,
+                                    foregroundColor: scheme.onPrimary,
+                                    shape: const CircleBorder(),
+                                    onPressed: _toLive,
+                                    child: const Icon(Icons.arrow_downward),
+                                  ),
                                 ),
                               ),
                           ],
                         ),
-                ),
-              ),
-            if (client.keyBar)
-              KeyboardAccessoryBar(
-                ctrl: _ctrl,
-                onCtrl: () => setState(() => _ctrl = !_ctrl),
-                onKey: _key,
-                onText: _send,
-              ),
-            // Swipe sideways here to change tabs (past the last one opens a new tab), up for all tabs.
-            Listener(
-              onPointerDown: _trackSwipe,
-              onPointerMove: _trackSwipe,
-              onPointerUp: _trackSwipe,
-              onPointerCancel: _trackSwipe,
-              child: Padding(
-                padding: const EdgeInsets.fromLTRB(0, 4, 8, 6),
-                child: Row(
-                  children: [
-                    AgentsButton(client: client),
-                    Expanded(
-                      child: TextField(
-                        controller: _message,
-                        minLines: 1,
-                        maxLines: 4,
-                        textCapitalization: TextCapitalization.sentences,
-                        textInputAction: TextInputAction.send,
-                        onEditingComplete: _sendMessage,
-                        // An M3 filled text field, pill-shaped like a search bar.
-                        decoration: InputDecoration(
-                          hintText: 'Message terminal…',
-                          filled: true,
-                          fillColor: scheme.surfaceContainerHigh,
-                          isDense: true,
-                          contentPadding: const EdgeInsets.symmetric(vertical: 10),
-                          border: OutlineInputBorder(
-                            borderRadius: BorderRadius.circular(24),
-                            borderSide: BorderSide.none,
-                          ),
-                          prefixIcon: IconButton(
-                            tooltip: 'Quick replies and history',
-                            icon: const Icon(Icons.history),
-                            onPressed: _showHistory,
-                          ),
-                          // Copy (when there's a selection) and Enter/Send sit inside the pill, styled like the history button.
-                          suffixIcon: Row(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              if (_controller.selection != null)
-                                IconButton(
-                                  tooltip: 'Copy selection',
-                                  icon: const Icon(Icons.content_copy),
-                                  onPressed: _copySelection,
-                                ),
-                              ValueListenableBuilder<TextEditingValue>(
-                                valueListenable: _message,
-                                builder: (context, val, _) => IconButton(
-                                  tooltip: val.text.isEmpty ? 'Enter' : 'Send',
-                                  icon: Icon(val.text.isEmpty ? Icons.keyboard_return : Icons.send),
-                                  onPressed: _sendMessage,
+            ),
+            // Swipe sideways here to move between agents in herdr's order, up for all tabs. The keyboard
+            // button swaps the message box for the control keys and back.
+            if (!client.isDisconnected)
+              Listener(
+                onPointerDown: _trackSwipe,
+                onPointerMove: _trackSwipe,
+                onPointerUp: _trackSwipe,
+                onPointerCancel: _trackSwipe,
+                child: Padding(
+                  padding: const EdgeInsets.fromLTRB(0, 4, 0, 6),
+                  child: Row(
+                    children: [
+                      IconButton(
+                        tooltip: client.keyBar ? 'Message box' : 'Control keys',
+                        isSelected: client.keyBar,
+                        icon: const Icon(Icons.keyboard_outlined),
+                        selectedIcon: const Icon(Icons.keyboard_hide_outlined),
+                        onPressed: () => client.setKeyBar(!client.keyBar),
+                      ),
+                      Expanded(
+                        child: client.keyBar
+                            ? KeyboardAccessoryBar(
+                                ctrl: _ctrl,
+                                onCtrl: () => setState(() => _ctrl = !_ctrl),
+                                onKey: _key,
+                                onText: _send,
+                              )
+                            : TextField(
+                                controller: _message,
+                                minLines: 1,
+                                maxLines: 4,
+                                textCapitalization: TextCapitalization.sentences,
+                                textInputAction: TextInputAction.send,
+                                onEditingComplete: _sendMessage,
+                                // An M3 filled text field, pill-shaped like a search bar.
+                                decoration: InputDecoration(
+                                  hintText: 'Message terminal…',
+                                  filled: true,
+                                  fillColor: scheme.surfaceContainerHigh,
+                                  isDense: true,
+                                  contentPadding: const EdgeInsets.symmetric(vertical: 10),
+                                  border: OutlineInputBorder(
+                                    borderRadius: BorderRadius.circular(24),
+                                    borderSide: BorderSide.none,
+                                  ),
+                                  prefixIcon: IconButton(
+                                    tooltip: 'Quick replies and history',
+                                    icon: const Icon(Icons.history),
+                                    onPressed: _showHistory,
+                                  ),
+                                  // Enter/Send sits inside the pill, styled like the history button.
+                                  suffixIcon: ValueListenableBuilder<TextEditingValue>(
+                                    valueListenable: _message,
+                                    builder: (context, val, _) => IconButton(
+                                      tooltip: val.text.isEmpty ? 'Enter' : 'Send',
+                                      icon: Icon(val.text.isEmpty ? Icons.keyboard_return : Icons.send),
+                                      onPressed: _sendMessage,
+                                    ),
+                                  ),
                                 ),
                               ),
-                            ],
-                          ),
-                        ),
                       ),
-                    ),
-                  ],
+                      AgentsButton(client: client),
+                    ],
+                  ),
                 ),
               ),
-            ),
           ],
         ),
       ),

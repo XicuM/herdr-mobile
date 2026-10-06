@@ -2,7 +2,6 @@ import 'package:flutter/material.dart';
 import '../../models/agent_status.dart';
 import '../../models/session.dart';
 import '../../services/herdr_client.dart';
-import 'workspace_drawer.dart';
 
 const _urgency = ['blocked', 'working', 'done', 'idle'];
 
@@ -14,12 +13,11 @@ void showAgentSheet(BuildContext context, HerdrClientService client) {
     builder: (sheetContext) => ListenableBuilder(
       listenable: client,
       builder: (_, __) {
-        final scheme = Theme.of(sheetContext).colorScheme;
         final snapshot = client.snapshot;
         final agents = snapshot?.agents ?? <AgentModel>[];
         final paneById = {for (final p in snapshot?.panes ?? <PaneModel>[]) p.id: p};
         final wsName = {for (final w in snapshot?.workspaces ?? <WorkspaceModel>[]) w.id: w.displayName};
-        final tabName = {for (final t in snapshot?.tabs ?? <TabModel>[]) t.id: tabLabel(t)};
+        final tabName = {for (final t in snapshot?.tabs ?? <TabModel>[]) t.id: t.displayName};
 
         return SafeArea(
           child: ConstrainedBox(
@@ -46,10 +44,7 @@ void showAgentSheet(BuildContext context, HerdrClientService client) {
                         Padding(
                           padding: const EdgeInsets.symmetric(horizontal: 12),
                           child: ListTile(
-                            shape: const StadiumBorder(),
                             selected: agent.paneId == client.selectedPaneId,
-                            selectedColor: scheme.onSecondaryContainer,
-                            selectedTileColor: scheme.secondaryContainer,
                             leading: StatusDot(agent.status),
                             minLeadingWidth: 8,
                             title: Text(agent.name, overflow: TextOverflow.ellipsis),
@@ -59,7 +54,7 @@ void showAgentSheet(BuildContext context, HerdrClientService client) {
                                   .join(' · '),
                               overflow: TextOverflow.ellipsis,
                             ),
-                            trailing: Text(AgentStatusExtension.fromString(agent.status).label),
+                            trailing: Text(AgentStatus.fromString(agent.status).label),
                             onTap: () {
                               client.selectPane(agent.paneId);
                               Navigator.pop(sheetContext);
@@ -97,8 +92,8 @@ class AgentsButton extends StatelessWidget {
       onPressed: () => showAgentSheet(context, client),
       icon: Badge(
         isLabelVisible: top != null,
-        backgroundColor: AgentStatusExtension.fromString(top).color,
-        textColor: Colors.black,
+        backgroundColor: AgentStatus.fromString(top).color,
+        textColor: Theme.of(context).colorScheme.surface,
         label: blocked > 0 ? Text('$blocked') : null,
         child: Container(
           width: 22,

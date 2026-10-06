@@ -3,12 +3,11 @@ import '../../models/agent_status.dart';
 import '../../models/session.dart';
 import '../../services/herdr_client.dart';
 import '../screens/settings_screen.dart';
-
-String tabLabel(TabModel t) => t.label.isNotEmpty ? t.label : 'Tab ${t.number}';
+import 'machine_drawer.dart';
 
 /// A Material 3 navigation drawer modelled on Herdr's sidebar: workspaces, with linked worktrees
 /// nested. Long-press a workspace for its actions; drag its handle to reorder it (with its worktrees).
-/// Tabs live in [showTabSheet], agents in [showAgentSheet].
+/// The machines sit at the foot. Tabs live in [showTabSheet], agents in [showAgentSheet].
 class WorkspaceDrawer extends StatelessWidget {
   final HerdrClientService client;
 
@@ -19,7 +18,7 @@ class WorkspaceDrawer extends StatelessWidget {
     final scheme = Theme.of(context).colorScheme;
     final text = Theme.of(context).textTheme;
     final snapshot = client.snapshot;
-    final selectedPane = snapshot?.panes.where((p) => p.id == client.selectedPaneId).firstOrNull;
+    final selectedPane = client.selectedPane;
 
     void go(VoidCallback select) {
       select();
@@ -31,7 +30,7 @@ class WorkspaceDrawer extends StatelessWidget {
           child: Text(title, style: text.titleSmall?.copyWith(color: scheme.onSurfaceVariant)),
         );
 
-    // M3 drawer destinations: full-height pills, the selected one in secondaryContainer.
+    // Styled as M3 drawer destinations by the theme's listTileTheme.
     Widget row({
       double indent = 0,
       required String status,
@@ -45,11 +44,8 @@ class WorkspaceDrawer extends StatelessWidget {
         Padding(
           padding: const EdgeInsets.symmetric(horizontal: 12),
           child: ListTile(
-            shape: const StadiumBorder(),
             contentPadding: EdgeInsets.only(left: 16 + indent, right: 16),
             selected: selected,
-            selectedColor: scheme.onSecondaryContainer,
-            selectedTileColor: scheme.secondaryContainer,
             leading: StatusDot(status),
             minLeadingWidth: 8,
             title: Text(title, overflow: TextOverflow.ellipsis),
@@ -87,7 +83,14 @@ class WorkspaceDrawer extends StatelessWidget {
                 children: [
                   header('Workspaces'),
                   if (snapshot == null)
-                    const Padding(padding: EdgeInsets.symmetric(horizontal: 28), child: Text('Connecting…')),
+                    Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 28),
+                      child: Text(client.machines.isEmpty
+                          ? 'No machine yet'
+                          : client.isDisconnected
+                              ? 'Disconnected'
+                              : 'Connecting…'),
+                    ),
                   ReorderableListView(
                     shrinkWrap: true,
                     physics: const NeverScrollableScrollPhysics(),
@@ -115,8 +118,7 @@ class WorkspaceDrawer extends StatelessWidget {
                                 onLongPress: () => _workspaceActions(context, ws),
                                 trailing: ws != block.first || blocks.length < 2
                                     ? null
-                                    : ReorderableDragStartListener(
-                                        index: i, child: const Icon(Icons.drag_handle)),
+                                    : ReorderableDragStartListener(index: i, child: const Icon(Icons.drag_handle)),
                               ),
                           ],
                         ),
@@ -125,6 +127,8 @@ class WorkspaceDrawer extends StatelessWidget {
                 ],
               ),
             ),
+            const Divider(height: 1),
+            MachineList(client: client),
             Padding(
               padding: const EdgeInsets.fromLTRB(16, 8, 8, 12),
               child: Row(

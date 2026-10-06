@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import '../../services/herdr_client.dart';
+import '../widgets/workspace_drawer.dart';
 
 class SettingsScreen extends StatefulWidget {
   final HerdrClientService client;
@@ -11,11 +12,13 @@ class SettingsScreen extends StatefulWidget {
 }
 
 class _SettingsScreenState extends State<SettingsScreen> {
-  /// Takes `host`, `host:port` or a pasted URL; the port defaults to the bridge's 7788.
+  /// Takes `host`, `host:port`, an IPv6 address (bare or `[addr]:port`) or a pasted URL; the port defaults
+  /// to the bridge's 7788. An IPv6 host keeps its brackets, which `host:port` URLs need.
   static (String, int) _parseAddress(String text) {
     final address = text.trim().replaceFirst(RegExp(r'^\w+://'), '').replaceAll('/', '');
+    if (':'.allMatches(address).length > 1 && !address.startsWith('[')) return ('[$address]', 7788);
     final i = address.lastIndexOf(':');
-    if (i < 0) return (address, 7788);
+    if (i <= address.lastIndexOf(']')) return (address, 7788);
     return (address.substring(0, i), int.tryParse(address.substring(i + 1)) ?? 7788);
   }
 
@@ -67,25 +70,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
     );
   }
 
-  void _confirmRemoveMachine(String m) {
-    showDialog(
-      context: context,
-      builder: (dialogContext) => AlertDialog(
-        title: const Text('Remove machine?'),
-        content: Text('"${widget.client.nameOf(m)}" ($m) will be forgotten.'),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(dialogContext), child: const Text('Cancel')),
-          TextButton(
-            style: TextButton.styleFrom(foregroundColor: Theme.of(dialogContext).colorScheme.error),
-            onPressed: () {
-              Navigator.pop(dialogContext);
-              setState(() => widget.client.removeMachine(m));
-            },
-            child: const Text('Remove'),
-          ),
-        ],
-      ),
-    );
+  Future<void> _confirmRemoveMachine(String m) async {
+    final ok = await WorkspaceDrawer.confirm(
+        context, 'Remove machine?', '"${widget.client.nameOf(m)}" ($m) will be forgotten.', 'Remove');
+    if (ok) setState(() => widget.client.removeMachine(m));
   }
 
   @override
@@ -141,12 +129,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
           ),
           const Divider(),
           section('Terminal'),
-          SwitchListTile(
-            title: const Text('Control keys bar'),
-            subtitle: const Text('Esc, ^C, Tab, Ctrl and the arrows, above the message box'),
-            value: client.keyBar,
-            onChanged: (v) => setState(() => client.setKeyBar(v)),
-          ),
           ListTile(
             title: const Text('Font size'),
             subtitle: const Text('Or pinch the terminal, or use the volume keys'),

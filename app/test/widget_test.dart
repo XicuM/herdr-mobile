@@ -1,4 +1,6 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:herdr_mobile/models/session.dart';
 import 'package:herdr_mobile/models/agent_status.dart';
@@ -7,6 +9,7 @@ import 'package:herdr_mobile/ui/widgets/workspace_drawer.dart';
 import 'package:herdr_mobile/changelog.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:herdr_mobile/ui/screens/terminal_screen.dart';
+import 'package:xterm/xterm.dart';
 
 void main() {
   group('Herdr Mobile Models Test', () {
@@ -62,7 +65,6 @@ void main() {
       };
 
       final snapshot = SessionSnapshot.fromJson(json);
-      expect(snapshot.version, equals('0.9.3'));
       expect(snapshot.workspaces.length, equals(1));
       expect(snapshot.panes.length, equals(1));
       expect(snapshot.panes.first.id, equals('w1:p1'));
@@ -71,11 +73,11 @@ void main() {
     });
 
     test('AgentStatus enum mapping works', () {
-      expect(AgentStatusExtension.fromString('blocked'), equals(AgentStatus.blocked));
-      expect(AgentStatusExtension.fromString('working'), equals(AgentStatus.working));
-      expect(AgentStatusExtension.fromString('done'), equals(AgentStatus.done));
-      expect(AgentStatusExtension.fromString('idle'), equals(AgentStatus.idle));
-      expect(AgentStatusExtension.fromString('random'), equals(AgentStatus.unknown));
+      expect(AgentStatus.fromString('blocked'), equals(AgentStatus.blocked));
+      expect(AgentStatus.fromString('working'), equals(AgentStatus.working));
+      expect(AgentStatus.fromString('done'), equals(AgentStatus.done));
+      expect(AgentStatus.fromString('idle'), equals(AgentStatus.idle));
+      expect(AgentStatus.fromString('random'), equals(AgentStatus.unknown));
     });
 
     testWidgets('WorkspaceDrawer long press shows workspace actions', (tester) async {
@@ -198,16 +200,32 @@ void main() {
     // frontend: one tab (p4, ui, blocked).
     SessionSnapshot twoWorkspaces({String focusedPane = 'w1:p1'}) {
       Map<String, dynamic> ws(String id, String label, int tabs, String active) => {
-            'workspace_id': id, 'number': 1, 'label': label, 'focused': false, 'pane_count': 1,
-            'tab_count': tabs, 'active_tab_id': active, 'agent_status': 'blocked', 'git_branch': '$label-branch',
+            'workspace_id': id,
+            'number': 1,
+            'label': label,
+            'focused': false,
+            'pane_count': 1,
+            'tab_count': tabs,
+            'active_tab_id': active,
+            'agent_status': 'blocked',
+            'git_branch': '$label-branch',
           };
       Map<String, dynamic> tab(String id, String ws, int n, String label) => {
-            'tab_id': id, 'workspace_id': ws, 'number': n, 'label': label, 'focused': false,
-            'pane_count': 1, 'agent_status': 'blocked',
+            'tab_id': id,
+            'workspace_id': ws,
+            'number': n,
+            'label': label,
+            'focused': false,
+            'pane_count': 1,
+            'agent_status': 'blocked',
           };
       // Like herdr: only one pane in the whole session is focused.
       Map<String, dynamic> pane(String id, String ws, String tab, String status) => {
-            'pane_id': id, 'workspace_id': ws, 'tab_id': tab, 'focused': id == focusedPane, 'cwd': '/',
+            'pane_id': id,
+            'workspace_id': ws,
+            'tab_id': tab,
+            'focused': id == focusedPane,
+            'cwd': '/',
             'agent_status': status,
           };
       return SessionSnapshot.fromJson({
@@ -235,7 +253,8 @@ void main() {
         home: Scaffold(
           drawer: WorkspaceDrawer(client: client),
           body: Builder(
-            builder: (context) => ElevatedButton(onPressed: () => Scaffold.of(context).openDrawer(), child: const Text('Open')),
+            builder: (context) =>
+                ElevatedButton(onPressed: () => Scaffold.of(context).openDrawer(), child: const Text('Open')),
           ),
         ),
       ));
@@ -262,7 +281,8 @@ void main() {
         ..setSnapshotForTesting(twoWorkspaces())
         ..selectPane('w1:p1');
       await tester.pumpWidget(MaterialApp(home: TerminalScreen(client: client)));
-      expect(find.descendant(of: find.byType(Badge), matching: find.text('1')), findsOneWidget); // ui; coder is on screen
+      expect(
+          find.descendant(of: find.byType(Badge), matching: find.text('1')), findsOneWidget); // ui; coder is on screen
       expect(find.descendant(of: find.byTooltip('Agents'), matching: find.text('3')), findsOneWidget); // all agents
 
       await tester.tap(find.byTooltip('Agents'));
@@ -279,7 +299,9 @@ void main() {
       expect(client.selectedPaneId, 'w2:p4');
     });
 
-    testWidgets('Swiping up on the message bar lists the workspace\'s tabs and split panes, with new, rename and close buttons', (tester) async {
+    testWidgets(
+        'Swiping up on the message bar lists the workspace\'s tabs and split panes, with new, rename and close buttons',
+        (tester) async {
       SharedPreferences.setMockInitialValues({'last_seen_changelog': changelog.first.$1});
       final client = HerdrClientService()
         ..setMachines(['100.1.2.3:7788'], [])
@@ -310,7 +332,7 @@ void main() {
       expect(client.selectedPaneId, 'w1:p3');
     });
 
-    testWidgets('Title opens the drawer', (tester) async {
+    testWidgets('The top bar shows the workspace and its tabs; tapping a tab shows it', (tester) async {
       SharedPreferences.setMockInitialValues({'last_seen_changelog': changelog.first.$1});
       final client = HerdrClientService()
         ..setMachines(['100.1.2.3:7788'], [])
@@ -318,11 +340,24 @@ void main() {
         ..selectPane('w1:p1');
       await tester.pumpWidget(MaterialApp(home: TerminalScreen(client: client)));
 
-      // The workspace, with its branch underneath; no tab or agent names.
+      // The workspace and its tabs, like a browser's; no agent names.
       Finder inBar(String t) => find.descendant(of: find.byType(AppBar), matching: find.text(t));
       expect(inBar('backend'), findsOneWidget);
-      expect(inBar('backend-branch'), findsOneWidget);
+      expect(inBar('api'), findsOneWidget);
+      expect(inBar('db'), findsOneWidget);
       expect(inBar('coder'), findsNothing);
+      expect(find.byType(TextField), findsOneWidget);
+
+      await tester.tap(inBar('db'));
+      expect(client.selectedPaneId, 'w1:p3');
+
+      // The keyboard button swaps the message box for the control keys, and back.
+      await tester.tap(find.byTooltip('Control keys'));
+      await tester.pump();
+      expect(find.byType(TextField), findsNothing);
+      expect(find.text('ESC'), findsOneWidget);
+      await tester.tap(find.byTooltip('Message box'));
+      await tester.pump();
       expect(find.byType(TextField), findsOneWidget);
 
       await tester.tap(inBar('backend'));
@@ -343,26 +378,49 @@ void main() {
       expect(WorkspaceModel.fromJson({'git_branch': 'main'}).gitBranch, 'main');
     });
 
-    testWidgets('Swiping the message bar slides to the neighbouring tab', (tester) async {
+    testWidgets('Swiping the message bar slides to the next agent in herdr\'s order', (tester) async {
       SharedPreferences.setMockInitialValues({'last_seen_changelog': changelog.first.$1});
       final client = HerdrClientService()
         ..setMachines(['100.1.2.3:7788'], [])
         ..setSnapshotForTesting(twoWorkspaces())
-        ..selectPane('w1:p3'); // tab "db", the second of backend's two
+        ..selectPane('w1:p3'); // tab "db", the second of backend's two, with no agent
       await tester.pumpWidget(MaterialApp(home: TerminalScreen(client: client)));
-      Future<void> swipe(double dx) async {
-        await tester.timedDrag(find.byType(TextField), Offset(dx, 0), const Duration(milliseconds: 200));
+      Future<void> swipe(Finder on, double dx) async {
+        await tester.timedDrag(on, Offset(dx, 0), const Duration(milliseconds: 200));
         for (var i = 0; i < 10; i++) {
           await tester.pump(const Duration(milliseconds: 50));
         }
       }
 
-      await swipe(300); // right: back to "api"
+      final bottom = find.byType(TextField);
+      // Agents go in herdr's order (coder, helper, ui), not the snapshot's; a shell is left behind.
+      await swipe(bottom, -300); // left: on to the next workspace's agent
+      expect(client.selectedPaneId, 'w2:p4');
+      await swipe(bottom, -300); // left again: past the last agent, round to the first
       expect(client.selectedPaneId, 'w1:p1');
-      await swipe(300); // right again: nothing before the first tab
-      expect(client.selectedPaneId, 'w1:p1');
-      await swipe(-300); // left: forward to "db"
-      expect(client.selectedPaneId, 'w1:p3');
+      await swipe(bottom, 300); // and back round
+      expect(client.selectedPaneId, 'w2:p4');
+      await swipe(bottom, 300);
+      expect(client.selectedPaneId, 'w1:p2');
+    });
+
+    testWidgets('A long-press selects, and the Copy button by the selection copies it', (tester) async {
+      SharedPreferences.setMockInitialValues({'last_seen_changelog': changelog.first.$1});
+      String? copied;
+      tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(SystemChannels.platform, (call) async {
+        if (call.method == 'Clipboard.setData') copied = (call.arguments as Map)['text'] as String;
+        return null;
+      });
+      final client = HerdrClientService()..setMachines(['100.1.2.3:7788'], []);
+      await tester.pumpWidget(MaterialApp(home: TerminalScreen(client: client)));
+      tester.widget<TerminalView>(find.byType(TerminalView)).terminal.write('\r\n\r\nhello world');
+      await tester.pump();
+      await tester.longPressAt(tester.getTopLeft(find.byType(TerminalView)) + const Offset(10, 40));
+      await tester.pump();
+      await tester.tap(find.text('Copy'));
+      await tester.pump();
+      expect(copied, 'hello');
+      expect(find.text('Copy'), findsNothing);
     });
 
     testWidgets('Tabs sheet names the agent of a tab whose panes herdr does not focus', (tester) async {
@@ -402,14 +460,14 @@ void main() {
       expect(client.isOff('10.0.0.1:7788'), isTrue); // switching doesn't touch the others
     });
 
-    testWidgets('The machine chip opens a panel to connect or disconnect each machine', (tester) async {
+    testWidgets('The workspace drawer lists the machines to connect or disconnect each', (tester) async {
       SharedPreferences.setMockInitialValues({'last_seen_changelog': changelog.first.$1});
       final client = HerdrClientService()
         ..setMachines(['10.0.0.1:7788', '10.0.0.2:7788'], ['10.0.0.1:7788=laptop'], ['10.0.0.2:7788'])
         ..configure(host: '10.0.0.1', port: 7788, connect: false);
       await tester.pumpWidget(MaterialApp(home: TerminalScreen(client: client)));
 
-      await tester.tap(find.widgetWithText(ActionChip, 'laptop'));
+      await tester.tap(find.byIcon(Icons.menu));
       await tester.pump();
       await tester.pump(const Duration(seconds: 1));
       expect(find.text('Machines'), findsOneWidget);
@@ -420,6 +478,42 @@ void main() {
       await tester.pump();
       expect(client.isOff('10.0.0.2:7788'), isFalse);
       expect(client.machine, '10.0.0.1:7788');
+    });
+
+    test('Removing the machine on screen shows the next one without connecting it', () {
+      SharedPreferences.setMockInitialValues({});
+      final client = HerdrClientService()
+        ..setMachines(['10.0.0.1:7788', '10.0.0.2:7788'], [], ['10.0.0.2:7788'])
+        ..configure(host: '10.0.0.1', port: 7788, connect: false);
+      client.removeMachine('10.0.0.1:7788');
+      expect(client.machine, '10.0.0.2:7788');
+      expect(client.isOff('10.0.0.2:7788'), isTrue);
+    });
+
+    testWidgets('A finished agent alerts once, even when an older snapshot lands in between', (tester) async {
+      SharedPreferences.setMockInitialValues({});
+      final alerts = <Object?>[];
+      tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(const MethodChannel('herdr/android'),
+          (call) async {
+        if (call.method == 'alert') alerts.add(call.arguments);
+        return null;
+      });
+      final client = HerdrClientService()
+        ..setMachines(['10.0.0.1:7788'], [])
+        ..setAlerts(true, ask: false);
+      SessionSnapshot snap(int seq) => SessionSnapshot.fromJson({
+            'panes': [
+              {'pane_id': 'w1:p1', 'workspace_id': 'w1', 'tab_id': 'w1:t1', 'agent_status': 'idle'},
+              {'pane_id': 'w1:p2', 'workspace_id': 'w1', 'tab_id': 'w1:t1', 'agent_status': 'idle'},
+            ],
+            'agents': [
+              {'name': 'coder', 'pane_id': 'w1:p2', 'status': 'idle', 'completion_seq': seq},
+            ],
+          });
+      for (final seq in [1, 2, 1, 2]) {
+        client.setSnapshotForTesting(snap(seq));
+      }
+      expect(alerts, hasLength(1));
     });
   });
 }

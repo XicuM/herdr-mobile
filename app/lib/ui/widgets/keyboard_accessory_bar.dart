@@ -31,7 +31,7 @@ class _KeyboardAccessoryBarState extends State<KeyboardAccessoryBar> {
     super.dispose();
   }
 
-  /// M3 tonal buttons, compacted to fit ten in a row. CTRL turns filled while armed; ^C uses the
+  /// M3 tonal buttons, compacted to fit nine in a row. CTRL turns filled while armed; ^C uses the
   /// error container. [repeat] keys fire again every 60 ms while held.
   Widget _key(String label, VoidCallback onTap, {bool repeat = false, bool active = false, bool danger = false}) {
     final scheme = Theme.of(context).colorScheme;
@@ -49,9 +49,11 @@ class _KeyboardAccessoryBarState extends State<KeyboardAccessoryBar> {
       onTap();
     }
 
+    // Shrunk to fit when the row is narrow, beside the message box's buttons.
+    final text = FittedBox(fit: BoxFit.scaleDown, child: Text(label));
     Widget key = active
-        ? FilledButton(style: style, onPressed: tap, child: Text(label))
-        : FilledButton.tonal(style: style, onPressed: tap, child: Text(label));
+        ? FilledButton(style: style, onPressed: tap, child: text)
+        : FilledButton.tonal(style: style, onPressed: tap, child: text);
 
     if (repeat) {
       key = GestureDetector(
@@ -72,7 +74,7 @@ class _KeyboardAccessoryBarState extends State<KeyboardAccessoryBar> {
   Widget build(BuildContext context) {
     final w = widget;
     return Padding(
-      padding: const EdgeInsets.fromLTRB(6, 6, 6, 2),
+      padding: const EdgeInsets.symmetric(vertical: 3),
       child: Row(
         children: [
           _key('ESC', () => w.onKey(TerminalKey.escape)),
@@ -80,7 +82,6 @@ class _KeyboardAccessoryBarState extends State<KeyboardAccessoryBar> {
           _key('TAB', () => w.onKey(TerminalKey.tab)),
           _key('⇧TAB', () => w.onKey(TerminalKey.tab, shift: true)),
           _key('CTRL', w.onCtrl, active: w.ctrl),
-          const SizedBox(width: 4),
           _key('←', () => w.onKey(TerminalKey.arrowLeft), repeat: true),
           _key('↓', () => w.onKey(TerminalKey.arrowDown), repeat: true),
           _key('↑', () => w.onKey(TerminalKey.arrowUp), repeat: true),

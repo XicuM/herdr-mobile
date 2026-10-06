@@ -15,6 +15,10 @@ class _Conn {
   bool connected = false;
   SessionSnapshot? snapshot;
   String? selectedPaneId;
+
+  /// The highest `completion_seq` seen per pane: a snapshot fetched over HTTP can land after a newer
+  /// pushed one, and going back and forth must not alert twice.
+  final completions = <String, int>{};
 }
 
 /// Every saved machine keeps its own connection, so several can be connected at once; each can be
@@ -30,7 +34,7 @@ class HerdrClientService extends ChangeNotifier {
   /// Machines the user disconnected; every other saved machine stays connected.
   Set<String> _off = {};
   bool _alerts = false;
-  bool _keyBar = true;
+  bool _keyBar = false;
   bool _started = false;
   bool _disposed = false;
   final _conns = <String, _Conn>{};
@@ -66,6 +70,7 @@ class HerdrClientService extends ChangeNotifier {
   bool get isDisconnected => isOff(machine);
   SessionSnapshot? get snapshot => _conns[machine]?.snapshot;
   String? get selectedPaneId => _conns[machine]?.selectedPaneId;
+  PaneModel? get selectedPane => snapshot?.panes.where((p) => p.id == selectedPaneId).firstOrNull;
   double get fontSize => _fontSize;
 
   bool isConnected(String m) => _conns[m]?.connected ?? false;
@@ -83,14 +88,14 @@ class HerdrClientService extends ChangeNotifier {
   /// The name given to [machine] when it was added, or its address.
   String nameOf(String machine) => _names[machine] ?? machine;
 
-  /// What [m]'s agents are doing, e.g. "1 needs you · 2 working".
+  /// What [m]'s agents are doing, e.g. "1 waiting · 2 working".
   String summaryOf(String m) {
     final counts = <String, int>{};
     for (final p in snapshotOf(m)?.panes ?? <PaneModel>[]) {
       counts[p.agentStatus] = (counts[p.agentStatus] ?? 0) + 1;
     }
     final text = [
-      for (final (status, label) in [('blocked', 'need you'), ('working', 'working'), ('done', 'done')])
+      for (final (status, label) in [('blocked', 'waiting'), ('working', 'working'), ('done', 'done')])
         if (counts[status] != null) '${counts[status]} $label',
     ].join(' · ');
     return text.isEmpty ? 'No agents running' : text;
@@ -108,12 +113,12 @@ class HerdrClientService extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// Whether the terminal shows the control keys bar above the message box.
+  /// Whether the bottom bar shows the control keys in place of the message box.
   bool get keyBar => _keyBar;
 
   void setKeyBar(bool on) {
     _keyBar = on;
-    SharedPreferences.getInstance().then((p) => p.setBool('show_key_bar', on));
+    SharedPreferences.getInstance().then((p) => p.setBool('show_keys', on));
     notifyListeners();
   }
 
@@ -253,7 +258,8 @@ class HerdrClientService extends ChangeNotifier {
     _names = {..._names}..remove(m);
     _off = {..._off}..remove(m);
     _saveMachines();
-    if (m == machine && _machines.isNotEmpty) return switchMachine(_machines.first);
+    // The next one is shown as it was: one the user disconnected stays off.
+    if (m == machine && _machines.isNotEmpty) return switchMachine(_machines.first, connect: false);
     if (m == machine) {
       SharedPreferences.getInstance().then((p) => p
         ..remove('herdr_host')
@@ -286,11 +292,11 @@ class HerdrClientService extends ChangeNotifier {
     ..setStringList('herdr_machine_names', [for (final e in _names.entries) '${e.key}=${e.value}'])
     ..setStringList('herdr_machines_off', _off.toList()));
 
-  /// Shows [machine] (`host:port` as stored in [machines]), connecting it if it was off. The others
-  /// stay as they are.
-  void switchMachine(String machine) {
+  /// Shows [machine] (`host:port` as stored in [machines]), with [connect] connecting it if it was off.
+  /// The others stay as they are.
+  void switchMachine(String machine, {bool connect = true}) {
     final i = machine.lastIndexOf(':');
-    configure(host: machine.substring(0, i), port: int.parse(machine.substring(i + 1)));
+    configure(host: machine.substring(0, i), port: int.parse(machine.substring(i + 1)), connect: connect);
   }
 
   void selectPane(String paneId) {
@@ -332,12 +338,9 @@ class HerdrClientService extends ChangeNotifier {
     try {
       final data = jsonDecode(message.toString());
       final type = data['type'];
-      if (type == 'snapshot') {
-        _apply(m, SessionSnapshot.fromJson(data['data']));
-      } else if (type == 'event') {
-        // Refetch snapshot on topology or status change
-        _fetchSnapshotHttp(m);
-      }
+      // The bridge pushes a snapshot whenever it changed. An older bridge also forwards raw events,
+      // which are ignored: the snapshot that follows carries their change.
+      if (type == 'snapshot') _apply(m, SessionSnapshot.fromJson(data['data']));
     } catch (e) {
       debugPrint('Error parsing session WS message: $e');
     }
@@ -397,14 +400,17 @@ class HerdrClientService extends ChangeNotifier {
   /// viewed, so an agent whose pane is on screen goes straight from working to idle.
   void _alertChanges(String m, SessionSnapshot before, SessionSnapshot now) {
     final watching = m == machine && WidgetsBinding.instance.lifecycleState == AppLifecycleState.resumed;
+    final completions = _conns[m]!.completions;
     for (final pane in now.panes) {
-      if (watching && pane.id == selectedPaneId) continue;
       final was = before.panes.where((p) => p.id == pane.id).firstOrNull;
       final wasAgent = before.agents.where((a) => a.paneId == pane.id).firstOrNull;
       final agent = now.agents.where((a) => a.paneId == pane.id).firstOrNull;
+      final seen = completions[pane.id] ?? wasAgent?.completionSeq ?? 0;
+      final seq = agent?.completionSeq ?? 0;
+      if (seq > seen) completions[pane.id] = seq;
+      if (watching && pane.id == selectedPaneId) continue;
       final blocked = was != null && was.agentStatus != 'blocked' && pane.agentStatus == 'blocked';
-      final finished =
-          wasAgent != null && agent?.completionSeq != null && agent!.completionSeq != wasAgent.completionSeq;
+      final finished = wasAgent != null && seq > seen;
       if (!blocked && !finished) continue;
       final task = pane.terminalTitle.isNotEmpty ? pane.terminalTitle : agent?.name ?? pane.id;
       final workspace = now.workspaces.where((w) => w.id == pane.workspaceId).firstOrNull;
@@ -419,9 +425,7 @@ class HerdrClientService extends ChangeNotifier {
     }
   }
 
-  /// [m] defaults to the active machine.
-  Future<void> _fetchSnapshotHttp([String? m]) async {
-    m ??= machine;
+  Future<void> _fetchSnapshotHttp(String m) async {
     try {
       final res = await http.get(Uri.http(m, '/api/snapshot'));
       if (res.statusCode == 200 && _machines.contains(m) && !_off.contains(m)) {
@@ -430,37 +434,36 @@ class HerdrClientService extends ChangeNotifier {
     } catch (_) {}
   }
 
-  Future<void> createTab(String workspaceId) => _create('tab', {'workspace_id': workspaceId});
-
-  Future<void> closeTab(String tabId) async {
+  /// Sends one request to the active machine's bridge, then refreshes that machine's snapshot (also on
+  /// failure, which may have changed something, or undoes [moveWorkspaces]'s local reorder). Failures go
+  /// to [onError] as "Could not [what]". Returns the decoded response, or null on failure.
+  Future<dynamic> _request(String what, String method, String path,
+      {Map<String, dynamic>? body, Map<String, String>? query}) async {
+    final m = machine;
+    dynamic result;
     try {
-      final res = await http.delete(Uri.http('$_host:$_port', '/api/tab/$tabId'));
+      final req = http.Request(method, Uri.http(m, path, query));
+      if (body != null) {
+        req.headers['Content-Type'] = 'application/json';
+        req.body = jsonEncode(body);
+      }
+      final res = await http.Response.fromStream(await req.send());
       if (res.statusCode != 200) throw res.body;
-      await _fetchSnapshotHttp();
+      result = res.body.isEmpty ? null : jsonDecode(res.body);
     } catch (e) {
-      onError?.call('Could not close tab: ${_parseError(e)}');
+      onError?.call('Could not $what: ${_parseError(e)}');
     }
+    await _fetchSnapshotHttp(m);
+    return result;
   }
 
-  Future<void> renameTab(String tabId, String label) => _rename('tab', tabId, label);
-
-  Future<void> createWorkspace() => _create('workspace', {});
-
-  /// POSTs to the bridge's `/api/<kind>` create route, then selects the new root pane.
-  Future<void> _create(String kind, Map<String, dynamic> params) async {
-    try {
-      final res = await http.post(
-        Uri.http('$_host:$_port', '/api/$kind'),
-        headers: {'Content-Type': 'application/json'},
-        body: jsonEncode(params),
-      );
-      if (res.statusCode != 200) throw res.body;
-      final paneId = jsonDecode(res.body)['root_pane']?['pane_id'];
-      await _fetchSnapshotHttp();
-      if (paneId is String) selectPane(paneId);
-    } catch (e) {
-      onError?.call('Could not create $kind: ${_parseError(e)}');
-    }
+  /// POSTs to a route that creates a tab or workspace, then shows its root pane, unless another
+  /// machine was put on screen meanwhile.
+  Future<void> _create(String what, String path, Map<String, dynamic> body) async {
+    final m = machine;
+    final res = await _request(what, 'POST', path, body: body);
+    final paneId = res is Map ? (res['root_pane']?['pane_id']) : null;
+    if (paneId is String && m == machine) selectPane(paneId);
   }
 
   String _parseError(dynamic e) {
@@ -477,22 +480,22 @@ class HerdrClientService extends ChangeNotifier {
     return e.toString();
   }
 
-  Future<void> deleteWorkspace(String workspaceId, {bool removeWorktree = false, bool force = false}) async {
-    try {
-      final query = <String, String>{
-        if (removeWorktree) 'remove_worktree': 'true',
-        if (force) 'force': 'true',
-      };
-      final uri = Uri.http('$_host:$_port', '/api/workspace/$workspaceId', query.isEmpty ? null : query);
-      final res = await http.delete(uri);
-      if (res.statusCode != 200) throw res.body;
-      await _fetchSnapshotHttp();
-    } catch (e) {
-      onError?.call('Could not delete workspace: ${_parseError(e)}');
-    }
+  Future<void> createTab(String workspaceId) => _create('create tab', '/api/tab', {'workspace_id': workspaceId});
+
+  Future<void> closeTab(String tabId) => _request('close tab', 'DELETE', '/api/tab/$tabId');
+
+  Future<void> renameTab(String tabId, String label) =>
+      _request('rename tab', 'POST', '/api/tab/$tabId/rename', body: {'label': label});
+
+  Future<void> createWorkspace() => _create('create workspace', '/api/workspace', {});
+
+  Future<void> deleteWorkspace(String workspaceId, {bool removeWorktree = false, bool force = false}) {
+    final query = {if (removeWorktree) 'remove_worktree': 'true', if (force) 'force': 'true'};
+    return _request('delete workspace', 'DELETE', '/api/workspace/$workspaceId', query: query.isEmpty ? null : query);
   }
 
-  Future<void> renameWorkspace(String workspaceId, String label) => _rename('workspace', workspaceId, label);
+  Future<void> renameWorkspace(String workspaceId, String label) =>
+      _request('rename workspace', 'POST', '/api/workspace/$workspaceId/rename', body: {'label': label});
 
   /// Moves [ids] (a workspace and its linked worktrees) before [beforeId], or to the end when null.
   /// Reorders the local snapshot first so the drawer doesn't jump back while the request runs.
@@ -505,88 +508,30 @@ class HerdrClientService extends ChangeNotifier {
       list.insertAll(at < 0 ? list.length : at, moved);
       notifyListeners();
     }
-    try {
-      final res = await http.post(
-        Uri.http('$_host:$_port', '/api/workspace/move'),
-        headers: {'Content-Type': 'application/json'},
-        body: jsonEncode({'workspace_ids': ids, 'before_workspace_id': beforeId}),
-      );
-      if (res.statusCode != 200) throw res.body;
-    } catch (e) {
-      onError?.call('Could not move workspace: ${_parseError(e)}');
-    }
-    await _fetchSnapshotHttp();
+    await _request('move workspace', 'POST', '/api/workspace/move',
+        body: {'workspace_ids': ids, 'before_workspace_id': beforeId});
   }
 
-  Future<void> _rename(String kind, String id, String label) async {
-    try {
-      final res = await http.post(
-        Uri.http('$_host:$_port', '/api/$kind/$id/rename'),
-        headers: {'Content-Type': 'application/json'},
-        body: jsonEncode({'label': label}),
-      );
-      if (res.statusCode != 200) throw res.body;
-      await _fetchSnapshotHttp();
-    } catch (e) {
-      onError?.call('Could not rename $kind: ${_parseError(e)}');
-    }
-  }
-
-  Future<void> createWorktree(String workspaceId, String branch, {String? base, String? path, String? label}) async {
-    try {
-      final res = await http.post(
-        Uri.http('$_host:$_port', '/api/worktree'),
-        headers: {'Content-Type': 'application/json'},
-        body: jsonEncode({
-          'workspace_id': workspaceId,
-          'branch': branch,
-          if (base != null && base.isNotEmpty) 'base': base,
-          if (path != null && path.isNotEmpty) 'path': path,
-          if (label != null && label.isNotEmpty) 'label': label,
-        }),
-      );
-      if (res.statusCode != 200) throw res.body;
-      final paneId = jsonDecode(res.body)['root_pane']?['pane_id'];
-      await _fetchSnapshotHttp();
-      if (paneId is String) selectPane(paneId);
-    } catch (e) {
-      onError?.call('Could not create worktree: ${_parseError(e)}');
-    }
-  }
+  Future<void> createWorktree(String workspaceId, String branch, {String? base, String? path, String? label}) =>
+      _create('create worktree', '/api/worktree', {
+        'workspace_id': workspaceId,
+        'branch': branch,
+        if (base != null && base.isNotEmpty) 'base': base,
+        if (path != null && path.isNotEmpty) 'path': path,
+        if (label != null && label.isNotEmpty) 'label': label,
+      });
 
   Future<List<Map<String, dynamic>>> listWorktrees(String workspaceId) async {
-    try {
-      final uri = Uri.http('$_host:$_port', '/api/worktree', {'workspace_id': workspaceId});
-      final res = await http.get(uri);
-      if (res.statusCode != 200) throw res.body;
-      final data = jsonDecode(res.body);
-      final list = (data['worktrees'] as List<dynamic>? ?? []).cast<Map<String, dynamic>>();
-      return list;
-    } catch (e) {
-      onError?.call('Could not list worktrees: ${_parseError(e)}');
-      return [];
-    }
+    final res = await _request('list worktrees', 'GET', '/api/worktree', query: {'workspace_id': workspaceId});
+    return ((res is Map ? res['worktrees'] : null) as List<dynamic>? ?? []).cast<Map<String, dynamic>>();
   }
 
-  Future<void> openWorktree(String workspaceId, {String? branch, String? path}) async {
-    try {
-      final res = await http.post(
-        Uri.http('$_host:$_port', '/api/worktree/open'),
-        headers: {'Content-Type': 'application/json'},
-        body: jsonEncode({
-          'workspace_id': workspaceId,
-          if (branch != null) 'branch': branch,
-          if (path != null) 'path': path,
-        }),
-      );
-      if (res.statusCode != 200) throw res.body;
-      final paneId = jsonDecode(res.body)['root_pane']?['pane_id'];
-      await _fetchSnapshotHttp();
-      if (paneId is String) selectPane(paneId);
-    } catch (e) {
-      onError?.call('Could not open worktree: ${_parseError(e)}');
-    }
-  }
+  Future<void> openWorktree(String workspaceId, {String? branch, String? path}) =>
+      _create('open worktree', '/api/worktree/open', {
+        'workspace_id': workspaceId,
+        if (branch != null) 'branch': branch,
+        if (path != null) 'path': path,
+      });
 
   @override
   void dispose() {
