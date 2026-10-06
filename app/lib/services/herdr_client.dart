@@ -111,15 +111,16 @@ class HerdrClientService extends ChangeNotifier {
   /// The name given to [machine] when it was added, or its address.
   String nameOf(String machine) => _names[machine] ?? machine;
 
-  /// What [m]'s agents are doing, e.g. "1 waiting · 2 working".
+  /// What [m]'s agents are doing, e.g. "1 needs you · 2 working", in the alerts' words.
   String summaryOf(String m) {
     final counts = <String, int>{};
     for (final p in snapshotOf(m)?.panes ?? <PaneModel>[]) {
       counts[p.agentStatus] = (counts[p.agentStatus] ?? 0) + 1;
     }
     final text = [
-      for (final (status, label) in [('blocked', 'waiting'), ('working', 'working'), ('done', 'done')])
-        if (counts[status] != null) '${counts[status]} $label',
+      if (counts['blocked'] case final n?) '$n ${n == 1 ? 'needs' : 'need'} you',
+      if (counts['working'] case final n?) '$n working',
+      if (counts['done'] case final n?) '$n done',
     ].join(' · ');
     return text.isEmpty ? 'No agents running' : text;
   }
@@ -146,9 +147,6 @@ class HerdrClientService extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// [muted] as stored in prefs.
-  void setMutedPanes(List<String> muted) => _muted = muted.toSet();
-
   /// Whether the bottom bar shows the control keys in place of the message box.
   bool get keyBar => _keyBar;
 
@@ -164,6 +162,28 @@ class HerdrClientService extends ChangeNotifier {
     _volumeKeys = v;
     SharedPreferences.getInstance().then((p) => p.setString('volume_keys', v.name));
     notifyListeners();
+  }
+
+  /// Reads the saved settings, without writing them back. The first launch turns alerts on and asks
+  /// for the permissions they need. The machine on screen last time stays off if it was disconnected.
+  void load(SharedPreferences p) {
+    _fontSize = p.getDouble('terminal_font_size') ?? _fontSize;
+    final seed = p.getInt('theme_seed');
+    if (seed != null) _seed = Color(seed);
+    _brightness = Brightness.values.asNameMap()[p.getString('theme_mode')];
+    _keyBar = p.getBool('show_keys') ?? false;
+    _volumeKeys = VolumeKeys.values.asNameMap()[p.getString('volume_keys')] ?? VolumeKeys.fontSize;
+    _muted = (p.getStringList('muted_panes') ?? []).toSet();
+    final alerts = p.getBool('background_alerts');
+    alerts == null ? setAlerts(true) : _alerts = alerts;
+    setMachines(p.getStringList('herdr_machines') ?? [], p.getStringList('herdr_machine_names') ?? [],
+        p.getStringList('herdr_machines_off') ?? []);
+    final host = p.getString('herdr_host');
+    if (host != null) {
+      _host = host;
+      _port = p.getInt('herdr_port') ?? 7788;
+      if (!_machines.contains(machine)) _machines = [..._machines, machine];
+    }
   }
 
   /// Opens the connections, once the saved state is loaded.
@@ -363,9 +383,8 @@ class HerdrClientService extends ChangeNotifier {
 
   /// Selects the tab's focused pane (or its first).
   void selectTab(String tabId) {
-    final panes = snapshot?.panes.where((p) => p.tabId == tabId) ?? <PaneModel>[];
-    final pane = panes.where((p) => p.focused).firstOrNull ?? panes.firstOrNull;
-    if (pane != null) selectPane(pane.id);
+    final pane = snapshot?.paneOfTab(tabId);
+    if (pane != null) selectPane(pane);
   }
 
   /// Selects the workspace's active tab.
@@ -411,7 +430,9 @@ class HerdrClientService extends ChangeNotifier {
     }
     // After a dropout [before] is the last snapshot seen, so what changed meanwhile still alerts.
     if (before != null && _alerts) _alertChanges(m, before, snapshot);
-    // herdr reuses a closed pane's id, and the new pane mustn't come up muted.
+    // herdr reuses a closed pane's id: a new pane mustn't come up muted, nor inherit the old one's
+    // completion count, which would hold back its "Finished" alerts.
+    c.completions.removeWhere((id, _) => !snapshot.panes.any((p) => p.id == id));
     final gone = _muted.where((k) => k.startsWith('$m/') && !snapshot.panes.any((p) => '$m/${p.id}' == k));
     if (gone.isNotEmpty) {
       _muted = _muted.difference(gone.toSet());
@@ -436,22 +457,18 @@ class HerdrClientService extends ChangeNotifier {
       return [...ids.sublist(0, i).reversed, ...ids.sublist(i + 1)];
     }
 
-    String? paneOf(String? tabId) {
-      final panes = now.panes.where((p) => p.tabId == tabId);
-      return (panes.where((p) => p.focused).firstOrNull ?? panes.firstOrNull)?.id;
-    }
-
     final tabs = [
       for (final t in before!.tabs)
         if (t.workspaceId == gone.workspaceId) t.id
     ];
     for (final tabId in [gone.tabId, ...around(tabs, gone.tabId)]) {
-      final pane = paneOf(tabId);
+      final pane = now.paneOfTab(tabId);
       if (pane != null) return pane;
     }
     for (final wsId in around([for (final w in before.workspaces) w.id], gone.workspaceId)) {
       final ws = now.workspaces.where((w) => w.id == wsId).firstOrNull;
-      final pane = paneOf(ws?.activeTabId) ?? paneOf(now.tabs.where((t) => t.workspaceId == wsId).firstOrNull?.id);
+      final pane =
+          now.paneOfTab(ws?.activeTabId) ?? now.paneOfTab(now.tabs.where((t) => t.workspaceId == wsId).firstOrNull?.id);
       if (pane != null) return pane;
     }
     return now.focusedPaneId ?? now.panes.first.id;

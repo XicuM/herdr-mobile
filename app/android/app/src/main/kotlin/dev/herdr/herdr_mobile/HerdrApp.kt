@@ -66,7 +66,8 @@ class HerdrApp : Application() {
 
     /** Shows [status] (title, text) in the ongoing notification, starting the service; null stops it. */
     private fun setStatus(status: Pair<String, String>?) {
-        if (status == this.status) return
+        // The same status again still restarts a service the system has stopped.
+        if (status == this.status && (status == null || serviceRunning)) return
         this.status = status
         val service = Intent(this, StatusService::class.java)
         if (status == null) {

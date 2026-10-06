@@ -326,7 +326,7 @@ void main() {
       expect(client.selectedPane?.tabId, 'w1:t11');
     });
 
-    testWidgets('Long-pressing a tab offers to rename or close it', (tester) async {
+    testWidgets('Long-pressing a tab renames it; dragging one turns the new-tab button into a bin', (tester) async {
       SharedPreferences.setMockInitialValues({'last_seen_changelog': changelog.first.$1});
       final client = HerdrClientService()
         ..setMachines(['100.1.2.3:7788'], [])
@@ -340,17 +340,28 @@ void main() {
         await tester.pump(const Duration(seconds: 1));
       }
 
-      await tester.longPress(find.descendant(of: find.byType(AppBar), matching: find.text('db')));
-      await settle();
-      Finder inSheet(String text) => find.descendant(of: find.byType(BottomSheet), matching: find.text(text));
-      expect(inSheet('db'), findsOneWidget);
-      expect(inSheet('Rename'), findsOneWidget);
-      expect(inSheet('Close'), findsOneWidget);
+      final tab = find.descendant(of: find.byType(AppBar), matching: find.text('db'));
 
-      // Closes straight away, like closing an agent.
-      await tester.tap(inSheet('Close'));
+      // Long-pressed and let go in place: rename.
+      await tester.longPress(tab);
       await settle();
-      expect(find.byType(BottomSheet), findsNothing);
+      expect(find.text('Rename tab'), findsOneWidget);
+      await tester.tap(find.text('Cancel'));
+      await settle();
+      expect(find.text('Rename tab'), findsNothing);
+
+      // While dragged, the new-tab button is a bin; a tab that moved isn't renamed.
+      expect(find.byTooltip('New tab'), findsOneWidget);
+      final drag = await tester.startGesture(tester.getCenter(tab));
+      await tester.pump(const Duration(seconds: 1));
+      await drag.moveBy(const Offset(-40, 0));
+      await tester.pump();
+      expect(find.byTooltip('Close tab'), findsOneWidget);
+      await drag.moveBy(const Offset(40, 0));
+      await drag.up();
+      await settle();
+      expect(find.byTooltip('New tab'), findsOneWidget);
+      expect(find.text('Rename tab'), findsNothing);
     });
 
     testWidgets('The top bar shows the workspace and its tabs; tapping a tab shows it', (tester) async {
@@ -527,6 +538,33 @@ void main() {
         client.setSnapshotForTesting(snap(seq));
       }
       expect(alerts, hasLength(1));
+    });
+
+    testWidgets('A new agent in a closed pane\'s reused id still alerts when it finishes', (tester) async {
+      SharedPreferences.setMockInitialValues({});
+      final alerts = <Object?>[];
+      tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(const MethodChannel('herdr/android'),
+          (call) async {
+        if (call.method == 'alert') alerts.add(call.arguments);
+        return null;
+      });
+      final client = HerdrClientService()
+        ..setMachines(['10.0.0.1:7788'], [])
+        ..setAlerts(true, ask: false);
+      SessionSnapshot snap(int? seq) => SessionSnapshot.fromJson({
+            'panes': [
+              {'pane_id': 'w1:p1', 'workspace_id': 'w1', 'tab_id': 'w1:t1', 'agent_status': 'idle'},
+              if (seq != null) {'pane_id': 'w1:p2', 'workspace_id': 'w1', 'tab_id': 'w1:t1', 'agent_status': 'idle'},
+            ],
+            'agents': [
+              if (seq != null) {'name': 'coder', 'pane_id': 'w1:p2', 'status': 'idle', 'completion_seq': seq},
+            ],
+          });
+      // The old agent finishes five times, its pane closes, and a new one in the same id finishes once.
+      for (final seq in [4, 5, null, 0, 1]) {
+        client.setSnapshotForTesting(snap(seq));
+      }
+      expect(alerts, hasLength(2));
     });
   });
 }

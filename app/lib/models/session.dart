@@ -28,6 +28,12 @@ class SessionSnapshot {
           .toList(),
     );
   }
+
+  /// The tab's focused pane, or its first.
+  String? paneOfTab(String? tabId) {
+    final inTab = panes.where((p) => p.tabId == tabId);
+    return (inTab.where((p) => p.focused).firstOrNull ?? inTab.firstOrNull)?.id;
+  }
 }
 
 class WorkspaceModel {

@@ -7,9 +7,11 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_REMOTE_MESSAGING"/>
     <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS"/>
 
+    <!-- No backups: the prefs hold the machines' addresses and the sent messages, which may carry secrets. -->
     <application
         android:label="Herdr Mobile"
         android:name=".HerdrApp"
+        android:allowBackup="false"
         android:icon="@drawable/ic_launcher">
         <activity
             android:name=".MainActivity"

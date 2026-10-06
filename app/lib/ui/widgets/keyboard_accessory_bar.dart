@@ -57,6 +57,8 @@ class _KeyboardAccessoryBarState extends State<KeyboardAccessoryBar> {
         onLongPressStart: (_) {
           HapticFeedback.selectionClick();
           onTap();
+          // Holding a second key takes over from the first, whose timer would otherwise never stop.
+          _repeat?.cancel();
           _repeat = Timer.periodic(const Duration(milliseconds: 60), (_) => onTap());
         },
         onLongPressEnd: (_) => _repeat?.cancel(),

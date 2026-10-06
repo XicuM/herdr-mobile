@@ -1,6 +1,19 @@
 /// Newest first. Shown once after an update; add an entry when bumping the version in pubspec.yaml.
 const changelog = <(String, List<String>)>[
   (
+    '1.6.0',
+    [
+      'This version is signed with a new, permanent key, so it had to be installed fresh. From now on updates install over each other and keep your machines and settings.',
+      'Light and dark themes and an accent colour, in Settings. The volume keys can send ↑/↓ instead of changing the font size.',
+      'Long-press and drag a tab onto another to move it, or onto the bin that replaces + to close it. Long-press and let go to rename it.',
+      'Deleting a workspace or worktree no longer asks first.',
+      'The connection notification has a Disconnect button.',
+      'When a terminal can\'t be opened, it says why.',
+      'Agents that need you are counted as "needs you", as in the alerts.',
+      'Fixes: going back to live after scrolling back now always reaches the bottom; a held arrow key no longer keeps repeating when another is pressed; an agent in a reused pane no longer misses its "Finished" alerts.',
+    ]
+  ),
+  (
     '1.5.1',
     [
       'Showing a disconnected machine no longer connects it, and no longer shows its old tabs and workspaces.',

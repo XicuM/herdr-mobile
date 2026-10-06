@@ -249,18 +249,8 @@ class WorkspaceDrawer extends StatelessWidget {
                 textColor: error,
                 leading: const Icon(Icons.delete_outline),
                 title: const Text('Delete'),
-                onTap: () => run(() async {
-                  final linked = ws.isLinkedWorktree;
-                  final ok = await confirm(
-                    context,
-                    linked ? 'Delete worktree?' : 'Close workspace?',
-                    linked
-                        ? '"${ws.displayName}" and its worktree checkout will be removed.'
-                        : '"${ws.displayName}" and everything running in it will be closed.',
-                    linked ? 'Delete' : 'Close',
-                  );
-                  if (ok) client.deleteWorkspace(ws.id, removeWorktree: linked);
-                }),
+                // Straight away, like closing a tab or an agent. A linked worktree's checkout goes too.
+                onTap: () => run(() => client.deleteWorkspace(ws.id, removeWorktree: ws.isLinkedWorktree)),
               ),
             ],
           ),

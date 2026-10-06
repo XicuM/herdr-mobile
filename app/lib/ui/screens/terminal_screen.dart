@@ -16,7 +16,7 @@ import '../widgets/keyboard_accessory_bar.dart';
 import '../widgets/machine_drawer.dart';
 import 'settings_screen.dart';
 
-/// Offered below the message history; picking one fills the message box.
+/// Offered below the message history; picking one sends it straight away.
 const _quickReplies = ['yes', 'no', 'continue', '/clear', '/exit'];
 
 class TerminalScreen extends StatefulWidget {
@@ -112,8 +112,9 @@ class _TerminalScreenState extends State<TerminalScreen> with SingleTickerProvid
                   '2. Make sure this phone is on the same Tailscale network.\n'
                   '3. Add each computer here as a machine, using its Tailscale IP or MagicDNS name.\n\n'
                   'The menu button at the top left lists workspaces and machines. The workspace\'s tabs sit under '
-                  'the top bar; long-press one to rename or close it. Swipe the message bar sideways to go from '
-                  'agent to agent. The circle right of the message box lists every agent. Type messages '
+                  'the top bar; long-press one to rename it, or long-press and drag it to move it, or onto the bin '
+                  'to close it. Swipe the message bar sideways to go from agent to agent. The square right of the '
+                  'message box lists every agent. Type messages '
                   'in the box at the bottom, with autocorrect and voice; the history button brings back earlier '
                   'ones. Pinch or use the volume keys to change the font size (Settings can make them ↑/↓ instead).',
                 )
@@ -607,14 +608,7 @@ class _TerminalScreenState extends State<TerminalScreen> with SingleTickerProvid
               side: BorderSide.none,
               backgroundColor: scheme.secondaryContainer,
               labelStyle: TextStyle(color: scheme.onSecondaryContainer),
-              avatar: Center(
-                child: Container(
-                  width: 8,
-                  height: 8,
-                  decoration:
-                      BoxDecoration(shape: BoxShape.circle, color: machineColor(context, client, client.machine)),
-                ),
-              ),
+              avatar: Center(child: machineDot(context, client, client.machine)),
               label: ConstrainedBox(
                 constraints: const BoxConstraints(maxWidth: 110),
                 child: Text(

@@ -1,15 +1,22 @@
 import 'package:flutter/material.dart';
 import '../../services/herdr_client.dart';
 
-/// The connection's color, from the scheme so it can't be read as an agent's status: primary connected,
-/// tertiary connecting, outline disconnected.
-Color machineColor(BuildContext context, HerdrClientService client, String m) {
+/// A dot in the connection's color, from the scheme so it can't be read as an agent's status: primary
+/// connected, tertiary connecting, outline disconnected.
+Widget machineDot(BuildContext context, HerdrClientService client, String m) {
   final scheme = Theme.of(context).colorScheme;
-  return client.isConnected(m)
-      ? scheme.primary
-      : client.isOff(m)
-          ? scheme.outline
-          : scheme.tertiary;
+  return Container(
+    width: 8,
+    height: 8,
+    decoration: BoxDecoration(
+      shape: BoxShape.circle,
+      color: client.isConnected(m)
+          ? scheme.primary
+          : client.isOff(m)
+              ? scheme.outline
+              : scheme.tertiary,
+    ),
+  );
 }
 
 /// The foot of the workspace drawer: every saved machine with its connection and what its agents are
@@ -40,11 +47,7 @@ class MachineList extends StatelessWidget {
             child: ListTile(
               contentPadding: const EdgeInsets.only(left: 16, right: 8),
               selected: m == client.machine,
-              leading: Container(
-                width: 8,
-                height: 8,
-                decoration: BoxDecoration(shape: BoxShape.circle, color: machineColor(context, client, m)),
-              ),
+              leading: machineDot(context, client, m),
               minLeadingWidth: 8,
               title: Text(client.nameOf(m), overflow: TextOverflow.ellipsis),
               subtitle: Text(

@@ -1,14 +1,13 @@
 import 'package:flutter/material.dart';
 
 enum AgentStatus {
-  working('Working', Color(0xFFF9E2AF)), // yellow
-  blocked('Blocked', Color(0xFFF38BA8)), // red
-  done('Done', Color(0xFFA6E3A1)), // green
-  idle('Idle', Color(0xFF6C7086)), // overlay grey
-  unknown('No agent', Color(0xFF6C7086)); // idle's grey; the dot is hollow instead
+  working(Color(0xFFF9E2AF)), // yellow
+  blocked(Color(0xFFF38BA8)), // red: needs you
+  done(Color(0xFFA6E3A1)), // green
+  idle(Color(0xFF6C7086)), // overlay grey
+  unknown(Color(0xFF6C7086)); // no agent: idle's grey, but the dot is hollow
 
-  const AgentStatus(this.label, this.color);
-  final String label;
+  const AgentStatus(this.color);
   final Color color;
 
   static AgentStatus fromString(String? status) =>
