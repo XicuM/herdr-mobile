@@ -461,6 +461,9 @@ class _TerminalScreenState extends State<TerminalScreen> with SingleTickerProvid
             child: ActionChip(
               tooltip: 'Machines',
               visualDensity: VisualDensity.compact,
+              side: BorderSide.none,
+              backgroundColor: scheme.secondaryContainer,
+              labelStyle: TextStyle(color: scheme.onSecondaryContainer),
               avatar: Center(
                 child: Container(
                   width: 8,
@@ -644,7 +647,7 @@ class _TerminalScreenState extends State<TerminalScreen> with SingleTickerProvid
                             icon: const Icon(Icons.history),
                             onPressed: _showHistory,
                           ),
-                          // Copy (when there's a selection) and the Enter/Send circle sit inside the pill.
+                          // Copy (when there's a selection) and Enter/Send sit inside the pill, styled like the history button.
                           suffixIcon: Row(
                             mainAxisSize: MainAxisSize.min,
                             children: [
@@ -654,24 +657,12 @@ class _TerminalScreenState extends State<TerminalScreen> with SingleTickerProvid
                                   icon: const Icon(Icons.content_copy),
                                   onPressed: _copySelection,
                                 ),
-                              Padding(
-                                padding: const EdgeInsets.only(right: 4),
-                                child: ValueListenableBuilder<TextEditingValue>(
-                                  valueListenable: _message,
-                                  // A plain Enter icon when empty, a primary Send circle with text.
-                                  builder: (context, val, _) => val.text.isEmpty
-                                      ? IconButton(
-                                          tooltip: 'Enter',
-                                          style: const ButtonStyle(tapTargetSize: MaterialTapTargetSize.shrinkWrap),
-                                          icon: const Icon(Icons.keyboard_return),
-                                          onPressed: _sendMessage,
-                                        )
-                                      : IconButton.filled(
-                                          tooltip: 'Send',
-                                          style: const ButtonStyle(tapTargetSize: MaterialTapTargetSize.shrinkWrap),
-                                          icon: const Icon(Icons.arrow_upward),
-                                          onPressed: _sendMessage,
-                                        ),
+                              ValueListenableBuilder<TextEditingValue>(
+                                valueListenable: _message,
+                                builder: (context, val, _) => IconButton(
+                                  tooltip: val.text.isEmpty ? 'Enter' : 'Send',
+                                  icon: Icon(val.text.isEmpty ? Icons.keyboard_return : Icons.send),
+                                  onPressed: _sendMessage,
                                 ),
                               ),
                             ],
