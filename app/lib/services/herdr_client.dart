@@ -19,6 +19,9 @@ class _Conn {
   SessionSnapshot? snapshot;
   String? selectedPaneId;
 
+  /// Why the bridge has no snapshot (herdr not running, or the machine unreachable from it), until it has.
+  String? error;
+
   /// The highest `completion_seq` seen per pane: a snapshot fetched over HTTP can land after a newer
   /// pushed one, and going back and forth must not alert twice.
   final completions = <String, int>{};
@@ -28,8 +31,7 @@ class _Conn {
 /// disconnected on its own. The *active* machine ([machine]) is just the one on screen: [snapshot],
 /// [selectedPaneId] and the bridge requests below are its.
 class HerdrClientService extends ChangeNotifier {
-  String _host = '127.0.0.1';
-  int _port = 7788;
+  String _machine = '127.0.0.1:7788';
   double _fontSize = 14;
   Color _seed = const Color(0xFF38BDF8);
   Brightness? _brightness;
@@ -40,10 +42,11 @@ class HerdrClientService extends ChangeNotifier {
   Set<String> _off = {};
   bool _alerts = false;
 
-  /// Panes that never raise an alert, as `host:port/pane_id`.
+  /// Panes that never raise an alert, as `machine/pane_id`.
   Set<String> _muted = {};
   bool _keyBar = false;
   VolumeKeys _volumeKeys = VolumeKeys.fontSize;
+  bool _pinchZoom = true;
   bool _started = false;
   bool _disposed = false;
   final _conns = <String, _Conn>{};
@@ -79,9 +82,8 @@ class HerdrClientService extends ChangeNotifier {
   /// Fails harmlessly off Android (e.g. in tests).
   void _native(String method, [Object? args]) => _android.invokeMethod(method, args).ignore();
 
-  String get host => _host;
-  int get port => _port;
-  String get machine => '$_host:$_port';
+  /// The machine on screen, as stored in [machines].
+  String get machine => _machine;
   bool get connected => isConnected(machine);
   bool get isDisconnected => isOff(machine);
   /// None while the machine is off: its last one is kept, for alerts and the selected pane, but is stale.
@@ -98,11 +100,18 @@ class HerdrClientService extends ChangeNotifier {
 
   bool isConnected(String m) => _conns[m]?.connected ?? false;
 
+  /// Why [m]'s bridge can't show it, e.g. "ssh: Could not resolve hostname …"; null once it can.
+  String? errorOf(String m) => isConnected(m) ? _conns[m]?.error : null;
+
+  /// The bridge that reaches [m] over SSH (`host:port/m/<id>`, from its `/api/machines`), or null when
+  /// [m] runs its own.
+  static String? parentOf(String m) => m.contains('/') ? m.substring(0, m.indexOf('/')) : null;
+
   /// Disconnected by the user (as opposed to connecting, or connected).
   bool isOff(String m) => _off.contains(m);
   SessionSnapshot? snapshotOf(String m) => _conns[m]?.snapshot;
 
-  /// Saved bridges as `host:port`, one per machine running herdr-bridge.
+  /// Saved machines: bridges as `host:port`, each followed by the machines it reaches over SSH.
   List<String> get machines => _machines;
 
   @visibleForTesting
@@ -164,6 +173,14 @@ class HerdrClientService extends ChangeNotifier {
     notifyListeners();
   }
 
+  bool get pinchZoom => _pinchZoom;
+
+  void setPinchZoom(bool v) {
+    _pinchZoom = v;
+    SharedPreferences.getInstance().then((p) => p.setBool('pinch_zoom', v));
+    notifyListeners();
+  }
+
   /// Reads the saved settings, without writing them back. The first launch turns alerts on and asks
   /// for the permissions they need. The machine on screen last time stays off if it was disconnected.
   void load(SharedPreferences p) {
@@ -173,6 +190,7 @@ class HerdrClientService extends ChangeNotifier {
     _brightness = Brightness.values.asNameMap()[p.getString('theme_mode')];
     _keyBar = p.getBool('show_keys') ?? false;
     _volumeKeys = VolumeKeys.values.asNameMap()[p.getString('volume_keys')] ?? VolumeKeys.fontSize;
+    _pinchZoom = p.getBool('pinch_zoom') ?? true;
     _muted = (p.getStringList('muted_panes') ?? []).toSet();
     final alerts = p.getBool('background_alerts');
     alerts == null ? setAlerts(true) : _alerts = alerts;
@@ -180,8 +198,7 @@ class HerdrClientService extends ChangeNotifier {
         p.getStringList('herdr_machines_off') ?? []);
     final host = p.getString('herdr_host');
     if (host != null) {
-      _host = host;
-      _port = p.getInt('herdr_port') ?? 7788;
+      _machine = '$host:${p.getInt('herdr_port') ?? 7788}${p.getString('herdr_path') ?? ''}';
       if (!_machines.contains(machine)) _machines = [..._machines, machine];
     }
   }
@@ -233,6 +250,7 @@ class HerdrClientService extends ChangeNotifier {
           if (c.channel != channel) return;
           if (!c.connected) {
             c.connected = true;
+            if (parentOf(m) == null) _discover(m);
             notifyListeners();
           }
           _handleMessage(m, message);
@@ -296,18 +314,20 @@ class HerdrClientService extends ChangeNotifier {
         .then((p) => brightness == null ? p.remove('theme_mode') : p.setString('theme_mode', brightness.name));
   }
 
-  void _setActive(String host, int port) {
-    _host = host;
-    _port = port;
+  void _setActive(String m) {
+    _machine = m;
+    final slash = m.contains('/') ? m.indexOf('/') : m.length;
+    final colon = m.lastIndexOf(':', slash);
     SharedPreferences.getInstance().then((p) => p
-      ..setString('herdr_host', host)
-      ..setInt('herdr_port', port));
+      ..setString('herdr_host', m.substring(0, colon))
+      ..setInt('herdr_port', int.parse(m.substring(colon + 1, slash)))
+      ..setString('herdr_path', m.substring(slash)));
   }
 
-  /// Shows the machine at [host]:[port], remembering it in the machine list and, with [connect],
-  /// connecting it if it was off.
-  void configure({required String host, required int port, String? name, bool connect = true}) {
-    _setActive(host, port);
+  /// Shows [m] (`host:port`, or a machine a bridge reaches), remembering it in the machine list and,
+  /// with [connect], connecting it if it was off.
+  void configure(String m, {String? name, bool connect = true}) {
+    _setActive(m);
     if (!_machines.contains(machine)) _machines = [..._machines, machine];
     if (name != null && name.isNotEmpty) _names = {..._names, machine: name};
     if (connect) _off = {..._off}..remove(machine);
@@ -315,7 +335,7 @@ class HerdrClientService extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// [machines] are `host:port`; [names] are `host:port=name`; [off] are the disconnected ones, as
+  /// [machines] are as in [machines]; [names] are `machine=name`; [off] are the disconnected ones, as
   /// stored in prefs.
   void setMachines(List<String> machines, List<String> names, [List<String> off = const []]) {
     _machines = machines;
@@ -327,38 +347,69 @@ class HerdrClientService extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// Forgets [m]; removing the active machine shows another.
+  /// Forgets [m], and the machines it reaches; removing the active machine shows another.
   void removeMachine(String m) {
-    _close(m);
-    _conns.remove(m);
-    _machines = _machines.where((x) => x != m).toList();
-    _names = {..._names}..remove(m);
-    _off = {..._off}..remove(m);
-    _saveMachines();
-    if (m == machine && _machines.isNotEmpty) return switchMachine(_machines.first);
-    if (m == machine) {
-      SharedPreferences.getInstance().then((p) => p
-        ..remove('herdr_host')
-        ..remove('herdr_port'));
-    }
+    _forget([m, ..._machines.where((x) => parentOf(x) == m)]);
+    if (_machines.contains(machine)) return notifyListeners();
+    if (_machines.isNotEmpty) return switchMachine(_machines.first);
+    SharedPreferences.getInstance().then((p) => p
+      ..remove('herdr_host')
+      ..remove('herdr_port')
+      ..remove('herdr_path'));
     notifyListeners();
   }
 
-  /// Renames [m] and/or moves it to [host]:[port], keeping its place in the list and its on/off state.
-  void updateMachine(String m, {required String host, required int port, required String name}) {
-    final next = '$host:$port';
-    _machines = [
-      for (final x in _machines)
-        if (x == m) next else if (x != next) x
-    ];
-    _names = {..._names}..remove(m);
-    if (name.isNotEmpty) _names[next] = name;
-    if (next != m) {
+  void _forget(Iterable<String> gone) {
+    for (final m in gone) {
       _close(m);
       _conns.remove(m);
-      if (_off.remove(m)) _off.add(next);
-      if (m == machine) _setActive(host, port);
     }
+    _machines = _machines.where((x) => !gone.contains(x)).toList();
+    _names = {..._names}..removeWhere((k, _) => gone.contains(k));
+    _off = _off.difference(gone.toSet());
+    _saveMachines();
+  }
+
+  /// Renames [m] and/or moves it to [to] (`host:port`), keeping its place in the list and its on/off
+  /// state. The machines it reached are found again at the new address.
+  void updateMachine(String m, {required String to, required String name}) {
+    _machines = [
+      for (final x in _machines)
+        if (x == m) to else if (x != to) x
+    ];
+    _names = {..._names}..remove(m);
+    if (name.isNotEmpty) _names[to] = name;
+    if (to != m) {
+      final (active, off) = (machine, _off.contains(m));
+      _forget([m, ..._machines.where((x) => parentOf(x) == m)]);
+      if (off) _off = {..._off, to};
+      if (active == m || parentOf(active) == m) _setActive(to);
+    }
+    _saveMachines();
+    notifyListeners();
+  }
+
+  /// Adds the machines [m]'s bridge reaches over SSH (those saved in its herdr) right after it, named as
+  /// there, and forgets the ones it no longer does. A bridge without `/api/machines` reaches none.
+  Future<void> _discover(String m) async {
+    final List found;
+    try {
+      final res = await http.get(Uri.parse('http://$m/api/machines'));
+      if (res.statusCode != 200) return;
+      found = jsonDecode(res.body)['machines'];
+    } catch (_) {
+      return;
+    }
+    if (!_machines.contains(m)) return;
+    final children = {for (final f in found) '$m/m/${f['id']}': f['label'] as String};
+    _forget(_machines.where((x) => parentOf(x) == m && !children.containsKey(x)).toList());
+    if (!_machines.contains(machine)) _setActive(m);
+    final i = _machines.indexOf(m);
+    final kept = _machines.where((x) => parentOf(x) == m).toList();
+    final added = children.keys.where((x) => !_machines.contains(x)).toList();
+    if (added.isEmpty) return notifyListeners();
+    _machines = [..._machines.sublist(0, i + 1 + kept.length), ...added, ..._machines.sublist(i + 1 + kept.length)];
+    _names = {..._names, for (final x in added) x: children[x]!};
     _saveMachines();
     notifyListeners();
   }
@@ -368,12 +419,9 @@ class HerdrClientService extends ChangeNotifier {
     ..setStringList('herdr_machine_names', [for (final e in _names.entries) '${e.key}=${e.value}'])
     ..setStringList('herdr_machines_off', _off.toList()));
 
-  /// Shows [machine] (`host:port` as stored in [machines]) as it is: one the user disconnected stays off.
-  /// The others stay as they are.
-  void switchMachine(String machine) {
-    final i = machine.lastIndexOf(':');
-    configure(host: machine.substring(0, i), port: int.parse(machine.substring(i + 1)), connect: false);
-  }
+  /// Shows [machine] (as stored in [machines]) as it is: one the user disconnected stays off. The others
+  /// stay as they are.
+  void switchMachine(String machine) => configure(machine, connect: false);
 
   void selectPane(String paneId) {
     _conns.putIfAbsent(machine, _Conn.new).selectedPaneId = paneId;
@@ -394,17 +442,21 @@ class HerdrClientService extends ChangeNotifier {
     if (tab != null) selectTab(tab);
   }
 
-  /// Disconnects [m] (the active machine by default) and keeps it off until [connect]ed.
+  /// [m] and, for a bridge, the machines it reaches.
+  List<String> _withChildren(String m) => [m, ..._machines.where((x) => parentOf(x) == m)];
+
+  /// Disconnects [m] (the active machine by default), and those it reaches, and keeps them off until
+  /// [connect]ed.
   void disconnect([String? m]) {
-    m ??= machine;
-    _off = {..._off, m};
-    _close(m);
+    final all = _withChildren(m ?? machine);
+    _off = {..._off, ...all};
+    all.forEach(_close);
     _saveMachines();
     notifyListeners();
   }
 
   void connect([String? m]) {
-    _off = {..._off}..remove(m ?? machine);
+    _off = _off.difference(_withChildren(m ?? machine).toSet());
     _saveMachines();
     notifyListeners();
   }
@@ -413,9 +465,15 @@ class HerdrClientService extends ChangeNotifier {
     try {
       final data = jsonDecode(message.toString());
       final type = data['type'];
-      // The bridge pushes a snapshot whenever it changed. An older bridge also forwards raw events,
-      // which are ignored: the snapshot that follows carries their change.
-      if (type == 'snapshot') _apply(m, SessionSnapshot.fromJson(data['data']));
+      // The bridge pushes a snapshot whenever it changed, or why it has none. An older bridge also
+      // forwards raw events, which are ignored: the snapshot that follows carries their change.
+      if (type == 'snapshot') {
+        _conns[m]?.error = null;
+        _apply(m, SessionSnapshot.fromJson(data['data']));
+      } else if (type == 'error') {
+        _conns[m]?.error = data['error'].toString();
+        notifyListeners();
+      }
     } catch (e) {
       debugPrint('Error parsing session WS message: $e');
     }
@@ -433,7 +491,9 @@ class HerdrClientService extends ChangeNotifier {
     // herdr reuses a closed pane's id: a new pane mustn't come up muted, nor inherit the old one's
     // completion count, which would hold back its "Finished" alerts.
     c.completions.removeWhere((id, _) => !snapshot.panes.any((p) => p.id == id));
-    final gone = _muted.where((k) => k.startsWith('$m/') && !snapshot.panes.any((p) => '$m/${p.id}' == k));
+    // A pane id has no slash, so the key's machine is all before its last one.
+    final gone = _muted
+        .where((k) => k.substring(0, k.lastIndexOf('/')) == m && !snapshot.panes.any((p) => '$m/${p.id}' == k));
     if (gone.isNotEmpty) {
       _muted = _muted.difference(gone.toSet());
       SharedPreferences.getInstance().then((p) => p.setStringList('muted_panes', _muted.toList()));
@@ -506,7 +566,7 @@ class HerdrClientService extends ChangeNotifier {
 
   Future<void> _fetchSnapshotHttp(String m) async {
     try {
-      final res = await http.get(Uri.http(m, '/api/snapshot'));
+      final res = await http.get(Uri.parse('http://$m/api/snapshot'));
       if (res.statusCode == 200 && _machines.contains(m) && !_off.contains(m)) {
         _apply(m, SessionSnapshot.fromJson(jsonDecode(res.body)));
       }
@@ -521,7 +581,7 @@ class HerdrClientService extends ChangeNotifier {
     final m = machine;
     dynamic result;
     try {
-      final req = http.Request(method, Uri.http(m, path, query));
+      final req = http.Request(method, Uri.parse('http://$m$path').replace(queryParameters: query));
       if (body != null) {
         req.headers['Content-Type'] = 'application/json';
         req.body = jsonEncode(body);

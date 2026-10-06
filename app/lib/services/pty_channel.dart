@@ -7,8 +7,8 @@ import 'package:xterm/xterm.dart';
 /// Streams one herdr pane, sized to this terminal, through the bridge.
 /// Binary frames carry terminal bytes both ways; text frames carry resizes and scrolls.
 class PtyChannel {
-  final String host;
-  final int port;
+  /// As in [HerdrClientService.machines]: `host:port`, or a machine its bridge reaches.
+  final String machine;
   final String paneId;
   final Terminal terminal;
 
@@ -21,8 +21,7 @@ class PtyChannel {
   bool _disposed = false;
 
   PtyChannel({
-    required this.host,
-    required this.port,
+    required this.machine,
     required this.paneId,
     required this.terminal,
     this.onAttach,
@@ -36,7 +35,7 @@ class PtyChannel {
     // in front of the first frame, not here, so the old screen stays up until then instead of going black.
     var reset = '\x1b[?1049h\x1b[0m\x1b[H\x1b[2J';
     final uri = Uri.parse(
-        'ws://$host:$port/ws/term/${Uri.encodeComponent(paneId)}?cols=${terminal.viewWidth}&rows=${terminal.viewHeight}');
+        'ws://$machine/ws/term/${Uri.encodeComponent(paneId)}?cols=${terminal.viewWidth}&rows=${terminal.viewHeight}');
     _channel = WebSocketChannel.connect(uri);
     // Connection failures also reach the stream's onError, which reconnects.
     _channel!.ready.ignore();

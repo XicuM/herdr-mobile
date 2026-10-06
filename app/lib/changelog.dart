@@ -4,6 +4,7 @@ const changelog = <(String, List<String>)>[
     '1.6.0',
     [
       'This version is signed with a new, permanent key, so it had to be installed fresh. From now on updates install over each other and keep your machines and settings.',
+      'The machines saved in a computer\'s herdr (herdr machine) appear under it, reached over SSH from that computer: they need neither Tailscale nor herdr-bridge. One that can\'t be reached says why.',
       'Light and dark themes and an accent colour, in Settings. The volume keys can send ↑/↓ instead of changing the font size.',
       'Long-press and drag a tab onto another to move it, or onto the bin that replaces + to close it. Long-press and let go to rename it.',
       'Deleting a workspace or worktree no longer asks first.',
