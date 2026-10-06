@@ -31,12 +31,12 @@ class _KeyboardAccessoryBarState extends State<KeyboardAccessoryBar> {
     super.dispose();
   }
 
-  /// M3 tonal buttons, drawn small to fit nine in a row but each still a 48 dp tap target. CTRL turns
+  /// M3 tonal buttons, narrow to fit nine in a row and 48 dp tall like the message box they replace. CTRL turns
   /// filled while armed; ^C uses the error container. [repeat] keys fire again every 60 ms while held.
   Widget _key(String label, VoidCallback onTap, {bool repeat = false, bool active = false, bool danger = false}) {
     final scheme = Theme.of(context).colorScheme;
     final style = FilledButton.styleFrom(
-      minimumSize: const Size(0, 34),
+      minimumSize: const Size(0, 48),
       padding: EdgeInsets.zero,
       textStyle: Theme.of(context).textTheme.labelMedium,
       backgroundColor: danger ? scheme.errorContainer : null,

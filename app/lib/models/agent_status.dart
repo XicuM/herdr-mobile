@@ -5,7 +5,7 @@ enum AgentStatus {
   blocked('Blocked', Color(0xFFF38BA8)), // red
   done('Done', Color(0xFFA6E3A1)), // green
   idle('Idle', Color(0xFF6C7086)), // overlay grey
-  unknown('No agent', Color(0xFF64748B)); // muted slate
+  unknown('No agent', Color(0xFF6C7086)); // idle's grey; the dot is hollow instead
 
   const AgentStatus(this.label, this.color);
   final String label;

@@ -91,7 +91,7 @@ class WorkspaceDrawer extends StatelessWidget {
                       Padding(
                         padding: const EdgeInsets.symmetric(horizontal: 28),
                         child: Text(client.machines.isEmpty
-                            ? 'No machine yet'
+                            ? 'No machines yet'
                             : client.isDisconnected
                                 ? 'Disconnected'
                                 : 'Connecting…'),

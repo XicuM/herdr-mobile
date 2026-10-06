@@ -82,7 +82,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
     final scheme = Theme.of(context).colorScheme;
     Widget section(String title) => Padding(
           padding: const EdgeInsets.fromLTRB(16, 24, 16, 8),
-          child: Text(title, style: Theme.of(context).textTheme.titleSmall?.copyWith(color: scheme.primary)),
+          child: Text(title, style: Theme.of(context).textTheme.titleSmall?.copyWith(color: scheme.onSurfaceVariant)),
         );
 
     return Scaffold(
@@ -132,7 +132,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
           ListTile(
             title: const Text('Font size'),
             subtitle: const Text('Or pinch the terminal, or use the volume keys'),
-            trailing: Text('${client.fontSize.round()} pt', style: Theme.of(context).textTheme.labelLarge),
+            trailing: Text('${client.fontSize.round()}', style: Theme.of(context).textTheme.labelLarge),
           ),
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 8),
