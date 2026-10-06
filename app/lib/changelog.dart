@@ -1,6 +1,12 @@
 /// Newest first. Shown once after an update; add an entry when bumping the version in pubspec.yaml.
 const changelog = <(String, List<String>)>[
   (
+    '1.5.1',
+    [
+      'Showing a disconnected machine no longer connects it, and no longer shows its old tabs and workspaces.',
+    ]
+  ),
+  (
     '1.5.0',
     [
       'Tabs: the top bar shows the workspace\'s tabs like a browser\'s, each with its label and its agents, the current one joined to the terminal. Tap one to switch, + for a new one, long-press to rename or close it.',
