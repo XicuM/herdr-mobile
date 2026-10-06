@@ -3,6 +3,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:xterm/xterm.dart';
+// ignore: implementation_imports
+import 'package:xterm/src/ui/palette_builder.dart'; // the palette xterm paints with, to resolve a cell's colour
 import '../../changelog.dart';
 import '../../models/agent_status.dart';
 import '../../models/session.dart';
@@ -55,11 +57,23 @@ class _TerminalScreenState extends State<TerminalScreen> with SingleTickerProvid
   Duration _swipeTime = Duration.zero;
   bool _swiping = false;
 
+  // The current tab in the top bar's strip, scrolled into view when it changes.
+  final _currentTab = GlobalKey();
+  String? _shownTabId;
+
+  // The terminal's true background: the colour most of the screen's edges are painted, since full-screen agents
+  // paint their own over the default. The message bar and the current tab take it, joining the terminal.
+  // Null while it's the default: the scheme's surface, like the rest of the app.
+  static const _defaultTheme = TerminalThemes.defaultTheme;
+  static final _palette = PaletteBuilder(_defaultTheme).build();
+  Color? _background;
+
   @override
   void initState() {
     super.initState();
     _terminal.onOutput = _send;
     _terminal.onResize = (cols, rows, _, __) => _ptyChannel?.sendResize(cols, rows);
+    _terminal.addListener(_findBackground);
 
     widget.client.onError = _showError;
     _controller.addListener(() => setState(() {})); // shows the Copy button while text is selected
@@ -207,12 +221,19 @@ class _TerminalScreenState extends State<TerminalScreen> with SingleTickerProvid
             Flexible(
               child: ListView(
                 shrinkWrap: true,
-                padding: const EdgeInsets.only(top: 12),
                 children: [
+                  // Headed like the agent sheet.
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(16, 0, 16, 10),
+                    child: Text('Recent messages',
+                        style: Theme.of(context)
+                            .textTheme
+                            .titleSmall
+                            ?.copyWith(color: Theme.of(context).colorScheme.onSurfaceVariant)),
+                  ),
                   for (final h in _history)
                     ListTile(
-                      dense: true,
-                      leading: const Icon(Icons.history, size: 18),
+                      leading: const Icon(Icons.history),
                       title: Text(h, maxLines: 2, overflow: TextOverflow.ellipsis),
                       onTap: () => pick(h),
                     ),
@@ -240,6 +261,32 @@ class _TerminalScreenState extends State<TerminalScreen> with SingleTickerProvid
         ),
       ),
     );
+  }
+
+  /// Takes the background most of the screen's edge cells have as [_background]: the top and bottom rows
+  /// and the outer columns, which meet the tab strip and the message bar. What's drawn in the middle (a
+  /// diff, a selection) doesn't sway it. The default counts as the theme's.
+  void _findBackground() {
+    final counts = <int, int>{};
+    final buffer = _terminal.buffer;
+    final first = buffer.height - buffer.viewHeight;
+    for (var y = first; y < buffer.height; y++) {
+      final line = buffer.lines[y];
+      final edgeRow = y == first || y == buffer.height - 1;
+      for (var x = 0; x < line.length; x++) {
+        if (!edgeRow && x != 0 && x != line.length - 1) continue;
+        final bg = line.getBackground(x);
+        counts[bg] = (counts[bg] ?? 0) + 1;
+      }
+    }
+    if (counts.isEmpty) return;
+    final top = counts.entries.reduce((a, b) => b.value > a.value ? b : a).key;
+    final background = switch (top & CellColor.typeMask) {
+      CellColor.normal => null,
+      CellColor.rgb => Color(top & CellColor.valueMask | 0xFF000000),
+      _ => _palette[top & CellColor.valueMask],
+    };
+    if (background != _background) setState(() => _background = background);
   }
 
   /// Back to the bottom of the pane's history. Herdr's own scrollback takes a scroll's line count but
@@ -314,11 +361,7 @@ class _TerminalScreenState extends State<TerminalScreen> with SingleTickerProvid
                 textColor: error,
                 leading: const Icon(Icons.close),
                 title: const Text('Close'),
-                onTap: () => run(() async {
-                  final ok = await WorkspaceDrawer.confirm(context, 'Close tab?',
-                      '"${tab.displayName}" and everything running in it will be closed.', 'Close');
-                  if (ok) client.closeTab(tab.id);
-                }),
+                onTap: () => run(() => client.closeTab(tab.id)),
               ),
             ],
           ),
@@ -327,9 +370,8 @@ class _TerminalScreenState extends State<TerminalScreen> with SingleTickerProvid
     );
   }
 
-  /// A tab's label, else its agents' names, else "Tab N".
-  String _tabName(TabModel tab) {
-    if (tab.label.isNotEmpty) return tab.label;
+  /// The names of the agents in a tab, or null if it runs none.
+  String? _tabAgents(TabModel tab) {
     final snapshot = widget.client.snapshot!;
     final panes = {
       for (final p in snapshot.panes)
@@ -339,7 +381,7 @@ class _TerminalScreenState extends State<TerminalScreen> with SingleTickerProvid
       for (final a in snapshot.agents)
         if (panes.contains(a.paneId)) a.name
     ];
-    return names.isEmpty ? tab.displayName : names.join(' · ');
+    return names.isEmpty ? null : names.join(' · ');
   }
 
   /// The workspace's tabs, and the current one's index in them.
@@ -528,10 +570,25 @@ class _TerminalScreenState extends State<TerminalScreen> with SingleTickerProvid
   Widget build(BuildContext context) {
     final client = widget.client;
     final scheme = Theme.of(context).colorScheme;
+    final background = _background ?? scheme.surface;
+    // The message bar's own buttons sit on the pane's background, which may be light: then they go dark.
+    final onBackground = ThemeData.estimateBrightnessForColor(background) == Brightness.dark
+        ? Theme.of(context)
+        : Theme.of(context).copyWith(
+            colorScheme: scheme.copyWith(
+                onSurfaceVariant: scheme.surfaceContainerHighest, primary: scheme.surfaceContainerHighest),
+          );
     final snapshot = client.snapshot;
     final pane = client.selectedPane;
     final workspace = snapshot?.workspaces.where((w) => w.id == pane?.workspaceId).firstOrNull;
     final connecting = client.machines.isNotEmpty && !client.connected && !client.isDisconnected;
+    if (pane?.tabId != _shownTabId) {
+      _shownTabId = pane?.tabId;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        final tab = _currentTab.currentContext;
+        if (tab != null) Scrollable.ensureVisible(tab, alignment: 0.5, duration: const Duration(milliseconds: 200));
+      });
+    }
 
     return Scaffold(
       key: _scaffoldKey,
@@ -539,13 +596,19 @@ class _TerminalScreenState extends State<TerminalScreen> with SingleTickerProvid
       drawer: WorkspaceDrawer(client: client),
       appBar: AppBar(
         titleSpacing: 0,
+        // Just tall enough for the title and branch, so the tabs sit right under them.
+        toolbarHeight: 48,
+        // The terminal isn't content scrolling under the bar: keep the bar's colour when it scrolls.
+        notificationPredicate: (_) => false,
+        // A step above the terminal's surface, so the current tab stands out joined to the terminal.
+        backgroundColor: scheme.surfaceContainer,
         // The workspace, with its git branch underneath, like the drawer.
         title: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Text(
               workspace?.displayName ?? 'Herdr',
-              style: Theme.of(context).textTheme.titleSmall,
+              style: Theme.of(context).textTheme.titleMedium,
               overflow: TextOverflow.ellipsis,
             ),
             if (workspace?.gitBranch != null)
@@ -577,7 +640,7 @@ class _TerminalScreenState extends State<TerminalScreen> with SingleTickerProvid
               label: ConstrainedBox(
                 constraints: const BoxConstraints(maxWidth: 110),
                 child: Text(
-                  client.machines.isEmpty ? 'No machine' : client.nameOf(client.machine),
+                  client.machines.isEmpty ? 'No machines' : client.nameOf(client.machine),
                   overflow: TextOverflow.ellipsis,
                 ),
               ),
@@ -585,51 +648,79 @@ class _TerminalScreenState extends State<TerminalScreen> with SingleTickerProvid
             ),
           ),
         ],
-        // The workspace's tabs, as M3 scrollable tabs, each with its agent's status. Long-press one to
-        // rename or close it. Unlabelled tabs are named after their agents.
+        // The workspace's tabs, like Vivaldi's: a thin strip of tabs as wide as their names (64-200dp),
+        // scrolling when they overflow. The current one is rounded on top and takes the terminal's color,
+        // joined to it below. Each shows its label and its agents. Long-press a tab to rename or close it.
         bottom: PreferredSize(
-          preferredSize: const Size.fromHeight(52),
-          child: Column(
+          preferredSize: const Size.fromHeight(32),
+          // While connecting, a thin progress bar over the strip's top edge, taking no room of its own.
+          child: Stack(
             children: [
               SizedBox(
-                height: 48,
+                height: 32,
                 child: switch (_tabs()) {
                   (final tabs, final i) when i >= 0 => Row(
                       children: [
                         Expanded(
-                          // Rebuilt when the tabs or the current one change, so it opens scrolled to the current one.
-                          child: DefaultTabController(
-                            key: ValueKey([for (final t in tabs) t.id, i].join(',')),
-                            length: tabs.length,
-                            initialIndex: i,
-                            child: TabBar(
-                              isScrollable: true,
-                              tabAlignment: TabAlignment.start,
-                              onTap: (j) => client.selectTab(tabs[j].id),
-                              tabs: [
-                                for (final t in tabs)
-                                  GestureDetector(
-                                    onLongPress: () => _tabActions(t),
-                                    child: Tab(
-                                      child: Row(
-                                        mainAxisSize: MainAxisSize.min,
-                                        children: [
-                                          StatusDot(t.agentStatus),
-                                          const SizedBox(width: 8),
-                                          ConstrainedBox(
-                                            constraints: const BoxConstraints(maxWidth: 120),
-                                            child: Text(_tabName(t), overflow: TextOverflow.ellipsis),
+                          child: SingleChildScrollView(
+                            scrollDirection: Axis.horizontal,
+                            child: Row(
+                              crossAxisAlignment: CrossAxisAlignment.stretch,
+                              children: [
+                                for (final (j, t) in tabs.indexed)
+                                  if (_tabAgents(t) case final agents)
+                                    Container(
+                                      key: j == i ? _currentTab : null,
+                                      constraints: const BoxConstraints(minWidth: 64, maxWidth: 200),
+                                      decoration: j == i
+                                          ? BoxDecoration(
+                                              color: background,
+                                              borderRadius: const BorderRadius.vertical(top: Radius.circular(10)),
+                                            )
+                                          : null,
+                                      child: InkWell(
+                                        customBorder: const RoundedRectangleBorder(
+                                            borderRadius: BorderRadius.vertical(top: Radius.circular(10))),
+                                        onTap: () => client.selectTab(t.id),
+                                        onLongPress: () => _tabActions(t),
+                                        child: Padding(
+                                          padding: const EdgeInsets.symmetric(horizontal: 10),
+                                          child: Row(
+                                            mainAxisSize: MainAxisSize.min,
+                                            children: [
+                                              StatusDot(t.agentStatus),
+                                              const SizedBox(width: 8),
+                                              Flexible(
+                                                child: Text.rich(
+                                                  TextSpan(children: [
+                                                    TextSpan(
+                                                        text: t.label.isNotEmpty ? t.label : agents ?? t.displayName),
+                                                    if (t.label.isNotEmpty && agents != null)
+                                                      TextSpan(
+                                                        text: ' · $agents',
+                                                        style: TextStyle(color: scheme.onSurfaceVariant),
+                                                      ),
+                                                  ]),
+                                                  maxLines: 1,
+                                                  overflow: TextOverflow.ellipsis,
+                                                  style: Theme.of(context).textTheme.labelLarge?.copyWith(
+                                                      color: j == i ? scheme.onSurface : scheme.onSurfaceVariant),
+                                                ),
+                                              ),
+                                            ],
                                           ),
-                                        ],
+                                        ),
                                       ),
                                     ),
-                                  ),
                               ],
                             ),
                           ),
                         ),
                         IconButton(
                           tooltip: 'New tab',
+                          padding: EdgeInsets.zero,
+                          constraints: const BoxConstraints.tightFor(width: 44, height: 32),
+                          iconSize: 20,
                           icon: const Icon(Icons.add),
                           onPressed: () => client.createTab(tabs[i].workspaceId),
                         ),
@@ -638,7 +729,7 @@ class _TerminalScreenState extends State<TerminalScreen> with SingleTickerProvid
                   _ => null,
                 },
               ),
-              SizedBox(height: 4, child: connecting ? const LinearProgressIndicator() : null),
+              if (connecting) const LinearProgressIndicator(minHeight: 2),
             ],
           ),
         ),
@@ -706,6 +797,32 @@ class _TerminalScreenState extends State<TerminalScreen> with SingleTickerProvid
                                     key: _view,
                                     controller: _controller,
                                     backgroundOpacity: 1.0,
+                                    // xterm's default colours, on the app's surface.
+                                    theme: TerminalTheme(
+                                      cursor: _defaultTheme.cursor,
+                                      selection: _defaultTheme.selection,
+                                      foreground: scheme.onSurface,
+                                      background: scheme.surface,
+                                      black: _defaultTheme.black,
+                                      white: _defaultTheme.white,
+                                      red: _defaultTheme.red,
+                                      green: _defaultTheme.green,
+                                      yellow: _defaultTheme.yellow,
+                                      blue: _defaultTheme.blue,
+                                      magenta: _defaultTheme.magenta,
+                                      cyan: _defaultTheme.cyan,
+                                      brightBlack: _defaultTheme.brightBlack,
+                                      brightRed: _defaultTheme.brightRed,
+                                      brightGreen: _defaultTheme.brightGreen,
+                                      brightYellow: _defaultTheme.brightYellow,
+                                      brightBlue: _defaultTheme.brightBlue,
+                                      brightMagenta: _defaultTheme.brightMagenta,
+                                      brightCyan: _defaultTheme.brightCyan,
+                                      brightWhite: _defaultTheme.brightWhite,
+                                      searchHitBackground: _defaultTheme.searchHitBackground,
+                                      searchHitBackgroundCurrent: _defaultTheme.searchHitBackgroundCurrent,
+                                      searchHitForeground: _defaultTheme.searchHitForeground,
+                                    ),
                                     textStyle: TerminalStyle(
                                       fontSize: client.fontSize,
                                       fontFamily: 'MesloLGS Nerd Font Mono',
@@ -749,23 +866,27 @@ class _TerminalScreenState extends State<TerminalScreen> with SingleTickerProvid
                         ),
             ),
             // Swipe sideways here to move between agents in herdr's order. The keyboard
-            // button swaps the message box for the control keys and back.
+            // button swaps the message box for the control keys and back. It takes the terminal's background.
             if (!client.isDisconnected)
               Listener(
                 onPointerDown: _trackSwipe,
                 onPointerMove: _trackSwipe,
                 onPointerUp: _trackSwipe,
                 onPointerCancel: _trackSwipe,
-                child: Padding(
+                child: Container(
+                  color: background,
                   padding: const EdgeInsets.fromLTRB(0, 4, 0, 6),
                   child: Row(
                     children: [
-                      IconButton(
-                        tooltip: client.keyBar ? 'Message box' : 'Control keys',
-                        isSelected: client.keyBar,
-                        icon: const Icon(Icons.keyboard_outlined),
-                        selectedIcon: const Icon(Icons.keyboard_hide_outlined),
-                        onPressed: () => client.setKeyBar(!client.keyBar),
+                      Theme(
+                        data: onBackground,
+                        child: IconButton(
+                          tooltip: client.keyBar ? 'Message box' : 'Control keys',
+                          isSelected: client.keyBar,
+                          icon: const Icon(Icons.keyboard_outlined),
+                          selectedIcon: const Icon(Icons.keyboard_hide_outlined),
+                          onPressed: () => client.setKeyBar(!client.keyBar),
+                        ),
                       ),
                       Expanded(
                         child: client.keyBar
@@ -786,7 +907,7 @@ class _TerminalScreenState extends State<TerminalScreen> with SingleTickerProvid
                                 decoration: InputDecoration(
                                   hintText: 'Message terminal…',
                                   filled: true,
-                                  fillColor: scheme.surfaceContainerHigh,
+                                  fillColor: scheme.secondaryContainer,
                                   isDense: true,
                                   contentPadding: const EdgeInsets.symmetric(vertical: 10),
                                   border: OutlineInputBorder(
@@ -810,7 +931,7 @@ class _TerminalScreenState extends State<TerminalScreen> with SingleTickerProvid
                                 ),
                               ),
                       ),
-                      AgentsButton(client: client),
+                      Theme(data: onBackground, child: AgentsButton(client: client)),
                     ],
                   ),
                 ),

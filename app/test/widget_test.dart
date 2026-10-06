@@ -347,9 +347,10 @@ void main() {
       expect(inSheet('Rename'), findsOneWidget);
       expect(inSheet('Close'), findsOneWidget);
 
+      // Closes straight away, like closing an agent.
       await tester.tap(inSheet('Close'));
       await settle();
-      expect(find.text('Close tab?'), findsOneWidget);
+      expect(find.byType(BottomSheet), findsNothing);
     });
 
     testWidgets('The top bar shows the workspace and its tabs; tapping a tab shows it', (tester) async {
@@ -360,13 +361,12 @@ void main() {
         ..selectPane('w1:p1');
       await tester.pumpWidget(MaterialApp(home: TerminalScreen(client: client)));
 
-      // The workspace and its tabs, like a browser's; no agent names.
+      // The workspace and its tabs, like a browser's, each with its agents.
       Finder inBar(String t) => find.descendant(of: find.byType(AppBar), matching: find.text(t));
       expect(inBar('backend'), findsOneWidget);
       expect(inBar('backend-branch'), findsOneWidget);
-      expect(inBar('api'), findsOneWidget);
+      expect(inBar('api · helper · coder'), findsOneWidget);
       expect(inBar('db'), findsOneWidget);
-      expect(inBar('coder'), findsNothing);
       expect(find.byType(TextField), findsOneWidget);
 
       await tester.tap(inBar('db'));
