@@ -604,7 +604,7 @@ void main() {
       SharedPreferences.setMockInitialValues({'last_seen_changelog': changelog.first.$1});
       final client = HerdrClientService()
         ..setMachines(['10.0.0.1:7788'], [])
-        ..configure(host: '10.0.0.1', port: 7788, connect: false);
+        ..configure('10.0.0.1:7788', connect: false);
 
       final snapshot = SessionSnapshot.fromJson({
         'version': '0.9.3',
