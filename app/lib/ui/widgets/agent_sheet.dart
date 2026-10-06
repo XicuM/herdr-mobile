@@ -19,52 +19,75 @@ void showAgentSheet(BuildContext context, HerdrClientService client) {
         final wsName = {for (final w in snapshot?.workspaces ?? <WorkspaceModel>[]) w.id: w.displayName};
         final tabName = {for (final t in snapshot?.tabs ?? <TabModel>[]) t.id: t.displayName};
 
-        return SafeArea(
-          child: ConstrainedBox(
-            constraints: BoxConstraints(maxHeight: MediaQuery.of(sheetContext).size.height * 0.7),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                Padding(
-                  padding: const EdgeInsets.fromLTRB(24, 0, 16, 8),
-                  child: Text('Agents', style: Theme.of(sheetContext).textTheme.titleMedium),
-                ),
-                if (agents.isEmpty)
-                  const Padding(padding: EdgeInsets.fromLTRB(24, 8, 24, 24), child: Text('No agents running.')),
-                Flexible(
-                  child: ListView(
-                    shrinkWrap: true,
-                    padding: const EdgeInsets.only(bottom: 8),
-                    children: [
-                      for (final agent in [
-                        for (final s in _urgency) ...agents.where((a) => a.status == s),
-                        ...agents.where((a) => !_urgency.contains(a.status)),
-                      ])
-                        Padding(
-                          padding: const EdgeInsets.symmetric(horizontal: 12),
-                          child: ListTile(
-                            selected: agent.paneId == client.selectedPaneId,
-                            leading: StatusDot(agent.status),
-                            minLeadingWidth: 8,
-                            title: Text(agent.name, overflow: TextOverflow.ellipsis),
-                            subtitle: Text(
-                              [wsName[paneById[agent.paneId]?.workspaceId], tabName[paneById[agent.paneId]?.tabId]]
-                                  .whereType<String>()
-                                  .join(' · '),
-                              overflow: TextOverflow.ellipsis,
-                            ),
-                            trailing: Text(AgentStatus.fromString(agent.status).label),
-                            onTap: () {
-                              client.selectPane(agent.paneId);
-                              Navigator.pop(sheetContext);
-                            },
-                          ),
-                        ),
-                    ],
+        final scheme = Theme.of(sheetContext).colorScheme;
+        // Pills, like the workspace drawer's destinations.
+        return ListTileTheme.merge(
+          shape: const StadiumBorder(),
+          selectedColor: scheme.onSecondaryContainer,
+          selectedTileColor: scheme.secondaryContainer,
+          child: SafeArea(
+            child: ConstrainedBox(
+              constraints: BoxConstraints(maxHeight: MediaQuery.of(sheetContext).size.height * 0.7),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(24, 0, 16, 8),
+                    child: Text('Agents', style: Theme.of(sheetContext).textTheme.titleMedium),
                   ),
-                ),
-              ],
+                  if (agents.isEmpty)
+                    const Padding(padding: EdgeInsets.fromLTRB(24, 8, 24, 24), child: Text('No agents running.')),
+                  Flexible(
+                    child: ListView(
+                      shrinkWrap: true,
+                      padding: const EdgeInsets.only(bottom: 8),
+                      children: [
+                        for (final agent in [
+                          for (final s in _urgency) ...agents.where((a) => a.status == s),
+                          ...agents.where((a) => !_urgency.contains(a.status)),
+                        ])
+                          Padding(
+                            padding: const EdgeInsets.symmetric(horizontal: 12),
+                            child: ListTile(
+                              selected: agent.paneId == client.selectedPaneId,
+                              leading: StatusDot(agent.status),
+                              minLeadingWidth: 8,
+                              title: Text(agent.name, overflow: TextOverflow.ellipsis),
+                              subtitle: Text(
+                                [wsName[paneById[agent.paneId]?.workspaceId], tabName[paneById[agent.paneId]?.tabId]]
+                                    .whereType<String>()
+                                    .join(' · '),
+                                overflow: TextOverflow.ellipsis,
+                              ),
+                              trailing: Row(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  IconButton(
+                                    tooltip: client.isMuted(agent.paneId) ? 'Unmute' : 'Mute',
+                                    isSelected: client.isMuted(agent.paneId),
+                                    icon: const Icon(Icons.notifications_none),
+                                    selectedIcon: const Icon(Icons.notifications_off),
+                                    onPressed: () => client.setMuted(agent.paneId, !client.isMuted(agent.paneId)),
+                                  ),
+                                  IconButton(
+                                    tooltip: 'Close',
+                                    icon: const Icon(Icons.close),
+                                    onPressed: () => client.closePane(agent.paneId),
+                                  ),
+                                ],
+                              ),
+                              onTap: () {
+                                client.selectPane(agent.paneId);
+                                Navigator.pop(sheetContext);
+                              },
+                            ),
+                          ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
             ),
           ),
         );

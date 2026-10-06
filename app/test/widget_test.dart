@@ -1,6 +1,5 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:herdr_mobile/models/session.dart';
 import 'package:herdr_mobile/models/agent_status.dart';
@@ -198,7 +197,7 @@ void main() {
 
     // backend: tab "api" split into p1 (coder, blocked) and p2 (helper, working), tab "db" (p3, blocked).
     // frontend: one tab (p4, ui, blocked).
-    SessionSnapshot twoWorkspaces({String focusedPane = 'w1:p1'}) {
+    SessionSnapshot twoWorkspaces() {
       Map<String, dynamic> ws(String id, String label, int tabs, String active) => {
             'workspace_id': id,
             'number': 1,
@@ -224,7 +223,7 @@ void main() {
             'pane_id': id,
             'workspace_id': ws,
             'tab_id': tab,
-            'focused': id == focusedPane,
+            'focused': id == 'w1:p1',
             'cwd': '/',
             'agent_status': status,
           };
@@ -299,9 +298,35 @@ void main() {
       expect(client.selectedPaneId, 'w2:p4');
     });
 
-    testWidgets(
-        'Swiping up on the message bar lists the workspace\'s tabs and split panes, with new, rename and close buttons',
-        (tester) async {
+    testWidgets('Tabs that overflow the top bar are reached by sliding the strip', (tester) async {
+      SharedPreferences.setMockInitialValues({'last_seen_changelog': changelog.first.$1});
+      final client = HerdrClientService()
+        ..setMachines(['100.1.2.3:7788'], [])
+        ..setSnapshotForTesting(SessionSnapshot.fromJson({
+          'workspaces': [
+            {'workspace_id': 'w1', 'label': 'backend', 'active_tab_id': 'w1:t0'}
+          ],
+          'tabs': [
+            for (var n = 0; n < 12; n++) {'tab_id': 'w1:t$n', 'workspace_id': 'w1', 'number': n + 1, 'label': 'tab$n'}
+          ],
+          'panes': [
+            for (var n = 0; n < 12; n++) {'pane_id': 'w1:p$n', 'workspace_id': 'w1', 'tab_id': 'w1:t$n', 'focused': n == 0}
+          ],
+        }))
+        ..selectPane('w1:p0');
+      await tester.pumpWidget(MaterialApp(home: TerminalScreen(client: client)));
+      await tester.pump(const Duration(seconds: 1));
+
+      final last = find.text('tab11').hitTestable();
+      expect(last, findsNothing); // off the edge
+      await tester.drag(find.text('tab1'), const Offset(-2000, 0));
+      await tester.pump(const Duration(seconds: 1));
+      await tester.tap(last);
+      await tester.pump();
+      expect(client.selectedPane?.tabId, 'w1:t11');
+    });
+
+    testWidgets('Long-pressing a tab offers to rename or close it', (tester) async {
       SharedPreferences.setMockInitialValues({'last_seen_changelog': changelog.first.$1});
       final client = HerdrClientService()
         ..setMachines(['100.1.2.3:7788'], [])
@@ -315,21 +340,16 @@ void main() {
         await tester.pump(const Duration(seconds: 1));
       }
 
+      await tester.longPress(find.descendant(of: find.byType(AppBar), matching: find.text('db')));
+      await settle();
       Finder inSheet(String text) => find.descendant(of: find.byType(BottomSheet), matching: find.text(text));
-      await tester.timedDrag(find.byType(TextField), const Offset(0, -150), const Duration(milliseconds: 200));
-      await settle();
-      expect(find.text('New tab'), findsOneWidget);
-      expect(inSheet('api · coder'), findsOneWidget);
-      expect(inSheet('db'), findsOneWidget); // no agent
       expect(inSheet('db'), findsOneWidget);
-      expect(inSheet('helper'), findsOneWidget); // split pane of the current tab
+      expect(inSheet('Rename'), findsOneWidget);
+      expect(inSheet('Close'), findsOneWidget);
 
-      expect(find.byTooltip('Rename tab'), findsNWidgets(2));
-      expect(find.byTooltip('Close tab'), findsNWidgets(2));
-
-      await tester.tap(inSheet('db'));
+      await tester.tap(inSheet('Close'));
       await settle();
-      expect(client.selectedPaneId, 'w1:p3');
+      expect(find.text('Close tab?'), findsOneWidget);
     });
 
     testWidgets('The top bar shows the workspace and its tabs; tapping a tab shows it', (tester) async {
@@ -343,6 +363,7 @@ void main() {
       // The workspace and its tabs, like a browser's; no agent names.
       Finder inBar(String t) => find.descendant(of: find.byType(AppBar), matching: find.text(t));
       expect(inBar('backend'), findsOneWidget);
+      expect(inBar('backend-branch'), findsOneWidget);
       expect(inBar('api'), findsOneWidget);
       expect(inBar('db'), findsOneWidget);
       expect(inBar('coder'), findsNothing);
@@ -360,7 +381,7 @@ void main() {
       await tester.pump();
       expect(find.byType(TextField), findsOneWidget);
 
-      await tester.tap(inBar('backend'));
+      await tester.tap(find.byTooltip('Open navigation menu'));
       await tester.pump(const Duration(seconds: 1)); // the Connecting spinner never settles
       expect(find.text('Workspaces'), findsOneWidget);
     });
@@ -421,20 +442,6 @@ void main() {
       await tester.pump();
       expect(copied, 'hello');
       expect(find.text('Copy'), findsNothing);
-    });
-
-    testWidgets('Tabs sheet names the agent of a tab whose panes herdr does not focus', (tester) async {
-      SharedPreferences.setMockInitialValues({'last_seen_changelog': changelog.first.$1});
-      final client = HerdrClientService()
-        ..setMachines(['100.1.2.3:7788'], [])
-        ..setSnapshotForTesting(twoWorkspaces(focusedPane: 'w1:p3'))
-        ..selectPane('w1:p3');
-      await tester.pumpWidget(MaterialApp(home: TerminalScreen(client: client)));
-      await tester.timedDrag(find.byType(TextField), const Offset(0, -150), const Duration(milliseconds: 200));
-      await tester.pump();
-      await tester.pump(const Duration(seconds: 1));
-      final inSheet = find.descendant(of: find.byType(BottomSheet), matching: find.textContaining('api · '));
-      expect(inSheet, findsOneWidget);
     });
 
     test('Machines connect and disconnect independently of the one on screen', () {

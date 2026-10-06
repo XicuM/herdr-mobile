@@ -34,6 +34,9 @@ class HerdrClientService extends ChangeNotifier {
   /// Machines the user disconnected; every other saved machine stays connected.
   Set<String> _off = {};
   bool _alerts = false;
+
+  /// Panes that never raise an alert, as `host:port/pane_id`.
+  Set<String> _muted = {};
   bool _keyBar = false;
   bool _started = false;
   bool _disposed = false;
@@ -112,6 +115,19 @@ class HerdrClientService extends ChangeNotifier {
     SharedPreferences.getInstance().then((p) => p.setBool('background_alerts', on));
     notifyListeners();
   }
+
+  bool isMuted(String paneId) => _muted.contains('$machine/$paneId');
+
+  /// Silences, or unsilences, the alerts of [paneId] on the active machine.
+  void setMuted(String paneId, bool on) {
+    final key = '$machine/$paneId';
+    _muted = on ? {..._muted, key} : ({..._muted}..remove(key));
+    SharedPreferences.getInstance().then((p) => p.setStringList('muted_panes', _muted.toList()));
+    notifyListeners();
+  }
+
+  /// [muted] as stored in prefs.
+  void setMutedPanes(List<String> muted) => _muted = muted.toSet();
 
   /// Whether the bottom bar shows the control keys in place of the message box.
   bool get keyBar => _keyBar;
@@ -408,7 +424,7 @@ class HerdrClientService extends ChangeNotifier {
       final seen = completions[pane.id] ?? wasAgent?.completionSeq ?? 0;
       final seq = agent?.completionSeq ?? 0;
       if (seq > seen) completions[pane.id] = seq;
-      if (watching && pane.id == selectedPaneId) continue;
+      if (watching && pane.id == selectedPaneId || _muted.contains('$m/${pane.id}')) continue;
       final blocked = was != null && was.agentStatus != 'blocked' && pane.agentStatus == 'blocked';
       final finished = wasAgent != null && seq > seen;
       if (!blocked && !finished) continue;
@@ -483,6 +499,8 @@ class HerdrClientService extends ChangeNotifier {
   Future<void> createTab(String workspaceId) => _create('create tab', '/api/tab', {'workspace_id': workspaceId});
 
   Future<void> closeTab(String tabId) => _request('close tab', 'DELETE', '/api/tab/$tabId');
+
+  Future<void> closePane(String paneId) => _request('close agent', 'DELETE', '/api/pane/$paneId');
 
   Future<void> renameTab(String tabId, String label) =>
       _request('rename tab', 'POST', '/api/tab/$tabId/rename', body: {'label': label});

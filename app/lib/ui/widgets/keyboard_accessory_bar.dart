@@ -31,15 +31,13 @@ class _KeyboardAccessoryBarState extends State<KeyboardAccessoryBar> {
     super.dispose();
   }
 
-  /// M3 tonal buttons, compacted to fit nine in a row. CTRL turns filled while armed; ^C uses the
-  /// error container. [repeat] keys fire again every 60 ms while held.
+  /// M3 tonal buttons, drawn small to fit nine in a row but each still a 48 dp tap target. CTRL turns
+  /// filled while armed; ^C uses the error container. [repeat] keys fire again every 60 ms while held.
   Widget _key(String label, VoidCallback onTap, {bool repeat = false, bool active = false, bool danger = false}) {
     final scheme = Theme.of(context).colorScheme;
     final style = FilledButton.styleFrom(
       minimumSize: const Size(0, 34),
       padding: EdgeInsets.zero,
-      tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
       textStyle: Theme.of(context).textTheme.labelMedium,
       backgroundColor: danger ? scheme.errorContainer : null,
       foregroundColor: danger ? scheme.onErrorContainer : null,
@@ -73,21 +71,18 @@ class _KeyboardAccessoryBarState extends State<KeyboardAccessoryBar> {
   @override
   Widget build(BuildContext context) {
     final w = widget;
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 3),
-      child: Row(
-        children: [
-          _key('ESC', () => w.onKey(TerminalKey.escape)),
-          _key('^C', () => w.onText('\x03'), danger: true),
-          _key('TAB', () => w.onKey(TerminalKey.tab)),
-          _key('⇧TAB', () => w.onKey(TerminalKey.tab, shift: true)),
-          _key('CTRL', w.onCtrl, active: w.ctrl),
-          _key('←', () => w.onKey(TerminalKey.arrowLeft), repeat: true),
-          _key('↓', () => w.onKey(TerminalKey.arrowDown), repeat: true),
-          _key('↑', () => w.onKey(TerminalKey.arrowUp), repeat: true),
-          _key('→', () => w.onKey(TerminalKey.arrowRight), repeat: true),
-        ],
-      ),
+    return Row(
+      children: [
+        _key('ESC', () => w.onKey(TerminalKey.escape)),
+        _key('^C', () => w.onText('\x03'), danger: true),
+        _key('TAB', () => w.onKey(TerminalKey.tab)),
+        _key('⇧TAB', () => w.onKey(TerminalKey.tab, shift: true)),
+        _key('CTRL', w.onCtrl, active: w.ctrl),
+        _key('←', () => w.onKey(TerminalKey.arrowLeft), repeat: true),
+        _key('↓', () => w.onKey(TerminalKey.arrowDown), repeat: true),
+        _key('↑', () => w.onKey(TerminalKey.arrowUp), repeat: true),
+        _key('→', () => w.onKey(TerminalKey.arrowRight), repeat: true),
+      ],
     );
   }
 }

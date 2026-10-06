@@ -11,7 +11,7 @@ import '../../services/pty_channel.dart';
 import '../widgets/agent_sheet.dart';
 import '../widgets/workspace_drawer.dart';
 import '../widgets/keyboard_accessory_bar.dart';
-import '../widgets/tab_sheet.dart';
+import '../widgets/machine_drawer.dart';
 import 'settings_screen.dart';
 
 /// Offered below the message history; picking one fills the message box.
@@ -55,10 +55,6 @@ class _TerminalScreenState extends State<TerminalScreen> with SingleTickerProvid
   Duration _swipeTime = Duration.zero;
   bool _swiping = false;
 
-  // The current tab in the top bar's strip, scrolled into view when it changes.
-  final _currentTab = GlobalKey();
-  String? _shownTabId;
-
   @override
   void initState() {
     super.initState();
@@ -98,9 +94,9 @@ class _TerminalScreenState extends State<TerminalScreen> with SingleTickerProvid
                   'It listens on port 7788 on the computer\'s Tailscale IP.\n'
                   '2. Make sure this phone is on the same Tailscale network.\n'
                   '3. Add each computer here as a machine, using its Tailscale IP or MagicDNS name.\n\n'
-                  'Tap the title to pick a workspace. Swipe the top bar sideways to change tabs, or down for all '
-                  'of them; swipe the message bar sideways to go from agent to agent. The circle right of the '
-                  'message box lists every agent. Switch machines from the chip at the top right. Type messages '
+                  'The menu button at the top left lists workspaces and machines. The workspace\'s tabs sit under '
+                  'the top bar; long-press one to rename or close it. Swipe the message bar sideways to go from '
+                  'agent to agent. The circle right of the message box lists every agent. Type messages '
                   'in the box at the bottom, with autocorrect and voice; the history button brings back earlier '
                   'ones. Pinch or use the volume keys to change the font size.',
                 )
@@ -118,7 +114,7 @@ class _TerminalScreenState extends State<TerminalScreen> with SingleTickerProvid
         ),
         actions: [
           if (firstRun)
-            FilledButton(onPressed: () => Navigator.pop(context, true), child: const Text('Add a machine'))
+            TextButton(onPressed: () => Navigator.pop(context, true), child: const Text('Add a machine'))
           else
             TextButton(onPressed: () => Navigator.pop(context), child: const Text('OK')),
         ],
@@ -169,9 +165,9 @@ class _TerminalScreenState extends State<TerminalScreen> with SingleTickerProvid
   }
 
   /// Sends the message box as one paste (so multi-line text doesn't submit line by line), then Enter.
-  /// An empty box just sends Enter.
-  void _sendMessage() {
-    final text = _message.text;
+  /// An empty box just sends Enter. A [quickReply] is sent in its place, leaving the box and history be.
+  void _sendMessage([String? quickReply]) {
+    final text = quickReply ?? _message.text;
     if (_ptyChannel == null || !widget.client.connected) {
       _showError('Not connected to terminal');
       return;
@@ -188,13 +184,14 @@ class _TerminalScreenState extends State<TerminalScreen> with SingleTickerProvid
         if (_ptyChannel == channel) channel?.sendInput('\r');
       });
     }
+    if (quickReply != null) return;
     _message.clear();
     if (text.trim().isEmpty) return;
     _history = [text, ..._history.where((h) => h != text)].take(30).toList();
     SharedPreferences.getInstance().then((p) => p.setStringList('message_history', _history));
   }
 
-  /// Quick replies and earlier messages; picking one puts it in the message box to edit or send.
+  /// Quick replies, sent as soon as picked, and earlier messages, which go in the message box to edit or send.
   void _showHistory() {
     void pick(String text) {
       _message.value = TextEditingValue(text: text, selection: TextSelection.collapsed(offset: text.length));
@@ -227,7 +224,16 @@ class _TerminalScreenState extends State<TerminalScreen> with SingleTickerProvid
               padding: const EdgeInsets.all(12),
               child: Wrap(
                 spacing: 8,
-                children: [for (final r in _quickReplies) ActionChip(label: Text(r), onPressed: () => pick(r))],
+                children: [
+                  for (final r in _quickReplies)
+                    ActionChip(
+                      label: Text(r),
+                      onPressed: () {
+                        Navigator.pop(context);
+                        _sendMessage(r);
+                      },
+                    ),
+                ],
               ),
             ),
           ],
@@ -267,10 +273,7 @@ class _TerminalScreenState extends State<TerminalScreen> with SingleTickerProvid
       return;
     }
     _swipeFrom = null;
-    if (!_swiping) {
-      if (e is PointerUpEvent && d.dy < -48 && d.dy.abs() > d.dx.abs() * 2) showTabSheet(context, widget.client);
-      return;
-    }
+    if (!_swiping) return;
     _swiping = false;
     final ms = (e.timeStamp - _swipeTime).inMilliseconds.clamp(1, 1 << 30);
     final flung = d.dx.abs() > 40 && d.dx.abs() / ms > 0.5;
@@ -279,6 +282,64 @@ class _TerminalScreenState extends State<TerminalScreen> with SingleTickerProvid
     } else {
       _slide.animateTo(0, duration: const Duration(milliseconds: 150), curve: Curves.easeOut);
     }
+  }
+
+  void _tabActions(TabModel tab) {
+    final client = widget.client;
+    final error = Theme.of(context).colorScheme.error;
+    showModalBottomSheet(
+      context: context,
+      builder: (sheetContext) {
+        void run(VoidCallback action) {
+          Navigator.pop(sheetContext);
+          action();
+        }
+
+        return SafeArea(
+          child: ListView(
+            shrinkWrap: true,
+            children: [
+              ListTile(title: Text(tab.displayName, style: Theme.of(sheetContext).textTheme.titleMedium)),
+              const Divider(),
+              ListTile(
+                leading: const Icon(Icons.edit_outlined),
+                title: const Text('Rename'),
+                onTap: () => run(() async {
+                  final name = await WorkspaceDrawer.prompt(context, 'Rename tab', 'Tab name', initial: tab.label);
+                  if (name != null) client.renameTab(tab.id, name);
+                }),
+              ),
+              ListTile(
+                iconColor: error,
+                textColor: error,
+                leading: const Icon(Icons.close),
+                title: const Text('Close'),
+                onTap: () => run(() async {
+                  final ok = await WorkspaceDrawer.confirm(context, 'Close tab?',
+                      '"${tab.displayName}" and everything running in it will be closed.', 'Close');
+                  if (ok) client.closeTab(tab.id);
+                }),
+              ),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
+  /// A tab's label, else its agents' names, else "Tab N".
+  String _tabName(TabModel tab) {
+    if (tab.label.isNotEmpty) return tab.label;
+    final snapshot = widget.client.snapshot!;
+    final panes = {
+      for (final p in snapshot.panes)
+        if (p.tabId == tab.id) p.id
+    };
+    final names = [
+      for (final a in snapshot.agents)
+        if (panes.contains(a.paneId)) a.name
+    ];
+    return names.isEmpty ? tab.displayName : names.join(' · ');
   }
 
   /// The workspace's tabs, and the current one's index in them.
@@ -471,72 +532,116 @@ class _TerminalScreenState extends State<TerminalScreen> with SingleTickerProvid
     final pane = client.selectedPane;
     final workspace = snapshot?.workspaces.where((w) => w.id == pane?.workspaceId).firstOrNull;
     final connecting = client.machines.isNotEmpty && !client.connected && !client.isDisconnected;
-    if (pane?.tabId != _shownTabId) {
-      _shownTabId = pane?.tabId;
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        final tab = _currentTab.currentContext;
-        if (tab != null) Scrollable.ensureVisible(tab, alignment: 0.5, duration: const Duration(milliseconds: 200));
-      });
-    }
 
     return Scaffold(
       key: _scaffoldKey,
+      // The app bar's own menu button opens it: workspaces and machines.
       drawer: WorkspaceDrawer(client: client),
       appBar: AppBar(
-        automaticallyImplyLeading: false,
         titleSpacing: 0,
-        title: Row(
+        // The workspace, with its git branch underneath, like the drawer.
+        title: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            // The workspace; tap for all workspaces and machines. Up to half the bar, the tabs get the rest.
-            ConstrainedBox(
-              constraints: BoxConstraints(maxWidth: MediaQuery.sizeOf(context).width / 2),
-              child: TextButton.icon(
-                onPressed: () => _scaffoldKey.currentState?.openDrawer(),
-                icon: const Icon(Icons.menu),
-                label: Text(workspace?.displayName ?? 'Herdr', overflow: TextOverflow.ellipsis),
-              ),
+            Text(
+              workspace?.displayName ?? 'Herdr',
+              style: Theme.of(context).textTheme.titleSmall,
+              overflow: TextOverflow.ellipsis,
             ),
-            // The workspace's tabs, like a browser's, in their agents' colors. Long-press for the tab sheet.
-            if (_tabs() case (final tabs, final i) when i >= 0)
-              Expanded(
-                child: SingleChildScrollView(
-                  scrollDirection: Axis.horizontal,
-                  padding: const EdgeInsets.symmetric(horizontal: 4),
-                  child: Row(
-                    children: [
-                      for (final (j, t) in tabs.indexed)
-                        Padding(
-                          key: j == i ? _currentTab : null,
-                          padding: const EdgeInsets.symmetric(horizontal: 2),
-                          child: GestureDetector(
-                            onLongPress: () => showTabSheet(context, client),
-                            child: ChoiceChip(
-                              selected: j == i,
-                              showCheckmark: false,
-                              visualDensity: VisualDensity.compact,
-                              avatar: StatusDot(t.agentStatus),
-                              label: ConstrainedBox(
-                                constraints: const BoxConstraints(maxWidth: 120),
-                                child: Text(t.displayName, overflow: TextOverflow.ellipsis),
-                              ),
-                              onSelected: (_) => client.selectTab(t.id),
-                            ),
-                          ),
-                        ),
-                      IconButton(
-                        tooltip: 'New tab',
-                        icon: const Icon(Icons.add),
-                        onPressed: () => client.createTab(tabs[i].workspaceId),
-                      ),
-                    ],
-                  ),
-                ),
+            if (workspace?.gitBranch != null)
+              Text(
+                workspace!.gitBranch!,
+                style: Theme.of(context).textTheme.bodySmall?.copyWith(color: scheme.onSurfaceVariant),
+                overflow: TextOverflow.ellipsis,
               ),
           ],
         ),
-        bottom: connecting
-            ? const PreferredSize(preferredSize: Size.fromHeight(4), child: LinearProgressIndicator())
-            : null,
+        actions: [
+          // The machine on screen; tap for the drawer, whose foot lists all machines.
+          Padding(
+            padding: const EdgeInsets.only(right: 8),
+            child: ActionChip(
+              tooltip: 'Machines',
+              visualDensity: VisualDensity.compact,
+              side: BorderSide.none,
+              backgroundColor: scheme.secondaryContainer,
+              labelStyle: TextStyle(color: scheme.onSecondaryContainer),
+              avatar: Center(
+                child: Container(
+                  width: 8,
+                  height: 8,
+                  decoration:
+                      BoxDecoration(shape: BoxShape.circle, color: machineColor(context, client, client.machine)),
+                ),
+              ),
+              label: ConstrainedBox(
+                constraints: const BoxConstraints(maxWidth: 110),
+                child: Text(
+                  client.machines.isEmpty ? 'No machine' : client.nameOf(client.machine),
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ),
+              onPressed: () => _scaffoldKey.currentState?.openDrawer(),
+            ),
+          ),
+        ],
+        // The workspace's tabs, as M3 scrollable tabs, each with its agent's status. Long-press one to
+        // rename or close it. Unlabelled tabs are named after their agents.
+        bottom: PreferredSize(
+          preferredSize: const Size.fromHeight(52),
+          child: Column(
+            children: [
+              SizedBox(
+                height: 48,
+                child: switch (_tabs()) {
+                  (final tabs, final i) when i >= 0 => Row(
+                      children: [
+                        Expanded(
+                          // Rebuilt when the tabs or the current one change, so it opens scrolled to the current one.
+                          child: DefaultTabController(
+                            key: ValueKey([for (final t in tabs) t.id, i].join(',')),
+                            length: tabs.length,
+                            initialIndex: i,
+                            child: TabBar(
+                              isScrollable: true,
+                              tabAlignment: TabAlignment.start,
+                              onTap: (j) => client.selectTab(tabs[j].id),
+                              tabs: [
+                                for (final t in tabs)
+                                  GestureDetector(
+                                    onLongPress: () => _tabActions(t),
+                                    child: Tab(
+                                      child: Row(
+                                        mainAxisSize: MainAxisSize.min,
+                                        children: [
+                                          StatusDot(t.agentStatus),
+                                          const SizedBox(width: 8),
+                                          ConstrainedBox(
+                                            constraints: const BoxConstraints(maxWidth: 120),
+                                            child: Text(_tabName(t), overflow: TextOverflow.ellipsis),
+                                          ),
+                                        ],
+                                      ),
+                                    ),
+                                  ),
+                              ],
+                            ),
+                          ),
+                        ),
+                        IconButton(
+                          tooltip: 'New tab',
+                          icon: const Icon(Icons.add),
+                          onPressed: () => client.createTab(tabs[i].workspaceId),
+                        ),
+                      ],
+                    ),
+                  _ => null,
+                },
+              ),
+              SizedBox(height: 4, child: connecting ? const LinearProgressIndicator() : null),
+            ],
+          ),
+        ),
       ),
       body: SafeArea(
         child: Column(
@@ -635,9 +740,6 @@ class _TerminalScreenState extends State<TerminalScreen> with SingleTickerProvid
                                 child: Center(
                                   child: FloatingActionButton.small(
                                     tooltip: 'Back to live',
-                                    backgroundColor: scheme.primary,
-                                    foregroundColor: scheme.onPrimary,
-                                    shape: const CircleBorder(),
                                     onPressed: _toLive,
                                     child: const Icon(Icons.arrow_downward),
                                   ),
@@ -646,7 +748,7 @@ class _TerminalScreenState extends State<TerminalScreen> with SingleTickerProvid
                           ],
                         ),
             ),
-            // Swipe sideways here to move between agents in herdr's order, up for all tabs. The keyboard
+            // Swipe sideways here to move between agents in herdr's order. The keyboard
             // button swaps the message box for the control keys and back.
             if (!client.isDisconnected)
               Listener(

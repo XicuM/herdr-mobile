@@ -11,6 +11,7 @@ void main() async {
   final client = HerdrClientService();
   client.setFontSize(prefs.getDouble('terminal_font_size') ?? 14);
   client.setKeyBar(prefs.getBool('show_keys') ?? false);
+  client.setMutedPanes(prefs.getStringList('muted_panes') ?? []);
   client.setMachines(
     prefs.getStringList('herdr_machines') ?? [],
     prefs.getStringList('herdr_machine_names') ?? [],
@@ -42,12 +43,6 @@ class HerdrMobileApp extends StatelessWidget {
       theme: ThemeData(
         colorScheme: scheme,
         bottomSheetTheme: const BottomSheetThemeData(showDragHandle: true),
-        // M3 drawer destinations: pills, the selected one in secondaryContainer.
-        listTileTheme: ListTileThemeData(
-          shape: const StadiumBorder(),
-          selectedColor: scheme.onSecondaryContainer,
-          selectedTileColor: scheme.secondaryContainer,
-        ),
       ),
       home: TerminalScreen(client: client),
     );

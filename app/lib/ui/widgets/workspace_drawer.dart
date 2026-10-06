@@ -7,7 +7,7 @@ import 'machine_drawer.dart';
 
 /// A Material 3 navigation drawer modelled on Herdr's sidebar: workspaces, with linked worktrees
 /// nested. Long-press a workspace for its actions; drag its handle to reorder it (with its worktrees).
-/// The machines sit at the foot. Tabs live in [showTabSheet], agents in [showAgentSheet].
+/// The machines take the lower half, each half scrolling on its own, with Settings at the foot. Tabs live in the top bar, agents in [showAgentSheet].
 class WorkspaceDrawer extends StatelessWidget {
   final HerdrClientService client;
 
@@ -25,13 +25,8 @@ class WorkspaceDrawer extends StatelessWidget {
       Navigator.pop(context);
     }
 
-    Widget header(String title) => Padding(
-          padding: const EdgeInsets.fromLTRB(28, 16, 16, 10),
-          child: Text(title, style: text.titleSmall?.copyWith(color: scheme.onSurfaceVariant)),
-        );
-
-    // Styled as M3 drawer destinations by the theme's listTileTheme.
     Widget row({
+      Key? key,
       double indent = 0,
       required String status,
       required String title,
@@ -42,6 +37,7 @@ class WorkspaceDrawer extends StatelessWidget {
       Widget? trailing,
     }) =>
         Padding(
+          key: key,
           padding: const EdgeInsets.symmetric(horizontal: 12),
           child: ListTile(
             contentPadding: EdgeInsets.only(left: 16 + indent, right: 16),
@@ -73,85 +69,121 @@ class WorkspaceDrawer extends StatelessWidget {
       ]);
     }
 
-    return Drawer(
-      child: SafeArea(
-        child: Column(
-          children: [
-            Expanded(
-              child: ListView(
-                padding: EdgeInsets.zero,
-                children: [
-                  header('Workspaces'),
-                  if (snapshot == null)
+    // M3 drawer destinations: pills, the selected one in secondaryContainer. Only here and in the agent
+    // sheet; other lists keep M3's plain rows.
+    return ListTileTheme.merge(
+      shape: const StadiumBorder(),
+      selectedColor: scheme.onSecondaryContainer,
+      selectedTileColor: scheme.secondaryContainer,
+      child: Drawer(
+        child: SafeArea(
+          child: Column(
+            children: [
+              Expanded(
+                child: ListView(
+                  padding: EdgeInsets.zero,
+                  children: [
                     Padding(
-                      padding: const EdgeInsets.symmetric(horizontal: 28),
-                      child: Text(client.machines.isEmpty
-                          ? 'No machine yet'
-                          : client.isDisconnected
-                              ? 'Disconnected'
-                              : 'Connecting…'),
+                      padding: const EdgeInsets.fromLTRB(28, 16, 16, 10),
+                      child: Text('Workspaces', style: text.titleSmall?.copyWith(color: scheme.onSurfaceVariant)),
                     ),
-                  ReorderableListView(
-                    shrinkWrap: true,
-                    physics: const NeverScrollableScrollPhysics(),
-                    buildDefaultDragHandles: false,
-                    onReorder: (from, to) {
-                      if (to > from) to--;
-                      if (to == from) return;
-                      final moved = blocks.removeAt(from);
-                      client.moveWorkspaces(
-                          [for (final w in moved) w.id], to < blocks.length ? blocks[to].first.id : null);
-                    },
-                    children: [
-                      for (final (i, block) in blocks.indexed)
-                        Column(
-                          key: ValueKey(block.first.id),
-                          children: [
-                            for (final ws in block)
+                    if (snapshot == null)
+                      Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 28),
+                        child: Text(client.machines.isEmpty
+                            ? 'No machine yet'
+                            : client.isDisconnected
+                                ? 'Disconnected'
+                                : 'Connecting…'),
+                      ),
+                    ReorderableListView(
+                      shrinkWrap: true,
+                      physics: const NeverScrollableScrollPhysics(),
+                      buildDefaultDragHandles: false,
+                      onReorder: (from, to) {
+                        if (to > from) to--;
+                        if (to == from) return;
+                        final moved = blocks.removeAt(from);
+                        client.moveWorkspaces(
+                            [for (final w in moved) w.id], to < blocks.length ? blocks[to].first.id : null);
+                      },
+                      children: [
+                        for (final (i, block) in blocks.indexed)
+                          Column(
+                            key: ValueKey(block.first.id),
+                            children: [
                               row(
-                                indent: ws == block.first ? 0 : 24,
-                                status: ws.agentStatus,
-                                title: ws.displayName,
-                                subtitle: ws == block.first ? ws.gitBranch : null,
-                                selected: ws.id == selectedPane?.workspaceId,
-                                onTap: () => go(() => client.selectWorkspace(ws.id)),
-                                onLongPress: () => _workspaceActions(context, ws),
-                                trailing: ws != block.first || blocks.length < 2
+                                status: block.first.agentStatus,
+                                title: block.first.displayName,
+                                subtitle: block.first.gitBranch,
+                                selected: block.first.id == selectedPane?.workspaceId,
+                                onTap: () => go(() => client.selectWorkspace(block.first.id)),
+                                onLongPress: () => _workspaceActions(context, block.first),
+                                trailing: blocks.length < 2
                                     ? null
                                     : ReorderableDragStartListener(index: i, child: const Icon(Icons.drag_handle)),
                               ),
-                          ],
-                        ),
-                    ],
-                  ),
-                ],
-              ),
-            ),
-            const Divider(height: 1),
-            MachineList(client: client),
-            Padding(
-              padding: const EdgeInsets.fromLTRB(16, 8, 8, 12),
-              child: Row(
-                children: [
-                  Expanded(
-                    child: FilledButton.tonalIcon(
-                      icon: const Icon(Icons.add),
-                      label: const Text('New workspace'),
-                      onPressed: () => go(client.createWorkspace),
+                              // The worktrees reorder among themselves, staying under their workspace.
+                              ReorderableListView(
+                                shrinkWrap: true,
+                                physics: const NeverScrollableScrollPhysics(),
+                                buildDefaultDragHandles: false,
+                                onReorder: (from, to) {
+                                  final trees = block.sublist(1);
+                                  if (to > from) to--;
+                                  if (to == from) return;
+                                  final moved = trees.removeAt(from);
+                                  final after = i + 1 < blocks.length ? blocks[i + 1].first.id : null;
+                                  client.moveWorkspaces([moved.id], to < trees.length ? trees[to].id : after);
+                                },
+                                children: [
+                                  for (final (j, ws) in block.skip(1).indexed)
+                                    row(
+                                      key: ValueKey(ws.id),
+                                      indent: 24,
+                                      status: ws.agentStatus,
+                                      title: ws.displayName,
+                                      selected: ws.id == selectedPane?.workspaceId,
+                                      onTap: () => go(() => client.selectWorkspace(ws.id)),
+                                      onLongPress: () => _workspaceActions(context, ws),
+                                      trailing: block.length < 3
+                                          ? null
+                                          : ReorderableDragStartListener(
+                                              index: j, child: const Icon(Icons.drag_handle)),
+                                    ),
+                                ],
+                              ),
+                            ],
+                          ),
+                      ],
                     ),
-                  ),
-                  IconButton(
-                    icon: const Icon(Icons.settings_outlined),
-                    tooltip: 'Settings',
-                    onPressed: () {
-                      Navigator.pop(context);
-                      Navigator.push(context, MaterialPageRoute(builder: (_) => SettingsScreen(client: client)));
-                    },
-                  ),
-                ],
+                    Padding(
+                      padding: const EdgeInsets.fromLTRB(16, 8, 16, 12),
+                      child: FilledButton.tonalIcon(
+                        icon: const Icon(Icons.add),
+                        label: const Text('New workspace'),
+                        onPressed: () => go(client.createWorkspace),
+                      ),
+                    ),
+                  ],
+                ),
               ),
-            ),
-          ],
+              const Divider(height: 1),
+              Expanded(child: SingleChildScrollView(child: MachineList(client: client))),
+              const Divider(height: 1),
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                child: ListTile(
+                  leading: const Icon(Icons.settings_outlined),
+                  title: const Text('Settings'),
+                  onTap: () {
+                    Navigator.pop(context);
+                    Navigator.push(context, MaterialPageRoute(builder: (_) => SettingsScreen(client: client)));
+                  },
+                ),
+              ),
+            ],
+          ),
         ),
       ),
     );
