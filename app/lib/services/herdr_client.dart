@@ -71,7 +71,8 @@ class HerdrClientService extends ChangeNotifier {
   String get machine => '$_host:$_port';
   bool get connected => isConnected(machine);
   bool get isDisconnected => isOff(machine);
-  SessionSnapshot? get snapshot => _conns[machine]?.snapshot;
+  /// None while the machine is off: its last one is kept, for alerts and the selected pane, but is stale.
+  SessionSnapshot? get snapshot => isDisconnected ? null : _conns[machine]?.snapshot;
   String? get selectedPaneId => _conns[machine]?.selectedPaneId;
   PaneModel? get selectedPane => snapshot?.panes.where((p) => p.id == selectedPaneId).firstOrNull;
   double get fontSize => _fontSize;
@@ -274,8 +275,7 @@ class HerdrClientService extends ChangeNotifier {
     _names = {..._names}..remove(m);
     _off = {..._off}..remove(m);
     _saveMachines();
-    // The next one is shown as it was: one the user disconnected stays off.
-    if (m == machine && _machines.isNotEmpty) return switchMachine(_machines.first, connect: false);
+    if (m == machine && _machines.isNotEmpty) return switchMachine(_machines.first);
     if (m == machine) {
       SharedPreferences.getInstance().then((p) => p
         ..remove('herdr_host')
@@ -308,11 +308,11 @@ class HerdrClientService extends ChangeNotifier {
     ..setStringList('herdr_machine_names', [for (final e in _names.entries) '${e.key}=${e.value}'])
     ..setStringList('herdr_machines_off', _off.toList()));
 
-  /// Shows [machine] (`host:port` as stored in [machines]), with [connect] connecting it if it was off.
+  /// Shows [machine] (`host:port` as stored in [machines]) as it is: one the user disconnected stays off.
   /// The others stay as they are.
-  void switchMachine(String machine, {bool connect = true}) {
+  void switchMachine(String machine) {
     final i = machine.lastIndexOf(':');
-    configure(host: machine.substring(0, i), port: int.parse(machine.substring(i + 1)), connect: connect);
+    configure(host: machine.substring(0, i), port: int.parse(machine.substring(i + 1)), connect: false);
   }
 
   void selectPane(String paneId) {

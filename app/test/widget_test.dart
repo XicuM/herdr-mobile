@@ -465,6 +465,12 @@ void main() {
       expect(client.snapshot, isNotNull);
       expect(client.selectedPaneId, 'w1:p1');
       expect(client.isOff('10.0.0.1:7788'), isTrue); // switching doesn't touch the others
+
+      // Switching to a disconnected machine shows it disconnected, without its stale snapshot.
+      client.setSnapshotForTesting(twoWorkspaces(), '10.0.0.1:7788');
+      client.switchMachine('10.0.0.1:7788');
+      expect(client.isOff('10.0.0.1:7788'), isTrue);
+      expect(client.snapshot, isNull);
     });
 
     testWidgets('The workspace drawer lists the machines to connect or disconnect each', (tester) async {
