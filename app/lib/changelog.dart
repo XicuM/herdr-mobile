@@ -1,0 +1,58 @@
+/// Newest first. Shown once after an update; add an entry when bumping the version
+/// in pubspec.yaml and android/app/build.gradle.
+const changelog = <(String, List<String>)>[
+  (
+    '1.4.0',
+    [
+      'Agents: the circle left of the message box shows how many agents are running; tap it for the list, the ones waiting for you first, and tap one to jump to it. Its badge shows the most urgent status elsewhere, with a count when agents are blocked.',
+      'Tabs: the dots above the key bar show where you are among the workspace\'s tabs, coloured by their agents. Swipe up on the message bar (or tap the dots) to switch, create, rename or close tabs, or pick a split pane.',
+      'Swipe the message bar left or right to slide to the next or previous tab; swiping past the last tab opens a new one.',
+      'Tap the title (or ☰) for workspaces. Long-press a workspace for its actions.',
+      'Material 3 look throughout.',
+      'Agent status colours match herdr: yellow working, red waiting for you, green finished, grey idle.',
+      'While scrolled back through history, a ↓ button at the bottom (or typing anything) jumps back to live.',
+      '› in the message box offers quick replies and your earlier messages.',
+      'Several machines can be connected at once. Tap the machine chip in the top bar for a panel with each machine\'s status; connect or disconnect each one on its own, and tap one to show it.',
+      'Alerts come from every connected machine. Disconnected machines stay off, even after a restart, to save battery.',
+      "Edit a saved machine's name or address in Settings (tap it). Add one with a single address field (host or host:port).",
+      'Opening a pane on the phone marks it seen in herdr, so a finished agent goes from done to idle, and the desktop follows to that pane.',
+      'Needs the updated herdr-bridge for renaming tabs and marking panes seen.',
+    ]
+  ),
+  (
+    '1.3.1',
+    [
+      'Fixed the app getting stuck on "Connecting…" after the phone wakes from sleep.',
+    ]
+  ),
+  (
+    '1.3.0',
+    [
+      'Notifications: get an alert when an agent needs you or finishes, even with the app closed. Tap it to open that pane.',
+      'An ongoing notification shows which machine you are connected to and how many agents are working or waiting.',
+      'The first launch asks to allow notifications and background use. Turn alerts off under Settings → Notifications.',
+      'Needs the updated herdr-bridge. The bridge no longer sends ntfy or Pushover alerts.',
+    ]
+  ),
+  (
+    '1.2.0',
+    [
+      'A message box under the terminal: type with autocorrect, swipe and voice input, and send it to the pane (empty sends Enter).',
+      'A simpler key bar: ESC, ^C, TAB, ⇧TAB, CTRL and arrows. CTRL now works, also with the phone keyboard. Hold an arrow to repeat it.',
+      'A ⚠ count in the top bar jumps to agents waiting for input in other panes. The waiting banner now sends Enter/Esc.',
+      'Scroll back through the full pane history kept by herdr (needs the updated herdr-bridge).',
+      'Pinch to change the font size. Long-press to select text, then tap copy next to the message box.',
+      'A "Connecting…" strip shows while the bridge is unreachable, and failed actions now show an error.',
+      'Machines can have names, and any machine can be removed in Settings.',
+      'Switching panes or machines starts from a clean screen; bigger tap targets in the drawer.',
+    ]
+  ),
+  (
+    '1.1.0',
+    [
+      'Multiple machines: add every computer running herdr-bridge and switch between them from the machine menu (top right) or the drawer.',
+      'The machine menu is always available, even when not connected.',
+      'Welcome guide on first launch and this changelog after updates.',
+    ]
+  ),
+];
