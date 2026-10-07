@@ -759,11 +759,15 @@ class _AgentsHomeScreenState extends State<AgentsHomeScreen> {
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.end,
           children: [
-            Text(
-              at != null ? AgentsHomeScreen.formatWhen(context, at) : '',
-              style: theme.textTheme.labelSmall?.copyWith(color: scheme.onSurfaceVariant),
+            // Its glyphs' top level with the summary's: titleMedium's 24px line puts them ~3px lower than labelSmall's 16px.
+            Padding(
+              padding: const EdgeInsets.only(top: 3),
+              child: Text(
+                at != null ? AgentsHomeScreen.formatWhen(context, at) : '',
+                style: theme.textTheme.labelSmall?.copyWith(color: scheme.onSurfaceVariant),
+              ),
             ),
-            const SizedBox(height: 8),
+            const SizedBox(height: 5),
             Row(
               mainAxisSize: MainAxisSize.min,
               children: [

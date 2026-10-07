@@ -1,6 +1,12 @@
 /// Newest first. Shown once after an update; add an entry when bumping the version in pubspec.yaml.
 const changelog = <(String, List<String>)>[
   (
+    '1.7.1',
+    [
+      'The time on an agent in the list lines up with its summary.',
+    ]
+  ),
+  (
     '1.7.0',
     [
       'A new home screen, like a chat list: every agent on every machine, the ones that need you first and in bold. Each shows its summary on top, and under it its workspace, tab and status ("Working…" while it works), with its logo and when it last changed.',
