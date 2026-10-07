@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:io';
 import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart';
 import 'package:web_socket_channel/io.dart';
@@ -7,6 +8,7 @@ import 'package:web_socket_channel/web_socket_channel.dart';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 import '../models/session.dart';
+import '../ui/widgets/agent_avatar.dart';
 
 /// What the volume keys do on the terminal screen; [volume] leaves them to the system.
 enum VolumeKeys { fontSize, arrows, volume }
@@ -25,6 +27,11 @@ class _Conn {
   /// The highest `completion_seq` seen per pane: a snapshot fetched over HTTP can land after a newer
   /// pushed one, and going back and forth must not alert twice.
   final completions = <String, int>{};
+
+  /// Per pane, its agent's last `state_change_seq` (0 when herdr sends none), its status and when this
+  /// app saw that change: herdr has no timestamps. Null for an agent already there in the first snapshot,
+  /// whose last change the app never saw.
+  final changes = <String, (int, String, DateTime?)>{};
 }
 
 /// Every saved machine keeps its own connection, so several can be connected at once; each can be
@@ -33,7 +40,8 @@ class _Conn {
 class HerdrClientService extends ChangeNotifier {
   String _machine = '127.0.0.1:7788';
   double _fontSize = 14;
-  Color _seed = const Color(0xFF38BDF8);
+  Color? _seed;
+  Color? _systemSeed;
   Brightness? _brightness;
   List<String> _machines = [];
   Map<String, String> _names = {};
@@ -41,12 +49,17 @@ class HerdrClientService extends ChangeNotifier {
   /// Machines the user disconnected; every other saved machine stays connected.
   Set<String> _off = {};
   bool _alerts = false;
+  bool _alertBlocked = true;
+  bool _alertFinished = true;
+  bool _alertSound = true;
+  bool _alertDesktop = true;
 
   /// Panes that never raise an alert, as `machine/pane_id`.
   Set<String> _muted = {};
   bool _keyBar = false;
   VolumeKeys _volumeKeys = VolumeKeys.fontSize;
   bool _pinchZoom = true;
+  bool _hideMessageTerminal = false;
   bool _started = false;
   bool _disposed = false;
   final _conns = <String, _Conn>{};
@@ -69,9 +82,11 @@ class HerdrClientService extends ChangeNotifier {
       if (m == machine) selectPane(call.arguments['pane']);
     });
     _native('ready');
+    _loadSystemSeed();
     // Back from sleep, a connect attempt made while the network was down may still be pending, or the
     // retry timer frozen; try again right away instead of waiting on either.
     AppLifecycleListener(onResume: () {
+      _loadSystemSeed();
       for (final m in _machines) {
         if (!_off.contains(m) && !isConnected(m)) _close(m);
       }
@@ -82,18 +97,34 @@ class HerdrClientService extends ChangeNotifier {
   /// Fails harmlessly off Android (e.g. in tests).
   void _native(String method, [Object? args]) => _android.invokeMethod(method, args).ignore();
 
+  /// Reread on every resume, since the wallpaper may have changed.
+  void _loadSystemSeed() => _android.invokeMethod<int>('systemColor').then((c) {
+        final seed = c == null ? null : Color(c);
+        if (seed == _systemSeed) return;
+        _systemSeed = seed;
+        notifyListeners();
+      }).ignore();
+
   /// The machine on screen, as stored in [machines].
   String get machine => _machine;
   bool get connected => isConnected(machine);
   bool get isDisconnected => isOff(machine);
+
   /// None while the machine is off: its last one is kept, for alerts and the selected pane, but is stale.
   SessionSnapshot? get snapshot => isDisconnected ? null : _conns[machine]?.snapshot;
   String? get selectedPaneId => _conns[machine]?.selectedPaneId;
   PaneModel? get selectedPane => snapshot?.panes.where((p) => p.id == selectedPaneId).firstOrNull;
   double get fontSize => _fontSize;
 
-  /// The app's accent colour, the seed of its Material colour scheme.
-  Color get seed => _seed;
+  /// The app's accent colour, the seed of its Material colour scheme: the one picked in Settings, else
+  /// Material You's (Android 12+), else sky.
+  Color get seed => _seed ?? _systemSeed ?? const Color(0xFF38BDF8);
+
+  /// The accent picked in Settings; null follows the system's.
+  Color? get pickedSeed => _seed;
+
+  /// Material You's accent, null before Android 12.
+  Color? get systemSeed => _systemSeed;
 
   /// Light or dark; null follows the system.
   Brightness? get brightness => _brightness;
@@ -116,6 +147,12 @@ class HerdrClientService extends ChangeNotifier {
 
   @visibleForTesting
   void setSnapshotForTesting(SessionSnapshot snap, [String? m]) => _apply(m ?? machine, snap);
+
+  @visibleForTesting
+  void setConnectedForTesting(String m, bool connected) {
+    (_conns[m] ??= _Conn()).connected = connected;
+    notifyListeners();
+  }
 
   /// The name given to [machine] when it was added, or its address.
   String nameOf(String machine) => _names[machine] ?? machine;
@@ -145,6 +182,41 @@ class HerdrClientService extends ChangeNotifier {
     SharedPreferences.getInstance().then((p) => p.setBool('background_alerts', on));
     notifyListeners();
   }
+
+  bool get alertBlocked => _alertBlocked;
+
+  void setAlertBlocked(bool on) {
+    _alertBlocked = on;
+    SharedPreferences.getInstance().then((p) => p.setBool('alert_blocked', on));
+    notifyListeners();
+  }
+
+  bool get alertFinished => _alertFinished;
+
+  void setAlertFinished(bool on) {
+    _alertFinished = on;
+    SharedPreferences.getInstance().then((p) => p.setBool('alert_finished', on));
+    notifyListeners();
+  }
+
+  bool get alertSound => _alertSound;
+
+  void setAlertSound(bool on) {
+    _alertSound = on;
+    SharedPreferences.getInstance().then((p) => p.setBool('alert_sound', on));
+    notifyListeners();
+  }
+
+  bool get alertDesktop => _alertDesktop;
+
+  void setAlertDesktop(bool on) {
+    _alertDesktop = on;
+    SharedPreferences.getInstance().then((p) => p.setBool('alert_desktop', on));
+    notifyListeners();
+  }
+
+  /// When the agent in [paneId] on [machine] (or the active machine) last changed status, if this app saw it.
+  DateTime? changedAt(String paneId, [String? machine]) => _conns[machine ?? this.machine]?.changes[paneId]?.$3;
 
   bool isMuted(String paneId, [String? machine]) => _muted.contains('${machine ?? this.machine}/$paneId');
 
@@ -181,6 +253,14 @@ class HerdrClientService extends ChangeNotifier {
     notifyListeners();
   }
 
+  bool get hideMessageTerminal => _hideMessageTerminal;
+
+  void setHideMessageTerminal(bool v) {
+    _hideMessageTerminal = v;
+    SharedPreferences.getInstance().then((p) => p.setBool('hide_message_terminal', v));
+    notifyListeners();
+  }
+
   /// Reads the saved settings, without writing them back. The first launch turns alerts on and asks
   /// for the permissions they need. The machine on screen last time stays off if it was disconnected.
   void load(SharedPreferences p) {
@@ -191,9 +271,14 @@ class HerdrClientService extends ChangeNotifier {
     _keyBar = p.getBool('show_keys') ?? false;
     _volumeKeys = VolumeKeys.values.asNameMap()[p.getString('volume_keys')] ?? VolumeKeys.fontSize;
     _pinchZoom = p.getBool('pinch_zoom') ?? true;
+    _hideMessageTerminal = p.getBool('hide_message_terminal') ?? false;
     _muted = (p.getStringList('muted_panes') ?? []).toSet();
     final alerts = p.getBool('background_alerts');
     alerts == null ? setAlerts(true) : _alerts = alerts;
+    _alertBlocked = p.getBool('alert_blocked') ?? true;
+    _alertFinished = p.getBool('alert_finished') ?? true;
+    _alertSound = p.getBool('alert_sound') ?? true;
+    _alertDesktop = p.getBool('alert_desktop') ?? true;
     setMachines(p.getStringList('herdr_machines') ?? [], p.getStringList('herdr_machine_names') ?? [],
         p.getStringList('herdr_machines_off') ?? []);
     final host = p.getString('herdr_host');
@@ -206,6 +291,7 @@ class HerdrClientService extends ChangeNotifier {
   /// Opens the connections, once the saved state is loaded.
   void start() {
     _started = true;
+    warmAgentIcons();
     notifyListeners();
   }
 
@@ -287,7 +373,7 @@ class HerdrClientService extends ChangeNotifier {
     c.connected = false;
   }
 
-  /// Reports failed bridge requests; set by the screen that shows them.
+  /// Reports failed bridge requests; set by the app, which shows them as a SnackBar on any screen.
   void Function(String message)? onError;
 
   static const double minFontSize = 6;
@@ -301,10 +387,11 @@ class HerdrClientService extends ChangeNotifier {
     SharedPreferences.getInstance().then((p) => p.setDouble('terminal_font_size', clamped));
   }
 
-  void setSeed(Color seed) {
+  void setSeed(Color? seed) {
     _seed = seed;
     notifyListeners();
-    SharedPreferences.getInstance().then((p) => p.setInt('theme_seed', seed.value));
+    SharedPreferences.getInstance()
+        .then((p) => seed == null ? p.remove('theme_seed') : p.setInt('theme_seed', seed.value));
   }
 
   void setBrightness(Brightness? brightness) {
@@ -491,9 +578,19 @@ class HerdrClientService extends ChangeNotifier {
     // herdr reuses a closed pane's id: a new pane mustn't come up muted, nor inherit the old one's
     // completion count, which would hold back its "Finished" alerts.
     c.completions.removeWhere((id, _) => !snapshot.panes.any((p) => p.id == id));
+    c.changes.removeWhere((id, _) => !snapshot.agents.any((a) => a.paneId == id));
+    for (final a in snapshot.agents) {
+      final was = c.changes[a.paneId];
+      final seq = a.stateChangeSeq ?? 0;
+      // A higher seq is a change; an older snapshot landing late (lower seq) isn't. Nor is `done` turning
+      // `idle` when the pane is viewed: herdr leaves the seq as it was. Without seqs, a new status is.
+      if (was == null || seq > was.$1 || seq == 0 && a.status != was.$2) {
+        c.changes[a.paneId] = (seq, a.status, before == null ? null : DateTime.now());
+      }
+    }
     // A pane id has no slash, so the key's machine is all before its last one.
-    final gone = _muted
-        .where((k) => k.substring(0, k.lastIndexOf('/')) == m && !snapshot.panes.any((p) => '$m/${p.id}' == k));
+    final gone =
+        _muted.where((k) => k.substring(0, k.lastIndexOf('/')) == m && !snapshot.panes.any((p) => '$m/${p.id}' == k));
     if (gone.isNotEmpty) {
       _muted = _muted.difference(gone.toSet());
       SharedPreferences.getInstance().then((p) => p.setStringList('muted_panes', _muted.toList()));
@@ -551,16 +648,48 @@ class HerdrClientService extends ChangeNotifier {
       final blocked = was != null && was.agentStatus != 'blocked' && pane.agentStatus == 'blocked';
       final finished = wasAgent != null && seq > seen;
       if (!blocked && !finished) continue;
-      final task = pane.terminalTitle.isNotEmpty ? pane.terminalTitle : agent?.name ?? pane.id;
+      if (blocked && !_alertBlocked) continue;
+      if (finished && !_alertFinished) continue;
+      final agentName = (agent?.name.isNotEmpty == true ? agent?.name : wasAgent?.name) ?? '';
+      final task = pane.terminalTitle.isNotEmpty ? pane.terminalTitle : agentName.isNotEmpty ? agentName : pane.id;
       final workspace = now.workspaces.where((w) => w.id == pane.workspaceId).firstOrNull;
+      final title = '${blocked ? 'Needs you' : 'Finished'}: $task';
+      final text = [if (workspace != null) workspace.displayName, nameOf(m)].join(' · ');
+      final iconName = agentName.isNotEmpty ? agentName : pane.terminalTitle;
+      final iconBytes = agentIconBytes(iconName);
       _native('alert', {
         'key': '$m/${pane.id}',
-        'title': '${blocked ? 'Needs you' : 'Finished'}: $task',
-        'text': [if (workspace != null) workspace.displayName, nameOf(m)].join(' · '),
+        'title': title,
+        'text': text,
         'machine': m,
         'pane': pane.id,
         'urgent': blocked,
+        if (iconBytes != null) 'icon': iconBytes,
       });
+      if (Platform.isLinux) {
+        if (_alertDesktop) {
+          final iconPath = agentIconPath(iconName) ?? 'utilities-terminal';
+          Process.run('notify-send', [
+            '-a',
+            'Herdr',
+            '-u',
+            blocked ? 'critical' : 'normal',
+            '-i',
+            iconPath,
+            title,
+            text,
+          ]).ignore();
+        }
+        if (_alertSound) {
+          Process.run('canberra-gtk-play', ['-i', blocked ? 'dialog-warning' : 'message-new-instant']).then((res) {
+            if (res.exitCode != 0) {
+              Process.run('paplay', [
+                '/usr/share/sounds/freedesktop/stereo/${blocked ? 'dialog-warning' : 'complete'}.oga',
+              ]).ignore();
+            }
+          }).ignore();
+        }
+      }
     }
   }
 
@@ -573,12 +702,12 @@ class HerdrClientService extends ChangeNotifier {
     } catch (_) {}
   }
 
-  /// Sends one request to the active machine's bridge, then refreshes that machine's snapshot (also on
-  /// failure, which may have changed something, or undoes [moveWorkspaces]'s local reorder). Failures go
+  /// Sends one request to [on]'s bridge (the active machine's by default), then refreshes that machine's snapshot (also on
+  /// failure, which may have changed something, or undoes [moveTab]'s or [moveWorkspaces]'s local reorder). Failures go
   /// to [onError] as "Could not [what]". Returns the decoded response, or null on failure.
   Future<dynamic> _request(String what, String method, String path,
-      {Map<String, dynamic>? body, Map<String, String>? query}) async {
-    final m = machine;
+      {Map<String, dynamic>? body, Map<String, String>? query, String? on}) async {
+    final m = on ?? machine;
     dynamic result;
     try {
       final req = http.Request(method, Uri.parse('http://$m$path').replace(queryParameters: query));
@@ -623,13 +752,20 @@ class HerdrClientService extends ChangeNotifier {
 
   Future<void> closeTab(String tabId) => _request('close tab', 'DELETE', '/api/tab/$tabId');
 
-  Future<void> closePane(String paneId) => _request('close agent', 'DELETE', '/api/pane/$paneId');
+  /// Closes [paneId] on [m] (the active machine by default). herdr closes a tab with its last pane and a
+  /// workspace with its last tab, so when this is the workspace's only pane it first opens a new tab
+  /// there, leaving the workspace with a shell.
+  Future<void> closePane(String paneId, [String? m]) async {
+    final panes = snapshotOf(m ?? machine)?.panes ?? const [];
+    final ws = panes.where((p) => p.id == paneId).firstOrNull?.workspaceId;
+    if (ws != null && panes.where((p) => p.workspaceId == ws).length == 1) {
+      await _request('create tab', 'POST', '/api/tab', body: {'workspace_id': ws}, on: m);
+    }
+    await _request('close agent', 'DELETE', '/api/pane/$paneId', on: m);
+  }
 
-  Future<void> renameTab(String tabId, String label) =>
-      _request('rename tab', 'POST', '/api/tab/$tabId/rename', body: {'label': label});
-
-  /// Moves a tab to [targetId]'s place in their workspace, reordering the local snapshot first like
-  /// [moveWorkspaces].
+  /// Moves a tab to [targetId]'s place in their workspace, reordering the local snapshot first so the strip
+  /// doesn't jump back while the request runs.
   Future<void> moveTab(String tabId, String targetId) async {
     final all = snapshot?.tabs;
     final tab = all?.where((t) => t.id == tabId).firstOrNull;
@@ -656,7 +792,7 @@ class HerdrClientService extends ChangeNotifier {
       _request('rename workspace', 'POST', '/api/workspace/$workspaceId/rename', body: {'label': label});
 
   /// Moves [ids] (a workspace and its linked worktrees) before [beforeId], or to the end when null.
-  /// Reorders the local snapshot first so the drawer doesn't jump back while the request runs.
+  /// Reorders the local snapshot first so the list doesn't jump back while the request runs.
   Future<void> moveWorkspaces(List<String> ids, String? beforeId) async {
     final list = snapshot?.workspaces;
     if (list != null) {

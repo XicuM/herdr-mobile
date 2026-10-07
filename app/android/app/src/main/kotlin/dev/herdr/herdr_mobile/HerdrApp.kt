@@ -12,6 +12,7 @@ import android.content.ContentResolver
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.content.pm.ServiceInfo
+import android.graphics.BitmapFactory
 import android.media.AudioAttributes
 import android.net.Uri
 import android.os.Build
@@ -76,9 +77,13 @@ class HerdrApp : Application() {
                 "alert" -> alert(
                     call.argument<String>("key")!!, call.argument<String>("title")!!, call.argument<String>("text")!!,
                     call.argument<String>("machine")!!, call.argument<String>("pane")!!, call.argument<Boolean>("urgent")!!,
+                    call.argument<ByteArray>("icon"),
                 )
                 "cancel" -> nm.cancel(call.argument<String>("key").hashCode())
                 "askPermissions" -> askPermissions()
+                // Material You's accent, from the wallpaper (Android 12+).
+                "systemColor" -> return@setMethodCallHandler result.success(
+                    if (Build.VERSION.SDK_INT >= 31) getColor(android.R.color.system_accent1_500) else null)
             }
             result.success(null)
         }
@@ -118,14 +123,20 @@ class HerdrApp : Application() {
         .build()
 
     /** One alert per [key] (machine/pane): a newer one replaces it. Tapping opens that pane. */
-    private fun alert(key: String, title: String, text: String, machine: String, pane: String, urgent: Boolean) {
+    private fun alert(key: String, title: String, text: String, machine: String, pane: String, urgent: Boolean, iconBytes: ByteArray? = null) {
         val id = key.hashCode()
-        nm.notify(id, builder(if (urgent) BLOCKED else FINISHED)
+        val b = builder(if (urgent) BLOCKED else FINISHED)
             .setContentTitle(title)
             .setContentText(text)
             .setAutoCancel(true)
             .setContentIntent(openIntent(id, machine, pane))
-            .build())
+        if (iconBytes != null) {
+            val bitmap = BitmapFactory.decodeByteArray(iconBytes, 0, iconBytes.size)
+            if (bitmap != null) {
+                b.setLargeIcon(bitmap)
+            }
+        }
+        nm.notify(id, b.build())
     }
 
     @Suppress("DEPRECATION")

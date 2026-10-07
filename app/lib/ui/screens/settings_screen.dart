@@ -1,6 +1,5 @@
 import 'package:flutter/material.dart';
 import '../../services/herdr_client.dart';
-import '../widgets/workspace_drawer.dart';
 
 class SettingsScreen extends StatefulWidget {
   final HerdrClientService client;
@@ -12,7 +11,7 @@ class SettingsScreen extends StatefulWidget {
 }
 
 class _SettingsScreenState extends State<SettingsScreen> {
-  /// Accent colours to pick from; the first is the default.
+  /// Accent colours to pick from, besides the system's.
   static const _seeds = [
     Color(0xFF38BDF8), // sky
     Color(0xFF6366F1), // indigo
@@ -26,75 +25,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
     Color(0xFF94A3B8), // slate
   ];
 
-  /// Takes `host`, `host:port`, an IPv6 address (bare or `[addr]:port`) or a pasted URL; the port defaults
-  /// to the bridge's 7788. An IPv6 host keeps its brackets, which `host:port` URLs need.
-  static (String, int) _parseAddress(String text) {
-    final address = text.trim().replaceFirst(RegExp(r'^\w+://'), '').replaceAll('/', '');
-    if (':'.allMatches(address).length > 1 && !address.startsWith('[')) return ('[$address]', 7788);
-    final i = address.lastIndexOf(':');
-    if (i <= address.lastIndexOf(']')) return (address, 7788);
-    return (address.substring(0, i), int.tryParse(address.substring(i + 1)) ?? 7788);
-  }
-
-  /// Adds a machine when [m] is null (then connects to it and goes back to the terminal), else edits it.
-  /// One a bridge reaches over SSH only takes a name: its address is the bridge's.
-  void _machineDialog([String? m]) {
-    final client = widget.client;
-    final reached = m != null && HerdrClientService.parentOf(m) != null;
-    final name = TextEditingController(text: m == null || client.nameOf(m) == m ? '' : client.nameOf(m));
-    final address = TextEditingController(text: m ?? '');
-    void save(BuildContext dialogContext) {
-      if (address.text.trim().isEmpty) return;
-      final (host, port) = _parseAddress(address.text);
-      final to = reached ? m : '$host:$port';
-      Navigator.pop(dialogContext);
-      if (m != null) return setState(() => client.updateMachine(m, to: to, name: name.text.trim()));
-      client.configure(to, name: name.text.trim());
-      Navigator.pop(context);
-    }
-
-    showDialog(
-      context: context,
-      builder: (dialogContext) => AlertDialog(
-        title: Text(m == null ? 'Add machine' : 'Edit machine'),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            if (!reached) ...[
-              TextField(
-                controller: address,
-                autofocus: m == null,
-                keyboardType: TextInputType.url,
-                decoration: const InputDecoration(
-                  labelText: 'Address',
-                  helperText: 'Tailscale IP or name; add :port if not 7788',
-                  border: OutlineInputBorder(),
-                ),
-              ),
-              const SizedBox(height: 16),
-            ],
-            TextField(
-              controller: name,
-              autofocus: m != null,
-              decoration: const InputDecoration(labelText: 'Name (optional)', border: OutlineInputBorder()),
-              onSubmitted: (_) => save(dialogContext),
-            ),
-          ],
-        ),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(dialogContext), child: const Text('Cancel')),
-          TextButton(onPressed: () => save(dialogContext), child: Text(m == null ? 'Add & connect' : 'Save')),
-        ],
-      ),
-    );
-  }
-
-  Future<void> _confirmRemoveMachine(String m) async {
-    final ok = await WorkspaceDrawer.confirm(
-        context, 'Remove machine?', '"${widget.client.nameOf(m)}" ($m) will be forgotten.', 'Remove');
-    if (ok) setState(() => widget.client.removeMachine(m));
-  }
-
   @override
   Widget build(BuildContext context) {
     final client = widget.client;
@@ -104,138 +34,146 @@ class _SettingsScreenState extends State<SettingsScreen> {
           child: Text(title, style: Theme.of(context).textTheme.titleSmall?.copyWith(color: scheme.onSurfaceVariant)),
         );
 
-    return Scaffold(
-      appBar: AppBar(title: const Text('Settings')),
-      body: ListView(
-        children: [
-          section('Machines'),
-          for (final m in client.machines)
-            ListTile(
-              onTap: () => _machineDialog(m),
-              leading: Icon(m == client.machine ? Icons.computer : Icons.computer_outlined,
-                  color: m == client.machine ? scheme.primary : null),
-              title: Text(client.nameOf(m)),
-              subtitle: Text([
-                if (HerdrClientService.parentOf(m) case final parent?)
-                  'via ${client.nameOf(parent)}'
-                else if (client.nameOf(m) != m)
-                  m,
-                if (m == client.machine) 'Active'
-              ].join(' · ')),
-              trailing: Row(
-                mainAxisSize: MainAxisSize.min,
+    return ListenableBuilder(
+      listenable: client,
+      builder: (context, _) => Scaffold(
+        appBar: AppBar(title: const Text('Settings')),
+        body: ListView(
+          children: [
+            section('Appearance'),
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16),
+              child: SegmentedButton<Brightness?>(
+                segments: const [
+                  ButtonSegment(value: null, label: Text('System'), icon: Icon(Icons.brightness_auto_outlined)),
+                  ButtonSegment(value: Brightness.light, label: Text('Light'), icon: Icon(Icons.light_mode_outlined)),
+                  ButtonSegment(value: Brightness.dark, label: Text('Dark'), icon: Icon(Icons.dark_mode_outlined)),
+                ],
+                selected: {client.brightness},
+                onSelectionChanged: (s) => setState(() => client.setBrightness(s.first)),
+              ),
+            ),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 16, 16, 0),
+              child: Wrap(
+                spacing: 8,
+                runSpacing: 8,
                 children: [
-                  IconButton(
-                    tooltip: 'Edit',
-                    icon: const Icon(Icons.edit_outlined),
-                    onPressed: () => _machineDialog(m),
-                  ),
-                  // One a bridge reaches comes back with it; switching it off in the drawer is what keeps it away.
-                  if (HerdrClientService.parentOf(m) == null)
-                    IconButton(
-                      tooltip: 'Remove',
-                      icon: const Icon(Icons.delete_outline),
-                      onPressed: () => _confirmRemoveMachine(m),
+                  // Material You's accent, the default where there is one.
+                  if (client.systemSeed case final color?)
+                    IconButton.filled(
+                      tooltip: 'System',
+                      style: IconButton.styleFrom(backgroundColor: color),
+                      icon: Icon(client.pickedSeed == null ? Icons.check : Icons.wallpaper, color: Colors.black),
+                      onPressed: () => setState(() => client.setSeed(null)),
+                    ),
+                  for (final color in _seeds)
+                    IconButton.filled(
+                      style: IconButton.styleFrom(backgroundColor: color),
+                      icon: Icon(Icons.check,
+                          color: color == client.seed && client.systemSeed != client.seed
+                              ? Colors.black
+                              : Colors.transparent),
+                      onPressed: () => setState(() => client.setSeed(color)),
                     ),
                 ],
               ),
             ),
-          ListTile(
-            leading: const Icon(Icons.add),
-            title: const Text('Add machine'),
-            onTap: _machineDialog,
-          ),
-          const Divider(),
-          section('Appearance'),
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 16),
-            child: SegmentedButton<Brightness?>(
-              segments: const [
-                ButtonSegment(value: null, label: Text('System'), icon: Icon(Icons.brightness_auto_outlined)),
-                ButtonSegment(value: Brightness.light, label: Text('Light'), icon: Icon(Icons.light_mode_outlined)),
-                ButtonSegment(value: Brightness.dark, label: Text('Dark'), icon: Icon(Icons.dark_mode_outlined)),
-              ],
-              selected: {client.brightness},
-              onSelectionChanged: (s) => setState(() => client.setBrightness(s.first)),
+            const Divider(),
+            section('Notifications'),
+            SwitchListTile(
+              title: const Text('Agent alerts'),
+              subtitle: const Text(
+                  'Alert when an agent on any saved machine needs input or finishes, even in the background.'),
+              value: client.alerts,
+              onChanged: (v) => setState(() => client.setAlerts(v)),
             ),
-          ),
-          Padding(
-            padding: const EdgeInsets.fromLTRB(16, 16, 16, 0),
-            child: Wrap(
-              spacing: 8,
-              runSpacing: 8,
-              children: [
-                for (final color in _seeds)
-                  IconButton.filled(
-                    style: IconButton.styleFrom(backgroundColor: color),
-                    icon: Icon(Icons.check, color: color == client.seed ? Colors.black : Colors.transparent),
-                    onPressed: () => setState(() => client.setSeed(color)),
+            if (client.alerts) ...[
+              SwitchListTile(
+                title: const Text('Needs you'),
+                subtitle: const Text('Alert when an agent is blocked or waiting for input'),
+                value: client.alertBlocked,
+                onChanged: (v) => setState(() => client.setAlertBlocked(v)),
+              ),
+              SwitchListTile(
+                title: const Text('Finished'),
+                subtitle: const Text('Alert when an agent finishes its task'),
+                value: client.alertFinished,
+                onChanged: (v) => setState(() => client.setAlertFinished(v)),
+              ),
+              SwitchListTile(
+                title: const Text('Sound'),
+                subtitle: const Text('Play an audio alert tone'),
+                value: client.alertSound,
+                onChanged: (v) => setState(() => client.setAlertSound(v)),
+              ),
+              SwitchListTile(
+                title: const Text('Desktop notifications'),
+                subtitle: const Text('Show desktop notification banners on Linux'),
+                value: client.alertDesktop,
+                onChanged: (v) => setState(() => client.setAlertDesktop(v)),
+              ),
+            ],
+            const Divider(),
+            section('Terminal'),
+            ListTile(
+              title: const Text('Font size'),
+              subtitle: client.pinchZoom || client.volumeKeys == VolumeKeys.fontSize
+                  ? Text('Or ${[
+                      if (client.pinchZoom) 'pinch the terminal',
+                      if (client.volumeKeys == VolumeKeys.fontSize) 'use the volume keys',
+                    ].join(', or ')}')
+                  : null,
+              trailing: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  IconButton(
+                    icon: const Icon(Icons.remove),
+                    onPressed: client.fontSize > HerdrClientService.minFontSize
+                        ? () => setState(() => client.setFontSize(client.fontSize - 1))
+                        : null,
                   ),
-              ],
+                  Text('${client.fontSize.round()}', style: Theme.of(context).textTheme.labelLarge),
+                  IconButton(
+                    icon: const Icon(Icons.add),
+                    onPressed: client.fontSize < HerdrClientService.maxFontSize
+                        ? () => setState(() => client.setFontSize(client.fontSize + 1))
+                        : null,
+                  ),
+                ],
+              ),
             ),
-          ),
-          const Divider(),
-          section('Notifications'),
-          SwitchListTile(
-            title: const Text('Agent alerts'),
-            subtitle:
-                const Text('Alert when an agent on any saved machine needs input or finishes, even in the background.'),
-            value: client.alerts,
-            onChanged: (v) => setState(() => client.setAlerts(v)),
-          ),
-          const Divider(),
-          section('Terminal'),
-          ListTile(
-            title: const Text('Font size'),
-            subtitle: client.pinchZoom || client.volumeKeys == VolumeKeys.fontSize
-                ? Text('Or ${[
-                    if (client.pinchZoom) 'pinch the terminal',
-                    if (client.volumeKeys == VolumeKeys.fontSize) 'use the volume keys',
-                  ].join(', or ')}')
-                : null,
-            trailing: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                IconButton(
-                  icon: const Icon(Icons.remove),
-                  onPressed: client.fontSize > HerdrClientService.minFontSize
-                      ? () => setState(() => client.setFontSize(client.fontSize - 1))
-                      : null,
-                ),
-                Text('${client.fontSize.round()}', style: Theme.of(context).textTheme.labelLarge),
-                IconButton(
-                  icon: const Icon(Icons.add),
-                  onPressed: client.fontSize < HerdrClientService.maxFontSize
-                      ? () => setState(() => client.setFontSize(client.fontSize + 1))
-                      : null,
-                ),
-              ],
+            SwitchListTile(
+              title: const Text('Pinch to zoom'),
+              subtitle: const Text('Pinch the terminal with two fingers to change the font size'),
+              value: client.pinchZoom,
+              onChanged: (v) => setState(() => client.setPinchZoom(v)),
             ),
-          ),
-          SwitchListTile(
-            title: const Text('Pinch to zoom'),
-            subtitle: const Text('Pinch the terminal with two fingers to change the font size'),
-            value: client.pinchZoom,
-            onChanged: (v) => setState(() => client.setPinchZoom(v)),
-          ),
-          const ListTile(
-            title: Text('Volume keys'),
-            subtitle: Text('What the volume keys do while the terminal is on screen'),
-          ),
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 16),
-            child: SegmentedButton<VolumeKeys>(
-              segments: const [
-                ButtonSegment(value: VolumeKeys.fontSize, label: Text('Font size'), icon: Icon(Icons.text_fields)),
-                ButtonSegment(value: VolumeKeys.arrows, label: Text('↑ / ↓'), icon: Icon(Icons.unfold_more)),
-                ButtonSegment(value: VolumeKeys.volume, label: Text('Volume'), icon: Icon(Icons.volume_up_outlined)),
-              ],
-              selected: {client.volumeKeys},
-              onSelectionChanged: (s) => setState(() => client.setVolumeKeys(s.first)),
+            SwitchListTile(
+              title: const Text('Hide message terminal'),
+              subtitle: const Text('Hide the message input and control keys bar at the bottom of the terminal'),
+              value: client.hideMessageTerminal,
+              onChanged: (v) => setState(() => client.setHideMessageTerminal(v)),
             ),
-          ),
-          const SizedBox(height: 16),
-        ],
+            const ListTile(
+              title: Text('Volume keys'),
+              subtitle: Text('What the volume keys do while the terminal is on screen'),
+            ),
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16),
+              child: SegmentedButton<VolumeKeys>(
+                segments: const [
+                  ButtonSegment(value: VolumeKeys.fontSize, label: Text('Font size'), icon: Icon(Icons.text_fields)),
+                  ButtonSegment(value: VolumeKeys.arrows, label: Text('↑ / ↓'), icon: Icon(Icons.unfold_more)),
+                  ButtonSegment(value: VolumeKeys.volume, label: Text('Volume'), icon: Icon(Icons.volume_up_outlined)),
+                ],
+                selected: {client.volumeKeys},
+                onSelectionChanged: (s) => setState(() => client.setVolumeKeys(s.first)),
+              ),
+            ),
+            const SizedBox(height: 16),
+          ],
+        ),
       ),
     );
   }
