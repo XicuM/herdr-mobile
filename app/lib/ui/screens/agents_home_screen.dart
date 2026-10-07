@@ -210,6 +210,13 @@ class _AgentsHomeScreenState extends State<AgentsHomeScreen> {
     final tabLabel = item.tab?.displayName ?? '';
     final hasTerminalTitle = item.pane?.terminalTitle.isNotEmpty == true;
 
+    final locationParts = [
+      if (showMachineName) client.nameOf(item.machine),
+      if (wsLabel.isNotEmpty) wsLabel,
+      if (branch != null && branch.isNotEmpty) branch,
+      if (tabLabel.isNotEmpty && tabLabel != wsLabel) tabLabel,
+    ];
+
     return Dismissible(
       key: Key('${item.machine}/${agent.paneId}'),
       background: Container(
@@ -356,71 +363,56 @@ class _AgentsHomeScreenState extends State<AgentsHomeScreen> {
                   ],
                 ),
 
-                // Middle Metadata Tags: Workspace, branch, machine, tab
-                const SizedBox(height: 12),
-                Wrap(
-                  spacing: 8,
-                  runSpacing: 6,
-                  children: [
-                    if (showMachineName)
-                      _buildMetaChip(
-                        icon: Icons.dns_outlined,
-                        label: client.nameOf(item.machine),
-                        scheme: scheme,
-                      ),
-                    if (wsLabel.isNotEmpty)
-                      _buildMetaChip(
-                        icon: Icons.folder_outlined,
-                        label: wsLabel,
-                        scheme: scheme,
-                      ),
-                    if (branch != null && branch.isNotEmpty)
-                      _buildMetaChip(
-                        icon: Icons.alt_route_rounded,
-                        label: branch,
-                        scheme: scheme,
-                      ),
-                    if (tabLabel.isNotEmpty && tabLabel != wsLabel)
-                      _buildMetaChip(
-                        icon: Icons.tab_outlined,
-                        label: tabLabel,
-                        scheme: scheme,
-                      ),
-                  ],
-                ),
-
-                // Terminal title / command preview snippet
-                if (hasTerminalTitle) ...[
+                // Location metadata: Clean inline typography (no chips/boxes)
+                if (locationParts.isNotEmpty) ...[
                   const SizedBox(height: 10),
-                  Container(
-                    width: double.infinity,
-                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
-                    decoration: BoxDecoration(
-                      color: scheme.surfaceContainerHighest.withValues(alpha: 0.5),
-                      borderRadius: BorderRadius.circular(8),
-                    ),
-                    child: Row(
-                      children: [
-                        Icon(
-                          Icons.terminal_rounded,
-                          size: 14,
-                          color: scheme.onSurfaceVariant,
+                  Row(
+                    children: [
+                      Icon(
+                        Icons.folder_open_outlined,
+                        size: 15,
+                        color: scheme.onSurfaceVariant,
+                      ),
+                      const SizedBox(width: 6),
+                      Expanded(
+                        child: Text(
+                          locationParts.join(' · '),
+                          style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                                color: scheme.onSurfaceVariant,
+                                fontWeight: FontWeight.w500,
+                              ),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
                         ),
-                        const SizedBox(width: 8),
-                        Expanded(
-                          child: Text(
-                            item.pane!.terminalTitle,
-                            style: TextStyle(
-                              fontFamily: 'monospace',
-                              fontSize: 12,
-                              color: scheme.onSurfaceVariant,
-                            ),
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
+                      ),
+                    ],
+                  ),
+                ],
+
+                // Terminal title / command preview line
+                if (hasTerminalTitle) ...[
+                  const SizedBox(height: 6),
+                  Row(
+                    children: [
+                      Icon(
+                        Icons.terminal_rounded,
+                        size: 15,
+                        color: scheme.onSurfaceVariant,
+                      ),
+                      const SizedBox(width: 6),
+                      Expanded(
+                        child: Text(
+                          item.pane!.terminalTitle,
+                          style: TextStyle(
+                            fontFamily: 'monospace',
+                            fontSize: 12,
+                            color: scheme.onSurfaceVariant,
                           ),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
                         ),
-                      ],
-                    ),
+                      ),
+                    ],
                   ),
                 ],
               ],
@@ -477,40 +469,6 @@ class _AgentsHomeScreenState extends State<AgentsHomeScreen> {
                   fontWeight: FontWeight.bold,
                   letterSpacing: 0.5,
                 ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildMetaChip({
-    required IconData icon,
-    required String label,
-    required ColorScheme scheme,
-  }) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-      decoration: BoxDecoration(
-        color: scheme.surfaceContainerHighest.withValues(alpha: 0.6),
-        borderRadius: BorderRadius.circular(6),
-      ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Icon(icon, size: 13, color: scheme.onSurfaceVariant),
-          const SizedBox(width: 4),
-          ConstrainedBox(
-            constraints: const BoxConstraints(maxWidth: 160),
-            child: Text(
-              label,
-              style: TextStyle(
-                fontSize: 12,
-                color: scheme.onSurfaceVariant,
-                fontWeight: FontWeight.w500,
-              ),
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-            ),
           ),
         ],
       ),
