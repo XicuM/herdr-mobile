@@ -15,7 +15,12 @@ void main() async {
 class HerdrMobileApp extends StatelessWidget {
   final HerdrClientService client;
 
-  const HerdrMobileApp({super.key, required this.client});
+  HerdrMobileApp({super.key, required this.client}) {
+    // A failed request shows on whatever screen is up.
+    client.onError = (message) => _messenger.currentState?.showSnackBar(SnackBar(content: Text(message)));
+  }
+
+  final _messenger = GlobalKey<ScaffoldMessengerState>();
 
   @override
   Widget build(BuildContext context) {
@@ -29,6 +34,7 @@ class HerdrMobileApp extends StatelessWidget {
       listenable: client,
       builder: (_, home) => MaterialApp(
         title: 'Herdr Mobile',
+        scaffoldMessengerKey: _messenger,
         debugShowCheckedModeBanner: false,
         theme: theme(Brightness.light),
         darkTheme: theme(Brightness.dark),
