@@ -1,7 +1,7 @@
 /// Newest first. Shown once after an update; add an entry when bumping the version in pubspec.yaml.
 const changelog = <(String, List<String>)>[
   (
-    '1.7.1',
+    '1.7.2',
     [
       'The time on an agent in the list lines up with its summary.',
     ]
