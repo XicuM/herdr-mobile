@@ -1,6 +1,22 @@
 /// Newest first. Shown once after an update; add an entry when bumping the version in pubspec.yaml.
 const changelog = <(String, List<String>)>[
   (
+    '1.7.0',
+    [
+      'A new home screen, like a chat list: every agent on every machine, the ones that need you first and in bold. Each shows its summary on top, and under it its workspace, tab and status ("Working…" while it works), with its logo and when it last changed.',
+      'Swipe an agent right to mute it, left to close it (with Undo), or long-press to pick several.',
+      'An agent\'s terminal is headed the same way. Tap the header for the workspace\'s actions; the menu mutes, renames the tab or closes the agent. Back returns to the list.',
+      'Swiping the message bar now goes on to the agents of your other machines.',
+      'The computer icon, top right and green while one is connected, opens a panel with your machines: how each is doing, a switch to turn it on or off, + to add one, and tap one to edit or remove it. Settings no longer lists them.',
+      'Errors show on every screen, not only in a terminal.',
+      'The accent colour follows your wallpaper (Material You, Android 12+) unless you pick one in Settings.',
+      'Each agent keeps its own unsent message while you go to another.',
+      'Copied text loses the trailing spaces herdr pads each row with, and lines an agent wrapped are joined again.',
+      'The ☰ menu lists every machine\'s workspaces with their worktrees, and Settings: tap one to open it, long-press for its actions, drag to reorder; the + by a machine\'s name opens a new workspace there.',
+      'The search bar on top finds agents, workspaces, worktrees, tabs and machines by name, branch, place or status ("needs you").',
+    ]
+  ),
+  (
     '1.6.0',
     [
       'This version is signed with a new, permanent key, so it had to be installed fresh. From now on updates install over each other and keep your machines and settings.',
