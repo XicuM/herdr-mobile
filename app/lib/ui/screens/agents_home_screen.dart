@@ -1,5 +1,4 @@
 import 'package:flutter/material.dart';
-import '../../models/agent_status.dart';
 import '../../models/session.dart';
 import '../../services/herdr_client.dart';
 import '../widgets/agent_avatar.dart';
@@ -122,10 +121,10 @@ class _AgentsHomeScreenState extends State<AgentsHomeScreen> {
           body: sortedAgents.isEmpty
               ? _buildNoAgentsState(context, scheme)
               : ListView.separated(
-                  padding: const EdgeInsets.symmetric(vertical: 4),
+                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
                   itemCount: sortedAgents.length,
-                  separatorBuilder: (_, __) => const Divider(height: 1, indent: 72),
-                  itemBuilder: (context, i) => _buildDismissibleAgentTile(
+                  separatorBuilder: (_, __) => const SizedBox(height: 10),
+                  itemBuilder: (context, i) => _buildDismissibleAgentCard(
                     context,
                     sortedAgents[i],
                     machines.length > 1,
@@ -193,7 +192,7 @@ class _AgentsHomeScreenState extends State<AgentsHomeScreen> {
     );
   }
 
-  Widget _buildDismissibleAgentTile(
+  Widget _buildDismissibleAgentCard(
     BuildContext context,
     _AgentItem item,
     bool showMachineName,
@@ -203,23 +202,21 @@ class _AgentsHomeScreenState extends State<AgentsHomeScreen> {
     final agent = item.agent;
     final isMuted = client.isMuted(agent.paneId, item.machine);
     final isBlocked = agent.status == 'blocked';
+    final isWorking = agent.status == 'working';
+    final isDone = agent.status == 'done';
 
     final wsLabel = item.workspace?.displayName ?? '';
     final branch = item.workspace?.gitBranch;
     final tabLabel = item.tab?.displayName ?? '';
-
-    final subtitleParts = [
-      if (showMachineName) client.nameOf(item.machine),
-      if (wsLabel.isNotEmpty) wsLabel,
-      if (branch != null && branch.isNotEmpty) branch,
-      if (tabLabel.isNotEmpty && tabLabel != wsLabel) tabLabel,
-      if (item.pane?.terminalTitle.isNotEmpty == true) item.pane!.terminalTitle,
-    ];
+    final hasTerminalTitle = item.pane?.terminalTitle.isNotEmpty == true;
 
     return Dismissible(
       key: Key('${item.machine}/${agent.paneId}'),
       background: Container(
-        color: scheme.secondaryContainer,
+        decoration: BoxDecoration(
+          color: scheme.secondaryContainer,
+          borderRadius: BorderRadius.circular(16),
+        ),
         alignment: Alignment.centerLeft,
         padding: const EdgeInsets.symmetric(horizontal: 24),
         child: Row(
@@ -240,7 +237,10 @@ class _AgentsHomeScreenState extends State<AgentsHomeScreen> {
         ),
       ),
       secondaryBackground: Container(
-        color: scheme.errorContainer,
+        decoration: BoxDecoration(
+          color: scheme.errorContainer,
+          borderRadius: BorderRadius.circular(16),
+        ),
         alignment: Alignment.centerRight,
         padding: const EdgeInsets.symmetric(horizontal: 24),
         child: Row(
@@ -273,57 +273,246 @@ class _AgentsHomeScreenState extends State<AgentsHomeScreen> {
         }
         return false;
       },
-      child: ListTile(
-        leading: AgentAvatar(name: agent.name, status: agent.status),
-        title: Row(
-          children: [
-            Expanded(
-              child: Text(
-                agent.name,
-                style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                      fontWeight: FontWeight.w600,
-                      color: isBlocked ? scheme.error : null,
-                    ),
-                overflow: TextOverflow.ellipsis,
-              ),
-            ),
-            if (isMuted) ...[
-              const SizedBox(width: 4),
-              Icon(
-                Icons.notifications_off_outlined,
-                size: 16,
-                color: scheme.onSurfaceVariant,
-              ),
-            ],
-          ],
+      child: Card(
+        margin: EdgeInsets.zero,
+        elevation: 0,
+        color: isBlocked
+            ? scheme.errorContainer.withValues(alpha: 0.18)
+            : scheme.surfaceContainerLow,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(16),
+          side: BorderSide(
+            color: isBlocked
+                ? scheme.error.withValues(alpha: 0.4)
+                : scheme.outlineVariant.withValues(alpha: 0.4),
+            width: 1,
+          ),
         ),
-        subtitle: subtitleParts.isNotEmpty
-            ? Text(
-                subtitleParts.join(' · '),
-                style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                      color: scheme.onSurfaceVariant,
+        clipBehavior: Clip.antiAlias,
+        child: InkWell(
+          onTap: () => _openAgent(item.machine, agent.paneId),
+          child: Padding(
+            padding: const EdgeInsets.all(16),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                // Top Header Row: Avatar, Name + Mute icon, Status Badge
+                Row(
+                  crossAxisAlignment: CrossAxisAlignment.center,
+                  children: [
+                    AgentAvatar(
+                      name: agent.name,
+                      status: agent.status,
+                      radius: 22,
                     ),
-                maxLines: 2,
-                overflow: TextOverflow.ellipsis,
-              )
-            : null,
-        trailing: isBlocked
-            ? Container(
-                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
-                decoration: BoxDecoration(
-                  color: scheme.errorContainer,
-                  borderRadius: BorderRadius.circular(12),
-                ),
-                child: Text(
-                  'NEEDS INPUT',
-                  style: Theme.of(context).textTheme.labelSmall?.copyWith(
-                        color: scheme.onErrorContainer,
-                        fontWeight: FontWeight.bold,
+                    const SizedBox(width: 14),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Row(
+                            children: [
+                              Flexible(
+                                child: Text(
+                                  agent.name,
+                                  style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                                        fontWeight: FontWeight.bold,
+                                      ),
+                                  overflow: TextOverflow.ellipsis,
+                                ),
+                              ),
+                              if (isMuted) ...[
+                                const SizedBox(width: 6),
+                                Icon(
+                                  Icons.notifications_off_outlined,
+                                  size: 16,
+                                  color: scheme.onSurfaceVariant,
+                                ),
+                              ],
+                            ],
+                          ),
+                          const SizedBox(height: 2),
+                          Text(
+                            isBlocked
+                                ? 'Waiting for your reply'
+                                : isWorking
+                                    ? 'Executing task...'
+                                    : isDone
+                                        ? 'Task completed'
+                                        : 'Idle',
+                            style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                                  color: isBlocked
+                                      ? scheme.error
+                                      : scheme.onSurfaceVariant,
+                                  fontWeight: isBlocked ? FontWeight.w600 : FontWeight.normal,
+                                ),
+                          ),
+                        ],
                       ),
+                    ),
+                    const SizedBox(width: 8),
+                    _buildStatusPill(context, agent.status, scheme),
+                  ],
                 ),
-              )
-            : null,
-        onTap: () => _openAgent(item.machine, agent.paneId),
+
+                // Middle Metadata Tags: Workspace, branch, machine, tab
+                const SizedBox(height: 12),
+                Wrap(
+                  spacing: 8,
+                  runSpacing: 6,
+                  children: [
+                    if (showMachineName)
+                      _buildMetaChip(
+                        icon: Icons.dns_outlined,
+                        label: client.nameOf(item.machine),
+                        scheme: scheme,
+                      ),
+                    if (wsLabel.isNotEmpty)
+                      _buildMetaChip(
+                        icon: Icons.folder_outlined,
+                        label: wsLabel,
+                        scheme: scheme,
+                      ),
+                    if (branch != null && branch.isNotEmpty)
+                      _buildMetaChip(
+                        icon: Icons.alt_route_rounded,
+                        label: branch,
+                        scheme: scheme,
+                      ),
+                    if (tabLabel.isNotEmpty && tabLabel != wsLabel)
+                      _buildMetaChip(
+                        icon: Icons.tab_outlined,
+                        label: tabLabel,
+                        scheme: scheme,
+                      ),
+                  ],
+                ),
+
+                // Terminal title / command preview snippet
+                if (hasTerminalTitle) ...[
+                  const SizedBox(height: 10),
+                  Container(
+                    width: double.infinity,
+                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
+                    decoration: BoxDecoration(
+                      color: scheme.surfaceContainerHighest.withValues(alpha: 0.5),
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    child: Row(
+                      children: [
+                        Icon(
+                          Icons.terminal_rounded,
+                          size: 14,
+                          color: scheme.onSurfaceVariant,
+                        ),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: Text(
+                            item.pane!.terminalTitle,
+                            style: TextStyle(
+                              fontFamily: 'monospace',
+                              fontSize: 12,
+                              color: scheme.onSurfaceVariant,
+                            ),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildStatusPill(BuildContext context, String status, ColorScheme scheme) {
+    final (label, icon, bg, fg) = switch (status) {
+      'blocked' => (
+          'NEEDS INPUT',
+          Icons.priority_high_rounded,
+          scheme.errorContainer,
+          scheme.onErrorContainer
+        ),
+      'working' => (
+          'WORKING',
+          Icons.sync_rounded,
+          scheme.primaryContainer,
+          scheme.onPrimaryContainer
+        ),
+      'done' => (
+          'DONE',
+          Icons.check_circle_outline_rounded,
+          scheme.secondaryContainer,
+          scheme.onSecondaryContainer
+        ),
+      _ => (
+          'IDLE',
+          Icons.pause_circle_outline_rounded,
+          scheme.surfaceContainerHighest,
+          scheme.onSurfaceVariant
+        ),
+    };
+
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+      decoration: BoxDecoration(
+        color: bg,
+        borderRadius: BorderRadius.circular(8),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon, size: 12, color: fg),
+          const SizedBox(width: 4),
+          Text(
+            label,
+            style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                  color: fg,
+                  fontWeight: FontWeight.bold,
+                  letterSpacing: 0.5,
+                ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildMetaChip({
+    required IconData icon,
+    required String label,
+    required ColorScheme scheme,
+  }) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+      decoration: BoxDecoration(
+        color: scheme.surfaceContainerHighest.withValues(alpha: 0.6),
+        borderRadius: BorderRadius.circular(6),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon, size: 13, color: scheme.onSurfaceVariant),
+          const SizedBox(width: 4),
+          ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 160),
+            child: Text(
+              label,
+              style: TextStyle(
+                fontSize: 12,
+                color: scheme.onSurfaceVariant,
+                fontWeight: FontWeight.w500,
+              ),
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+            ),
+          ),
+        ],
       ),
     );
   }
