@@ -951,7 +951,7 @@ class _TerminalScreenState extends State<TerminalScreen> with SingleTickerProvid
                                   filled: true,
                                   fillColor: scheme.secondaryContainer,
                                   isDense: true,
-                                  contentPadding: const EdgeInsets.symmetric(vertical: 10),
+                                  contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
                                   border: OutlineInputBorder(
                                     borderRadius: BorderRadius.circular(24),
                                     borderSide: BorderSide.none,
@@ -961,18 +961,25 @@ class _TerminalScreenState extends State<TerminalScreen> with SingleTickerProvid
                                     icon: const Icon(Icons.history),
                                     onPressed: _showHistory,
                                   ),
-                                  // Enter/Send sits inside the pill, styled like the history button.
-                                  suffixIcon: ValueListenableBuilder<TextEditingValue>(
-                                    valueListenable: _message,
-                                    builder: (context, val, _) => IconButton(
-                                      tooltip: val.text.isEmpty ? 'Enter' : 'Send',
-                                      icon: Icon(val.text.isEmpty ? Icons.keyboard_return : Icons.send),
-                                      onPressed: _sendMessage,
-                                    ),
-                                  ),
                                 ),
                               ),
                       ),
+                      if (!client.keyBar) ...[
+                        const SizedBox(width: 6),
+                        ValueListenableBuilder<TextEditingValue>(
+                          valueListenable: _message,
+                          builder: (context, val, _) => IconButton.filled(
+                            style: IconButton.styleFrom(
+                              backgroundColor: scheme.primary,
+                              foregroundColor: scheme.onPrimary,
+                            ),
+                            tooltip: val.text.isEmpty ? 'Enter' : 'Send',
+                            icon: Icon(val.text.isEmpty ? Icons.keyboard_return : Icons.send_rounded),
+                            onPressed: _sendMessage,
+                          ),
+                        ),
+                        const SizedBox(width: 4),
+                      ],
                     ],
                   ),
                 ),
