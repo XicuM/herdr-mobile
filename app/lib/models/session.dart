@@ -34,6 +34,17 @@ class SessionSnapshot {
     final inTab = panes.where((p) => p.tabId == tabId);
     return (inTab.where((p) => p.focused).firstOrNull ?? inTab.firstOrNull)?.id;
   }
+
+  AgentModel? agentOf(String paneId) => agents.where((a) => a.paneId == paneId).firstOrNull;
+
+  /// Where a pane is: its branch name (falling back to workspace), and its tab in parentheses when the workspace has more than one.
+  String placeOf(PaneModel pane) {
+    final ws = workspaces.where((w) => w.id == pane.workspaceId).firstOrNull;
+    final own = tabs.where((t) => t.workspaceId == pane.workspaceId);
+    final tab = own.length > 1 ? own.where((t) => t.id == pane.tabId).firstOrNull : null;
+    final branch = ws?.gitBranch?.replaceFirst('worktree/', '') ?? ws?.displayName;
+    return [if (branch != null) branch, if (tab != null) '(${tab.displayName})'].join(' ');
+  }
 }
 
 class WorkspaceModel {
@@ -131,12 +142,17 @@ class PaneModel {
   });
 
   factory PaneModel.fromJson(Map<String, dynamic> json) {
+    // Agents tag their titles their own way: OpenCode's "OC | " in front, Grok's " - grok" after. Claude
+    // Code's title before its first summary, and Codex's (the folder it runs in), say nothing.
+    final String raw = json['title'] ?? json['terminal_title_stripped'] ?? json['terminal_title'] ?? '';
+    final title = raw.replaceFirst(RegExp(r'^OC \| '), '').replaceFirst(RegExp(r' - grok$'), '');
+    final String cwd = json['cwd'] ?? '';
     return PaneModel(
       id: json['pane_id'] ?? '',
       workspaceId: json['workspace_id'] ?? '',
       tabId: json['tab_id'] ?? '',
       focused: json['focused'] ?? false,
-      terminalTitle: json['terminal_title_stripped'] ?? json['terminal_title'] ?? '',
+      terminalTitle: title == 'Claude Code' || cwd.isNotEmpty && title == cwd.split('/').last ? '' : title,
       agentStatus: json['agent_status'] ?? 'unknown',
     );
   }
@@ -150,19 +166,25 @@ class AgentModel {
   /// Bumped by herdr each time the agent completes work, whether or not the pane was viewed.
   final int? completionSeq;
 
+  /// Bumped by herdr each time the agent's status changes.
+  final int? stateChangeSeq;
+
   AgentModel({
     required this.name,
     required this.paneId,
     required this.status,
     this.completionSeq,
+    this.stateChangeSeq,
   });
 
   factory AgentModel.fromJson(Map<String, dynamic> json) {
     return AgentModel(
-      name: json['name'] ?? json['agent'] ?? '',
+      // `name` is a name the user gave the pane, when there is one.
+      name: json['agent'] ?? json['name'] ?? '',
       paneId: json['pane_id'] ?? '',
       status: json['status'] ?? json['agent_status'] ?? 'unknown',
       completionSeq: json['completion_seq'],
+      stateChangeSeq: json['state_change_seq'],
     );
   }
 }

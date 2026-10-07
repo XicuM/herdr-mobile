@@ -1,14 +1,18 @@
 import 'package:flutter/material.dart';
 
+/// Each status's dot colour, and how it reads in text.
 enum AgentStatus {
-  working(Color(0xFFF9E2AF)), // yellow
-  blocked(Color(0xFFF38BA8)), // red: needs you
-  done(Color(0xFFA6E3A1)), // green
-  idle(Color(0xFF6C7086)), // overlay grey
-  unknown(Color(0xFF6C7086)); // no agent: idle's grey, but the dot is hollow
+  working(Color(0xFFF9E2AF), 'Working…'), // yellow
+  blocked(Color(0xFFF38BA8), 'Needs you'), // red
+  done(Color(0xFFA6E3A1), 'Done'), // green
+  idle(Color(0xFF6C7086), 'Idle'), // overlay grey
+  unknown(Color(0xFF6C7086), ''); // no agent: idle's grey, but the dot is hollow
 
-  const AgentStatus(this.color);
+  const AgentStatus(this.color, this.label);
   final Color color;
+  final String label;
+
+  static const draftColor = Color(0xFFFAB387); // peach
 
   static AgentStatus fromString(String? status) =>
       values.where((s) => s.name == status?.toLowerCase()).firstOrNull ?? unknown;
