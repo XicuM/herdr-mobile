@@ -543,6 +543,12 @@ class _TerminalScreenState extends State<TerminalScreen> with SingleTickerProvid
   /// Raw pointers, so the swipe works over the message box too, whose own drags would win the arena.
   /// A drag that is mostly sideways moves the terminal with the finger.
   void _trackSwipe(PointerEvent e) {
+    // If the message field is focused, let it handle text selection, cursor moves and copy/paste.
+    if (_messageFocus.hasFocus) {
+      _swipeFrom = null;
+      _swiping = false;
+      return;
+    }
     // Swiping between agents is a one-finger (left-button) gesture; right/middle drags select text.
     if (_isMouseSecondary(e)) {
       _swipeFrom = null;
