@@ -5,6 +5,7 @@ import 'package:herdr_mobile/models/session.dart';
 import 'package:herdr_mobile/models/agent_status.dart';
 import 'package:herdr_mobile/services/herdr_client.dart';
 import 'package:herdr_mobile/ui/widgets/workspace_drawer.dart';
+import 'package:herdr_mobile/ui/widgets/agent_sheet.dart';
 import 'package:herdr_mobile/changelog.dart';
 import 'package:herdr_mobile/main.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -274,20 +275,25 @@ void main() {
       expect(client.selectedPaneId, 'w2:p4');
     });
 
-    testWidgets('The agents button lists waiting agents first, and tapping one shows its pane', (tester) async {
+    testWidgets('showAgentSheet lists waiting agents first, and tapping one shows its pane', (tester) async {
       SharedPreferences.setMockInitialValues({'last_seen_changelog': changelog.first.$1});
       final client = HerdrClientService()
         ..setMachines(['100.1.2.3:7788'], [])
         ..setSnapshotForTesting(twoWorkspaces())
         ..selectPane('w1:p1');
-      await tester.pumpWidget(MaterialApp(home: TerminalScreen(client: client)));
-      expect(
-          find.descendant(of: find.byType(Badge), matching: find.text('1')), findsOneWidget); // ui; coder is on screen
-      expect(find.descendant(of: find.byTooltip('Agents'), matching: find.text('3')), findsOneWidget); // all agents
+      await tester.pumpWidget(MaterialApp(
+        home: Scaffold(
+          body: Builder(
+            builder: (context) => ElevatedButton(
+              onPressed: () => showAgentSheet(context, client),
+              child: const Text('Open'),
+            ),
+          ),
+        ),
+      ));
+      await tester.tap(find.text('Open'));
+      await tester.pumpAndSettle();
 
-      await tester.tap(find.byTooltip('Agents'));
-      await tester.pump();
-      await tester.pump(const Duration(seconds: 1)); // the Connecting spinner never settles
       Finder inSheet(String t) => find.descendant(of: find.byType(BottomSheet), matching: find.text(t));
       double y(Finder f) => tester.getTopLeft(f).dy;
       expect(y(inSheet('coder')), lessThan(y(inSheet('helper'))));
@@ -295,7 +301,7 @@ void main() {
       expect(inSheet('frontend · Tab 1'), findsOneWidget);
 
       await tester.tap(inSheet('ui'));
-      await tester.pump();
+      await tester.pumpAndSettle();
       expect(client.selectedPaneId, 'w2:p4');
     });
 

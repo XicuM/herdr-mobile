@@ -10,7 +10,6 @@ import '../../models/agent_status.dart';
 import '../../models/session.dart';
 import '../../services/herdr_client.dart';
 import '../../services/pty_channel.dart';
-import '../widgets/agent_sheet.dart';
 import '../widgets/workspace_drawer.dart';
 import '../widgets/keyboard_accessory_bar.dart';
 import '../widgets/machine_drawer.dart';
@@ -969,8 +968,6 @@ class _TerminalScreenState extends State<TerminalScreen> with SingleTickerProvid
                                 ),
                               ),
                       ),
-                      // The control keys take its room.
-                      if (!client.keyBar) Theme(data: onBackground, child: AgentsButton(client: client)),
                     ],
                   ),
                 ),
