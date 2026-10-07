@@ -353,6 +353,8 @@ class _TerminalScreenState extends State<TerminalScreen> with SingleTickerProvid
   }
 
   void _showUsage(AgentModel? agent, AgentUsage? usage) {
+    _messageFocus.unfocus();
+    FocusScope.of(context).unfocus();
     showModalBottomSheet(
       context: context,
       builder: (context) {
@@ -371,7 +373,7 @@ class _TerminalScreenState extends State<TerminalScreen> with SingleTickerProvid
               children: [
                 Row(
                   children: [
-                    AgentAvatar(name: agent?.name ?? '', radius: 18, status: agent?.status),
+                    AgentAvatar(name: agent?.name ?? '', radius: 14),
                     const SizedBox(width: 12),
                     Expanded(
                       child: Column(
@@ -438,12 +440,12 @@ class _TerminalScreenState extends State<TerminalScreen> with SingleTickerProvid
                               children: [
                                 Text(
                                   '$usedPct% used',
-                                  style: theme.textTheme.labelSmall?.copyWith(color: scheme.onSurfaceVariant),
+                                  style: theme.textTheme.bodySmall?.copyWith(color: scheme.onSurfaceVariant),
                                 ),
                                 if (limit.resetsAt != null && limit.resetsAt!.isNotEmpty)
                                   Text(
                                     'Resets ${_formatResetTime(limit.resetsAt!)}',
-                                    style: theme.textTheme.labelSmall?.copyWith(color: scheme.onSurfaceVariant),
+                                    style: theme.textTheme.bodySmall?.copyWith(color: scheme.onSurfaceVariant),
                                   ),
                               ],
                             ),
@@ -476,7 +478,7 @@ class _TerminalScreenState extends State<TerminalScreen> with SingleTickerProvid
                             children: [
                               Text(_formatTokens(tokens),
                                   style: theme.textTheme.titleMedium?.copyWith(fontWeight: FontWeight.bold)),
-                              Text('Tokens today', style: theme.textTheme.labelSmall?.copyWith(color: scheme.onSurfaceVariant)),
+                              Text('Tokens today', style: theme.textTheme.bodySmall?.copyWith(color: scheme.onSurfaceVariant)),
                             ],
                           ),
                         if (usage?.todayPrompts case final prompts?)
@@ -484,7 +486,7 @@ class _TerminalScreenState extends State<TerminalScreen> with SingleTickerProvid
                             children: [
                               Text('$prompts',
                                   style: theme.textTheme.titleMedium?.copyWith(fontWeight: FontWeight.bold)),
-                              Text('Prompts today', style: theme.textTheme.labelSmall?.copyWith(color: scheme.onSurfaceVariant)),
+                              Text('Prompts today', style: theme.textTheme.bodySmall?.copyWith(color: scheme.onSurfaceVariant)),
                             ],
                           ),
                       ],
@@ -920,12 +922,16 @@ class _TerminalScreenState extends State<TerminalScreen> with SingleTickerProvid
       _ptyChannel = null;
       return;
     }
-    if (pty != null && pty.paneId == paneId && pty.machine == client.machine) return;
+    final headers = client.headersOf(client.machine);
+    // A new token for the machine reconnects too.
+    if (pty != null && pty.paneId == paneId && pty.machine == client.machine &&
+        pty.headers[HttpHeaders.authorizationHeader] == headers[HttpHeaders.authorizationHeader]) return;
     pty?.dispose();
     _ptyChannel = PtyChannel(
       machine: client.machine,
       paneId: paneId,
       terminal: _terminal,
+      headers: headers,
       // Herdr shows a freshly attached pane live, also after the channel reconnects on its own.
       onAttach: () {
         if (_scrolledUp > 0) setState(() => _scrolledUp = 0);

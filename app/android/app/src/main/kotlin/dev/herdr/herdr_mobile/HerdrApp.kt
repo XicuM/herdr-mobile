@@ -42,9 +42,10 @@ class HerdrApp : Application() {
     override fun onCreate() {
         super.onCreate()
         if (Build.VERSION.SDK_INT >= 26) {
-            // Remove legacy channels to ensure custom sounds take effect
-            nm.deleteNotificationChannel("blocked")
-            nm.deleteNotificationChannel("finished")
+            // Remove legacy channels to ensure custom sounds and importance take effect
+            for (legacy in listOf("blocked", "finished", "blocked_v2", "finished_v2")) {
+                nm.deleteNotificationChannel(legacy)
+            }
 
             val audioAttributes = AudioAttributes.Builder()
                 .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
@@ -58,8 +59,9 @@ class HerdrApp : Application() {
                 setSound(blockedSound, audioAttributes)
                 enableVibration(true)
             }
-            val finishedChannel = NotificationChannel(FINISHED, "Agent finished", NotificationManager.IMPORTANCE_DEFAULT).apply {
+            val finishedChannel = NotificationChannel(FINISHED, "Agent finished", NotificationManager.IMPORTANCE_HIGH).apply {
                 setSound(doneSound, audioAttributes)
+                enableVibration(true)
             }
 
             nm.createNotificationChannels(listOf(
@@ -211,8 +213,8 @@ class HerdrApp : Application() {
         const val ENGINE = "main"
         const val STATUS_ID = 1
         const val STATUS = "status"
-        const val BLOCKED = "blocked_v2"
-        const val FINISHED = "finished_v2"
+        const val BLOCKED = "blocked_v3"
+        const val FINISHED = "finished_v3"
         const val DISCONNECT = "disconnect"
     }
 }

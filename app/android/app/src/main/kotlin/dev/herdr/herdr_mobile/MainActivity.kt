@@ -28,7 +28,10 @@ class MainActivity : FlutterActivity() {
 
     override fun onResume() {
         super.onResume()
-        if (app.askPending) app.askPermissions()
+        if (app.askPending || (android.os.Build.VERSION.SDK_INT >= 33 &&
+            checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS) != android.content.pm.PackageManager.PERMISSION_GRANTED)) {
+            app.askPermissions()
+        }
     }
 
     override fun onDestroy() {

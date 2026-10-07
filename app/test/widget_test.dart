@@ -97,10 +97,10 @@ void main() {
         agents: [],
       );
 
-      // Workspace with branch and multiple tabs shows branch (tab)
-      expect(snapshot.placeOf(snapshot.panes[0]), equals('feature-x (ui)'));
-      expect(snapshot.placeOf(snapshot.panes[1]), equals('feature-x (tests)'));
-      // Workspace without branch shows workspace label
+      // Workspace with multiple tabs shows workspace (tab)
+      expect(snapshot.placeOf(snapshot.panes[0]), equals('frontend (ui)'));
+      expect(snapshot.placeOf(snapshot.panes[1]), equals('frontend (tests)'));
+      // Workspace without multiple tabs shows workspace label
       expect(snapshot.placeOf(snapshot.panes[2]), equals('backend'));
     });
 
@@ -293,6 +293,18 @@ void main() {
       expect(client.machines, ['laptop:9000', '10.0.0.2:7788']);
       expect(client.nameOf('laptop:9000'), 'work');
       expect(client.nameOf('10.0.0.1:7788'), '10.0.0.1:7788');
+    });
+
+    test('A bridge\'s token goes to it and the machines it reaches, and moves with it', () {
+      final client = HerdrClientService()
+        ..setMachines(['10.0.0.1:7788', '10.0.0.1:7788/m/m1'], [])
+        ..configure('10.0.0.1:7788', token: 'abc', connect: false);
+      expect(client.headersOf('10.0.0.1:7788/m/m1'), {'authorization': 'Bearer abc'});
+      client.updateMachine('10.0.0.1:7788', to: 'laptop:7788', name: '');
+      expect(client.tokenOf('laptop:7788'), 'abc');
+      expect(client.tokenOf('10.0.0.1:7788'), isNull);
+      client.updateMachine('laptop:7788', to: 'laptop:7788', name: '', token: '');
+      expect(client.headersOf('laptop:7788'), isEmpty);
     });
 
     test('An empty git branch counts as none', () {

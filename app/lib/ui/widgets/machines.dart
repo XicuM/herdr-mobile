@@ -93,6 +93,7 @@ void showMachineDialog(BuildContext context, HerdrClientService client, [String?
   final name = TextEditingController(text: m == null || client.nameOf(m) == m ? '' : client.nameOf(m));
   final address = TextEditingController(text: m ?? '');
   final target = TextEditingController(text: reached ? client.targetOf(m) ?? '' : '');
+  final token = TextEditingController(text: m == null || reached ? '' : client.tokenOf(m) ?? '');
 
   Future<void> save(BuildContext dialogContext, StateSetter setState) async {
     if (ssh || reached) {
@@ -108,9 +109,10 @@ void showMachineDialog(BuildContext context, HerdrClientService client, [String?
     if (address.text.trim().isEmpty) return;
     final (host, port) = _parseAddress(address.text);
     final to = reached ? m : '$host:$port';
+    final key = token.text.replaceAll(RegExp(r'\s'), '');
     Navigator.pop(dialogContext);
-    if (m != null) return client.updateMachine(m, to: to, name: name.text.trim());
-    client.configure(to, name: name.text.trim());
+    if (m != null) return client.updateMachine(m, to: to, name: name.text.trim(), token: key);
+    client.configure(to, name: name.text.trim(), token: key);
   }
 
   Future<void> remove(BuildContext dialogContext) async {
@@ -208,6 +210,18 @@ void showMachineDialog(BuildContext context, HerdrClientService client, [String?
                   decoration: const InputDecoration(
                     labelText: 'Address',
                     helperText: 'Tailscale IP or name; add :port if not 7788',
+                    border: OutlineInputBorder(),
+                  ),
+                ),
+                const SizedBox(height: 16),
+                TextField(
+                  controller: token,
+                  autocorrect: false,
+                  enableSuggestions: false,
+                  keyboardType: TextInputType.visiblePassword,
+                  decoration: const InputDecoration(
+                    labelText: 'Token',
+                    helperText: 'herdr-bridge --print-token on that computer',
                     border: OutlineInputBorder(),
                   ),
                 ),

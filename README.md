@@ -10,7 +10,9 @@ Herdr Mobile consists of two components:
 
 ## Network Security
 
-The bridge has no authentication of its own: anyone who can reach it can type into your terminals. `deploy/start-bridge.sh` therefore binds it to the Tailscale interface only (`100.x.y.z:7788`), so only devices on your tailnet can reach it; run on its own, the bridge listens on `127.0.0.1`. Don't bind it to `0.0.0.0` on an untrusted network. It also refuses requests from web browsers, so a web page open on one of your devices can't reach it.
+Every request to the bridge must carry its token (`Authorization: Bearer …`). The bridge makes the token on first start, in `~/.config/herdr-bridge/token` (readable by you only). `install.sh` prints it, and `herdr-bridge --print-token` shows it again. Enter it in the app when adding the machine. The token keeps out other users of the same computer and other devices on your tailnet, which Tailscale alone lets in.
+
+`deploy/start-bridge.sh` also binds the bridge to the Tailscale interface only (`100.x.y.z:7788`); run on its own, the bridge listens on `127.0.0.1`. Traffic is plain HTTP, encrypted only by Tailscale, so don't bind it to `0.0.0.0` on an untrusted network. To narrow it further, a [Tailscale ACL](https://tailscale.com/kb/1018/acls) can limit port 7788 to your own devices. The bridge also refuses requests from web browsers, so a web page open on one of your devices can't reach it.
 
 ## Quickstart: Deploying the Bridge
 
@@ -28,7 +30,7 @@ This will:
 2. Configure and start the background daemon:
    - **Linux / WSL2**: User systemd unit (`systemctl --user status herdr-bridge`).
    - **macOS**: launchd LaunchAgent (`launchctl list | grep dev.herdr.bridge`).
-3. Display your Tailscale IP and port (`7788`) ready to enter into the mobile app.
+3. Display your Tailscale IP, port (`7788`) and token, ready to enter into the mobile app.
 
 To check service logs:
 - **Linux / WSL2**: `journalctl --user -u herdr-bridge -f`

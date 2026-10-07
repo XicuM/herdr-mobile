@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'package:flutter/foundation.dart';
+import 'package:web_socket_channel/io.dart';
 import 'package:web_socket_channel/web_socket_channel.dart';
 import 'package:xterm/xterm.dart';
 
@@ -11,6 +12,9 @@ class PtyChannel {
   final String machine;
   final String paneId;
   final Terminal terminal;
+
+  /// The bridge's token header ([HerdrClientService.headersOf]).
+  final Map<String, String> headers;
 
   /// Called with each attach's first frame, when herdr shows the pane live.
   final VoidCallback? onAttach;
@@ -24,6 +28,7 @@ class PtyChannel {
     required this.machine,
     required this.paneId,
     required this.terminal,
+    this.headers = const {},
     this.onAttach,
   });
 
@@ -36,7 +41,7 @@ class PtyChannel {
     var reset = '\x1b[?1049h\x1b[0m\x1b[H\x1b[2J';
     final uri = Uri.parse(
         'ws://$machine/ws/term/${Uri.encodeComponent(paneId)}?cols=${terminal.viewWidth}&rows=${terminal.viewHeight}');
-    _channel = WebSocketChannel.connect(uri);
+    _channel = IOWebSocketChannel.connect(uri, headers: headers);
     // Connection failures also reach the stream's onError, which reconnects.
     _channel!.ready.ignore();
     // Utf8Decoder as a stream transformer keeps multi-byte characters split across frames intact.

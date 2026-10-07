@@ -37,13 +37,13 @@ class SessionSnapshot {
 
   AgentModel? agentOf(String paneId) => agents.where((a) => a.paneId == paneId).firstOrNull;
 
-  /// Where a pane is: its branch name (falling back to workspace), and its tab in parentheses when the workspace has more than one.
+  /// Where a pane is: its workspace name, and its tab in parentheses when the workspace has more than one.
   String placeOf(PaneModel pane) {
     final ws = workspaces.where((w) => w.id == pane.workspaceId).firstOrNull;
     final own = tabs.where((t) => t.workspaceId == pane.workspaceId);
     final tab = own.length > 1 ? own.where((t) => t.id == pane.tabId).firstOrNull : null;
-    final branch = ws?.gitBranch?.replaceFirst('worktree/', '') ?? ws?.displayName;
-    return [if (branch != null) branch, if (tab != null) '(${tab.displayName})'].join(' ');
+    final wsName = ws?.displayName;
+    return [if (wsName != null) wsName, if (tab != null) '(${tab.displayName})'].join(' ');
   }
 }
 

@@ -16,9 +16,6 @@ const _logos = [
   (['cursor'], 'cursor.svg', null),
   (['copilot'], 'copilot.svg', null),
   (['opencode'], 'opencode.svg', null),
-  (['aider'], 'aider.svg', null),
-  (['deepmind'], 'deepmind.svg', null),
-  (['google'], 'google.svg', null),
 ];
 
 final _iconCache = <String, Uint8List>{};

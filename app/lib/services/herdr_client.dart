@@ -30,6 +30,9 @@ class _Conn {
   /// Why the bridge has no snapshot (herdr not running, or the machine unreachable from it), until it has.
   String? error;
 
+  /// The bridge refused the token ([HerdrClientService.tokenOf]), until a connection is let in.
+  bool unauthorized = false;
+
   /// The highest `completion_seq` seen per pane: a snapshot fetched over HTTP can land after a newer
   /// pushed one, and going back and forth must not alert twice.
   final completions = <String, int>{};
@@ -54,6 +57,10 @@ class HerdrClientService extends ChangeNotifier {
 
   /// The SSH target of each machine a bridge reaches, as its herdr has it.
   Map<String, String> _targets = {};
+
+  /// Each bridge's token (`herdr-bridge --print-token` there), sent with every request to it and to the
+  /// machines it reaches.
+  Map<String, String> _tokens = {};
 
   /// Machines the user disconnected; every other saved machine stays connected.
   Set<String> _off = {};
@@ -148,7 +155,18 @@ class HerdrClientService extends ChangeNotifier {
   bool isConnected(String m) => _conns[m]?.connected ?? false;
 
   /// Why [m]'s bridge can't show it, e.g. "ssh: Could not resolve hostname …"; null once it can.
-  String? errorOf(String m) => isConnected(m) ? _conns[m]?.error : null;
+  String? errorOf(String m) => (_conns[m]?.unauthorized ?? false)
+      ? 'Wrong or missing token: run herdr-bridge --print-token on ${nameOf(parentOf(m) ?? m)} and edit the machine'
+      : isConnected(m)
+          ? _conns[m]?.error
+          : null;
+
+  /// The token sent to [m]'s bridge, if one was given.
+  String? tokenOf(String m) => _tokens[parentOf(m) ?? m];
+
+  /// The headers every request to [m] carries: its bridge's token.
+  Map<String, String> headersOf(String m) =>
+      {if (tokenOf(m) case final token?) HttpHeaders.authorizationHeader: 'Bearer $token'};
 
   /// The bridge that reaches [m] over SSH (`host:port/m/<id>`, from its `/api/machines`), or null when
   /// [m] runs its own.
@@ -328,6 +346,7 @@ class HerdrClientService extends ChangeNotifier {
     _alertDesktop = p.getBool('alert_desktop') ?? true;
     setMachines(p.getStringList('herdr_machines') ?? [], p.getStringList('herdr_machine_names') ?? [],
         p.getStringList('herdr_machines_off') ?? []);
+    _tokens = _pairs(p.getStringList('herdr_machine_tokens') ?? []);
     final host = p.getString('herdr_host');
     if (host != null) {
       _machine = '$host:${p.getInt('herdr_port') ?? 7788}${p.getString('herdr_path') ?? ''}';
@@ -340,6 +359,7 @@ class HerdrClientService extends ChangeNotifier {
     _started = true;
     warmAgentIcons();
     warmAlertSounds();
+    if (_alerts) _native('askPermissions');
     notifyListeners();
   }
 
@@ -378,7 +398,7 @@ class HerdrClientService extends ChangeNotifier {
   void _open(String m, _Conn c) {
     try {
       // Without a timeout, an attempt made while the network is down can hang and never retry.
-      final channel = IOWebSocketChannel(WebSocket.connect('ws://$m/ws/session')
+      final channel = IOWebSocketChannel(WebSocket.connect('ws://$m/ws/session', headers: headersOf(m))
           .then((s) => c.socket = s..pingInterval = _ping)
           .timeout(const Duration(seconds: 5)));
       c.channel = channel;
@@ -390,18 +410,33 @@ class HerdrClientService extends ChangeNotifier {
           if (c.channel != channel) return;
           if (!c.connected) {
             c.connected = true;
+            c.unauthorized = false;
             c.fails = 0;
             if (parentOf(m) == null) _discover(m);
             notifyListeners();
           }
           _handleMessage(m, message);
         },
-        onError: (_) => _dropped(c, channel),
+        onError: (_) {
+          if (!c.connected && c.channel == channel) _checkToken(m, c);
+          _dropped(c, channel);
+        },
         onDone: () => _dropped(c, channel),
       );
     } catch (_) {
       _dropped(c, null);
     }
+  }
+
+  /// After a failed connection: whether it was the token (a refused upgrade doesn't say why), so the app
+  /// can say so instead of retrying quietly. Asked of the bridge itself, which answers before any machine.
+  Future<void> _checkToken(String m, _Conn c) async {
+    try {
+      final res = await http.get(Uri.parse('http://${parentOf(m) ?? m}/api/auth'), headers: headersOf(m));
+      if (c.unauthorized == (res.statusCode == 401)) return;
+      c.unauthorized = res.statusCode == 401;
+      notifyListeners();
+    } catch (_) {}
   }
 
   /// Retries in 3 s, doubling with each failure in a row up to about 3 min, so a machine that's asleep or
@@ -471,10 +506,11 @@ class HerdrClientService extends ChangeNotifier {
 
   /// Shows [m] (`host:port`, or a machine a bridge reaches), remembering it in the machine list and,
   /// with [connect], connecting it if it was off.
-  void configure(String m, {String? name, bool connect = true}) {
+  void configure(String m, {String? name, String? token, bool connect = true}) {
     _setActive(m);
     if (!_machines.contains(machine)) _machines = [..._machines, machine];
     if (name != null && name.isNotEmpty) _names = {..._names, machine: name};
+    if (token != null && token.isNotEmpty) _tokens = {..._tokens, machine: token};
     if (connect) _off = {..._off}..remove(machine);
     _saveMachines();
     notifyListeners();
@@ -484,13 +520,16 @@ class HerdrClientService extends ChangeNotifier {
   /// stored in prefs.
   void setMachines(List<String> machines, List<String> names, [List<String> off = const []]) {
     _machines = machines;
-    _names = {
-      for (final n in names)
-        if (n.contains('=')) n.substring(0, n.indexOf('=')): n.substring(n.indexOf('=') + 1)
-    };
+    _names = _pairs(names);
     _off = off.toSet();
     notifyListeners();
   }
+
+  /// `key=value` entries, as stored in prefs.
+  static Map<String, String> _pairs(List<String> entries) => {
+        for (final n in entries)
+          if (n.contains('=')) n.substring(0, n.indexOf('=')): n.substring(n.indexOf('=') + 1)
+      };
 
   /// Forgets [m], and the machines it reaches; removing the active machine shows another.
   void removeMachine(String m) {
@@ -511,6 +550,7 @@ class HerdrClientService extends ChangeNotifier {
     }
     _machines = _machines.where((x) => !gone.contains(x)).toList();
     _names = {..._names}..removeWhere((k, _) => gone.contains(k));
+    _tokens = {..._tokens}..removeWhere((k, _) => gone.contains(k));
     _off = _off.difference(gone.toSet());
     _saveMachines();
   }
@@ -546,18 +586,29 @@ class HerdrClientService extends ChangeNotifier {
 
   /// Renames [m] and/or moves it to [to] (`host:port`), keeping its place in the list and its on/off
   /// state. The machines it reached are found again at the new address.
-  void updateMachine(String m, {required String to, required String name}) {
+  void updateMachine(String m, {required String to, required String name, String? token}) {
     _machines = [
       for (final x in _machines)
         if (x == m) to else if (x != to) x
     ];
     _names = {..._names}..remove(m);
     if (name.isNotEmpty) _names[to] = name;
+    final oldToken = _tokens[m];
+    final newToken = token ?? oldToken;
     if (to != m) {
       final (active, off) = (machine, _off.contains(m));
       _forget([m, ..._machines.where((x) => parentOf(x) == m)]);
       if (off) _off = {..._off, to};
       if (active == m || parentOf(active) == m) _setActive(to);
+    }
+    _tokens = {..._tokens}..remove(to);
+    if (newToken != null && newToken.isNotEmpty) _tokens[to] = newToken;
+    // A new token reconnects it, and the machines it reaches, with it.
+    if (to == m && newToken != oldToken) {
+      for (final x in [m, ..._machines.where((x) => parentOf(x) == m)]) {
+        _conns[x]?.unauthorized = false;
+        _close(x);
+      }
     }
     _saveMachines();
     notifyListeners();
@@ -568,7 +619,7 @@ class HerdrClientService extends ChangeNotifier {
   Future<void> _discover(String m) async {
     final List found;
     try {
-      final res = await http.get(Uri.parse('http://$m/api/machines'));
+      final res = await http.get(Uri.parse('http://$m/api/machines'), headers: headersOf(m));
       if (res.statusCode != 200) return;
       found = jsonDecode(res.body)['machines'];
     } catch (_) {
@@ -592,6 +643,7 @@ class HerdrClientService extends ChangeNotifier {
   void _saveMachines() => SharedPreferences.getInstance().then((p) => p
     ..setStringList('herdr_machines', _machines)
     ..setStringList('herdr_machine_names', [for (final e in _names.entries) '${e.key}=${e.value}'])
+    ..setStringList('herdr_machine_tokens', [for (final e in _tokens.entries) '${e.key}=${e.value}'])
     ..setStringList('herdr_machines_off', _off.toList()));
 
   /// Shows [machine] (as stored in [machines]) as it is: one the user disconnected stays off. The others
@@ -733,8 +785,21 @@ class HerdrClientService extends ChangeNotifier {
       final seq = agent?.completionSeq ?? 0;
       if (seq > seen) completions[pane.id] = seq;
       if (_muted.contains('$m/${pane.id}')) continue;
-      final blocked = was != null && was.agentStatus != 'blocked' && pane.agentStatus == 'blocked';
-      final finished = wasAgent != null && seq > seen;
+
+      final wasStatus = wasAgent?.status ?? was?.agentStatus ?? 'unknown';
+      final nowStatus = agent?.status ?? pane.agentStatus;
+
+      final wasBlocked = wasStatus == 'blocked' || was?.agentStatus == 'blocked' || wasAgent?.status == 'blocked';
+      final isBlocked = nowStatus == 'blocked' || pane.agentStatus == 'blocked' || agent?.status == 'blocked';
+      final blocked = !wasBlocked && isBlocked;
+
+      final wasWorking = wasStatus == 'working' || was?.agentStatus == 'working' || wasAgent?.status == 'working';
+      final isDoneOrIdle = (nowStatus == 'done' || nowStatus == 'idle') ||
+          (pane.agentStatus == 'done' || pane.agentStatus == 'idle') ||
+          (agent?.status == 'done' || agent?.status == 'idle');
+      final statusFinished = wasWorking && isDoneOrIdle && !isBlocked;
+
+      final finished = (wasAgent != null && seq > seen) || (wasAgent != null && statusFinished);
       if (!blocked && !finished) continue;
       if (blocked && !_alertBlocked) continue;
       if (finished && !_alertFinished) continue;
@@ -806,7 +871,7 @@ class HerdrClientService extends ChangeNotifier {
 
   Future<void> _fetchSnapshotHttp(String m) async {
     try {
-      final res = await http.get(Uri.parse('http://$m/api/snapshot'));
+      final res = await http.get(Uri.parse('http://$m/api/snapshot'), headers: headersOf(m));
       if (res.statusCode == 200 && _machines.contains(m) && !_off.contains(m)) {
         _apply(m, SessionSnapshot.fromJson(jsonDecode(res.body)));
       }
@@ -821,7 +886,8 @@ class HerdrClientService extends ChangeNotifier {
     final m = on ?? machine;
     dynamic result;
     try {
-      final req = http.Request(method, Uri.parse('http://$m$path').replace(queryParameters: query));
+      final req = http.Request(method, Uri.parse('http://$m$path').replace(queryParameters: query))
+        ..headers.addAll(headersOf(m));
       if (body != null) {
         req.headers['Content-Type'] = 'application/json';
         req.body = jsonEncode(body);

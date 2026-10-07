@@ -1,6 +1,13 @@
 /// Newest first. Shown once after an update; add an entry when bumping the version in pubspec.yaml.
 const changelog = <(String, List<String>)>[
   (
+    '1.8.0',
+    [
+      'herdr-bridge now asks for a token, so nobody else on your computers or your tailnet can use it. Update the bridge, run herdr-bridge --print-token there, and enter it when editing the machine (tap it in the machines panel).',
+      'The ⚡ usage sheet shows only what the agents\' own files record: today\'s tokens, prompts and model, and Codex\'s real rate limits. Claude\'s limits aren\'t on disk, so they no longer show made-up percentages.',
+    ]
+  ),
+  (
     '1.7.2',
     [
       'The time on an agent in the list lines up with its summary.',
