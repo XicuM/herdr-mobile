@@ -1,4 +1,5 @@
 import 'dart:io';
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -220,13 +221,14 @@ void main() {
 
       final tab = find.descendant(of: find.byType(AppBar), matching: find.text('db'));
 
-      // While dragged, the new-tab button turns into a bin.
+      // While dragged, the new-tab button turns into a bin and the dragged tab slot maintains 168dp width.
       expect(find.byTooltip('New tab'), findsOneWidget);
       final drag = await tester.startGesture(tester.getCenter(tab));
       await tester.pump(const Duration(seconds: 1));
       await drag.moveBy(const Offset(-40, 0));
       await tester.pump();
       expect(find.byTooltip('Close tab'), findsOneWidget);
+      expect(tester.getSize(find.byType(LongPressDraggable<String>).first).width, 168);
       await drag.moveBy(const Offset(40, 0));
       await drag.up();
       await settle();
@@ -261,14 +263,28 @@ void main() {
       await tester.pump();
       expect(find.byType(TextField), findsOneWidget);
 
-      // Tapping the header opens the workspace's actions.
-      await tester.tap(inBar('backend'));
-      await tester.pump();
-      await tester.pump(const Duration(seconds: 1)); // the Connecting spinner never settles
-      expect(find.text('Rename'), findsOneWidget);
-      expect(find.text('New worktree'), findsOneWidget);
-      expect(find.text('Open worktree'), findsOneWidget);
-      expect(find.text('Delete'), findsOneWidget);
+      // On Linux, tapping the header does not open the workspace menu; right-clicking opens the context menu.
+      if (Platform.isLinux) {
+        await tester.tap(inBar('backend'));
+        await tester.pump();
+        expect(find.text('Rename'), findsNothing);
+
+        await tester.tap(inBar('backend'), buttons: kSecondaryMouseButton);
+        await tester.pump();
+        await tester.pump(const Duration(seconds: 1)); // the Connecting spinner never settles
+        expect(find.text('Rename'), findsOneWidget);
+        expect(find.text('New worktree'), findsOneWidget);
+        expect(find.text('Open worktree'), findsOneWidget);
+        expect(find.text('Delete'), findsOneWidget);
+      } else {
+        await tester.tap(inBar('backend'));
+        await tester.pump();
+        await tester.pump(const Duration(seconds: 1)); // the Connecting spinner never settles
+        expect(find.text('Rename'), findsOneWidget);
+        expect(find.text('New worktree'), findsOneWidget);
+        expect(find.text('Open worktree'), findsOneWidget);
+        expect(find.text('Delete'), findsOneWidget);
+      }
     });
 
     test('Editing a machine renames it and moves it in place', () {
@@ -336,6 +352,7 @@ void main() {
         ..setMachines(['100.1.2.3:7788'], [])
         ..switchMachine('100.1.2.3:7788')
         ..setSnapshotForTesting(twoWorkspaces())
+        ..setConnectedForTesting('100.1.2.3:7788', true) // the drawer shows connected machines only
         ..selectPane('w1:p1');
       await tester.pumpWidget(MaterialApp(home: AgentsHomeScreen(client: client)));
       Future<void> settle() async {
@@ -414,6 +431,7 @@ void main() {
         ..setMachines(['100.1.2.3:7788'], [])
         ..switchMachine('100.1.2.3:7788')
         ..setSnapshotForTesting(twoWorkspaces())
+        ..setConnectedForTesting('100.1.2.3:7788', true) // the drawer shows connected machines only
         ..selectPane('w1:p1');
       await tester.pumpWidget(MaterialApp(home: AgentsHomeScreen(client: client)));
       Future<void> settle() async {
@@ -553,8 +571,8 @@ void main() {
       await tester.tap(find.byTooltip('Machines'));
       await settle();
       expect(find.descendant(of: find.byType(MachineList), matching: find.text('laptop')), findsOneWidget);
-      expect(find.text('10.0.0.1:7788 · Connecting…'), findsOneWidget); // nothing connects in a test
-      expect(find.text('Off'), findsOneWidget);
+      expect(find.text('10.0.0.1:7788'), findsOneWidget); // its address under its name, no status text
+      expect(find.byIcon(Icons.warning_amber_rounded), findsNothing);
       expect(find.byType(Switch), findsNWidgets(2));
 
       await tester.tap(find.byType(Switch).last); // connect the second, keep the first on screen
@@ -688,6 +706,14 @@ void main() {
 
       final unknown = agentIconBytes('unknown-agent-name');
       expect(unknown, isNull);
+    });
+
+    test('Alert sounds warm up and cache herdr sound files on Linux', () async {
+      await warmAlertSounds();
+      final doneFile = File('${Directory.systemTemp.path}/herdr_done.mp3');
+      final blockedFile = File('${Directory.systemTemp.path}/herdr_blocked.mp3');
+      expect(doneFile.existsSync(), isTrue);
+      expect(blockedFile.existsSync(), isTrue);
     });
 
     testWidgets('Agent alert includes agent icon in notification payload', (tester) async {
@@ -1117,8 +1143,8 @@ void main() {
       await tester.tap(find.text('agent-task'));
       await settle();
 
-      // Conversation screen (TerminalScreen) has ActionChip with machine name 'MacBook Pro'
-      final chipFinder = find.byType(ActionChip);
+      // Conversation screen (TerminalScreen) has Chip with machine name 'MacBook Pro'
+      final chipFinder = find.byType(Chip);
       expect(chipFinder, findsOneWidget);
       expect(find.descendant(of: chipFinder, matching: find.text('MacBook Pro')), findsOneWidget);
 
@@ -1136,10 +1162,10 @@ void main() {
       final decorationConnected = dotContainerConnected.decoration as BoxDecoration;
       expect(decorationConnected.color, equals(Colors.green));
 
-      // Tapping the chip opens edit machine dialog
+      // Tapping the chip does not open edit machine dialog
       await tester.tap(chipFinder);
       await settle();
-      expect(find.text('Edit machine'), findsOneWidget);
+      expect(find.text('Edit machine'), findsNothing);
     });
 
     testWidgets('AgentsHomeScreen displays branch_name (tab_name) · machine in agent subtitle', (tester) async {
@@ -1280,8 +1306,6 @@ void main() {
       expect(find.text('Agent alerts'), findsOneWidget);
       expect(find.text('Needs you'), findsOneWidget);
       expect(find.text('Finished'), findsOneWidget);
-      expect(find.text('Sound'), findsOneWidget);
-      expect(find.text('Desktop notifications'), findsOneWidget);
 
       // Verify toggling options updates client state
       expect(client.alertBlocked, isTrue);
@@ -1289,20 +1313,43 @@ void main() {
       await tester.pumpAndSettle();
       expect(client.alertBlocked, isFalse);
 
-      expect(client.alertSound, isTrue);
-      await tester.tap(find.widgetWithText(SwitchListTile, 'Sound'));
-      await tester.pumpAndSettle();
-      expect(client.alertSound, isFalse);
+      if (Platform.isLinux) {
+        await tester.scrollUntilVisible(find.widgetWithText(SwitchListTile, 'Sound'), 100);
+        await tester.pumpAndSettle();
+        expect(client.alertSound, isTrue);
+        await tester.tap(find.widgetWithText(SwitchListTile, 'Sound'));
+        await tester.pumpAndSettle();
+        expect(client.alertSound, isFalse);
 
-      expect(client.alertDesktop, isTrue);
-      await tester.scrollUntilVisible(find.widgetWithText(SwitchListTile, 'Desktop notifications'), 100);
+        expect(client.alertDesktop, isTrue);
+        await tester.scrollUntilVisible(find.widgetWithText(SwitchListTile, 'Desktop notifications'), 100);
+        await tester.pumpAndSettle();
+        await tester.tap(find.widgetWithText(SwitchListTile, 'Desktop notifications'));
+        await tester.pumpAndSettle();
+        expect(client.alertDesktop, isFalse);
+      }
+
+      // Verify Muted agents section
+      await tester.scrollUntilVisible(find.text('Muted agents'), 100);
       await tester.pumpAndSettle();
-      await tester.tap(find.widgetWithText(SwitchListTile, 'Desktop notifications'));
+      expect(find.text('Muted agents'), findsOneWidget);
+      expect(find.text('None'), findsOneWidget);
+
+      // Mute a pane and verify count and bottom sheet
+      client.setMuted('p1', true, '127.0.0.1:7788');
       await tester.pumpAndSettle();
-      expect(client.alertDesktop, isFalse);
+      expect(find.text('1 muted'), findsOneWidget);
+
+      await tester.tap(find.text('Muted agents'));
+      await tester.pumpAndSettle();
+      expect(find.text('Unmute all'), findsOneWidget);
+
+      await tester.tap(find.text('Unmute all'));
+      await tester.pumpAndSettle();
+      expect(client.muted, isEmpty);
     });
 
-    testWidgets('In a worktree, top bar shows worktree chip before main repo name on top and branch on bottom',
+    testWidgets('In a worktree, top bar shows main repo name on top and worktree chip before branch on bottom',
         (tester) async {
       SharedPreferences.setMockInitialValues({'last_seen_changelog': changelog.first.$1});
       final client = HerdrClientService()
@@ -1366,7 +1413,7 @@ void main() {
       await tester.pumpWidget(MaterialApp(home: TerminalScreen(client: client)));
       await tester.pump(const Duration(milliseconds: 300));
 
-      // Terminal AppBar should show 'worktree' chip before main repo name 'herdr-mobile' on top
+      // Terminal AppBar should show main repo name 'herdr-mobile' on top and 'worktree' chip before branch 'feat-login' on bottom
       final appBarFinder = find.byType(AppBar);
       final chipInBar = find.descendant(of: appBarFinder, matching: find.text('worktree'));
       final repoInBar = find.descendant(of: appBarFinder, matching: find.text('herdr-mobile'));
@@ -1376,13 +1423,15 @@ void main() {
       expect(repoInBar, findsOneWidget);
       expect(branchInBar, findsOneWidget);
 
-      // Chip is horizontally before the repo name on the top line
-      expect(tester.getTopLeft(chipInBar).dx, lessThan(tester.getTopLeft(repoInBar).dx));
+      // Chip is vertically below the repo name
+      expect(tester.getTopLeft(chipInBar).dy, greaterThan(tester.getTopLeft(repoInBar).dy));
+      // Chip is horizontally before the branch name on the bottom line
+      expect(tester.getTopLeft(chipInBar).dx, lessThan(tester.getTopLeft(branchInBar).dx));
       // Branch is vertically below the repo name
       expect(tester.getTopLeft(branchInBar).dy, greaterThan(tester.getTopLeft(repoInBar).dy));
 
-      // Tapping the header opens showWorkspaceActions with the chip before repo name
-      await tester.tap(repoInBar);
+      // showWorkspaceActions shows the chip before branch
+      showWorkspaceActions(tester.element(appBarFinder), client, snap.workspaces[1]);
       await tester.pump();
       await tester.pump(const Duration(milliseconds: 300));
 
@@ -1394,7 +1443,101 @@ void main() {
       expect(chipInSheet, findsOneWidget);
       expect(repoInSheet, findsOneWidget);
       expect(branchInSheet, findsOneWidget);
-      expect(tester.getTopLeft(chipInSheet).dx, lessThan(tester.getTopLeft(repoInSheet).dx));
+      expect(tester.getTopLeft(chipInSheet).dy, greaterThan(tester.getTopLeft(repoInSheet).dy));
+      expect(tester.getTopLeft(chipInSheet).dx, lessThan(tester.getTopLeft(branchInSheet).dx));
+    });
+
+    testWidgets('Ctrl + and Ctrl - change terminal zoom on Linux/desktop', (tester) async {
+      final client = HerdrClientService();
+      client.setFontSize(14);
+      final snap = SessionSnapshot.fromJson({
+        'version': '0.9.3',
+        'protocol': 22,
+        'focused_workspace_id': 'w1',
+        'focused_tab_id': 'w1:t1',
+        'focused_pane_id': 'w1:p1',
+        'workspaces': [
+          {
+            'workspace_id': 'w1',
+            'number': 1,
+            'label': 'main',
+            'focused': true,
+            'pane_count': 1,
+            'tab_count': 1,
+            'active_tab_id': 'w1:t1',
+            'agent_status': 'unknown',
+          }
+        ],
+        'tabs': [
+          {
+            'tab_id': 'w1:t1',
+            'workspace_id': 'w1',
+            'number': 1,
+            'label': 'tab1',
+            'focused': true,
+            'pane_count': 1,
+            'agent_status': 'unknown',
+          }
+        ],
+        'panes': [
+          {
+            'pane_id': 'w1:p1',
+            'terminal_id': 'term_1',
+            'workspace_id': 'w1',
+            'tab_id': 'w1:t1',
+            'focused': true,
+            'terminal_title': 'agent',
+            'agent_status': 'working',
+          }
+        ],
+        'agents': [
+          {
+            'name': 'coder',
+            'pane_id': 'w1:p1',
+            'status': 'working',
+          }
+        ],
+      });
+      client.setSnapshotForTesting(snap);
+      client.selectPane('w1:p1');
+
+      await tester.pumpWidget(MaterialApp(home: TerminalScreen(client: client)));
+      await tester.pump(const Duration(milliseconds: 300));
+
+      expect(client.fontSize, equals(14.0));
+
+      // Press Ctrl + (equal key) to zoom in
+      await tester.sendKeyDownEvent(LogicalKeyboardKey.controlLeft);
+      await tester.sendKeyEvent(LogicalKeyboardKey.equal);
+      await tester.sendKeyUpEvent(LogicalKeyboardKey.controlLeft);
+      await tester.pump();
+      expect(client.fontSize, equals(15.0));
+
+      // Press Ctrl + (numpadAdd key) to zoom in
+      await tester.sendKeyDownEvent(LogicalKeyboardKey.controlLeft);
+      await tester.sendKeyEvent(LogicalKeyboardKey.numpadAdd);
+      await tester.sendKeyUpEvent(LogicalKeyboardKey.controlLeft);
+      await tester.pump();
+      expect(client.fontSize, equals(16.0));
+
+      // Press Ctrl - to zoom out
+      await tester.sendKeyDownEvent(LogicalKeyboardKey.controlLeft);
+      await tester.sendKeyEvent(LogicalKeyboardKey.minus);
+      await tester.sendKeyUpEvent(LogicalKeyboardKey.controlLeft);
+      await tester.pump();
+      expect(client.fontSize, equals(15.0));
+
+      // Press Ctrl 0 to reset zoom to 14
+      await tester.sendKeyDownEvent(LogicalKeyboardKey.controlLeft);
+      await tester.sendKeyEvent(LogicalKeyboardKey.digit0);
+      await tester.sendKeyUpEvent(LogicalKeyboardKey.controlLeft);
+      await tester.pump();
+      expect(client.fontSize, equals(14.0));
+
+      // Pressing minus without Ctrl should not change font size
+      await tester.sendKeyEvent(LogicalKeyboardKey.minus);
+      await tester.pump();
+      expect(client.fontSize, equals(14.0));
     });
   });
 }

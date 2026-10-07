@@ -1,3 +1,4 @@
+import 'dart:io';
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -108,11 +109,35 @@ class _TerminalScreenState extends State<TerminalScreen> with SingleTickerProvid
     }
   }
 
-  /// Volume keys zoom the terminal font or send ↑/↓ while this screen is on top, as set in Settings.
+  /// Volume keys and Ctrl +/- zoom the terminal font or send ↑/↓ while this screen is on top, as set in Settings.
   bool _onHardwareKey(KeyEvent event) {
     final key = event.logicalKey;
-    if (key != LogicalKeyboardKey.audioVolumeUp && key != LogicalKeyboardKey.audioVolumeDown) return false;
     final client = widget.client;
+
+    if (HardwareKeyboard.instance.isControlPressed) {
+      final isZoomIn = key == LogicalKeyboardKey.equal ||
+          key == LogicalKeyboardKey.add ||
+          key == LogicalKeyboardKey.numpadAdd;
+      final isZoomOut = key == LogicalKeyboardKey.minus ||
+          key == LogicalKeyboardKey.numpadSubtract;
+      final isZoomReset = key == LogicalKeyboardKey.digit0 || key == LogicalKeyboardKey.numpad0;
+
+      if (isZoomIn || isZoomOut || isZoomReset) {
+        if (!mounted || ModalRoute.of(context)?.isCurrent != true) return false;
+        if (event is! KeyUpEvent) {
+          if (isZoomIn) {
+            client.setFontSize(client.fontSize + 1);
+          } else if (isZoomOut) {
+            client.setFontSize(client.fontSize - 1);
+          } else if (isZoomReset) {
+            client.setFontSize(14);
+          }
+        }
+        return true;
+      }
+    }
+
+    if (key != LogicalKeyboardKey.audioVolumeUp && key != LogicalKeyboardKey.audioVolumeDown) return false;
     if (client.volumeKeys == VolumeKeys.volume) return false;
     if (!mounted || ModalRoute.of(context)?.isCurrent != true) return false;
     if (event is! KeyUpEvent) {
@@ -243,11 +268,12 @@ class _TerminalScreenState extends State<TerminalScreen> with SingleTickerProvid
     final counts = <int, int>{};
     final buffer = _terminal.buffer;
     final first = buffer.height - buffer.viewHeight;
+    // Runs on every frame the pane sends, so it visits only those cells.
     for (var y = first; y < buffer.height; y++) {
       final line = buffer.lines[y];
       final edgeRow = y == first || y == buffer.height - 1;
-      for (var x = 0; x < line.length; x++) {
-        if (!edgeRow && x != 0 && x != line.length - 1) continue;
+      final last = line.length - 1;
+      for (var x = 0; x <= last; x = edgeRow || x == last ? x + 1 : last) {
         final bg = line.getBackground(x);
         counts[bg] = (counts[bg] ?? 0) + 1;
       }
@@ -345,6 +371,7 @@ class _TerminalScreenState extends State<TerminalScreen> with SingleTickerProvid
   Future<void> _showTabMenu(TapUpDetails details, TabModel tab, List<TabModel> tabs, int index) async {
     final client = widget.client;
     final at = details.globalPosition;
+    final scheme = Theme.of(context).colorScheme;
     final picked = await showMenu<String>(
       context: context,
       position: RelativeRect.fromLTRB(at.dx, at.dy, at.dx, at.dy),
@@ -356,8 +383,13 @@ class _TerminalScreenState extends State<TerminalScreen> with SingleTickerProvid
         if (index < tabs.length - 1)
           const PopupMenuItem(
               value: 'right', child: ListTile(leading: Icon(Icons.arrow_forward), title: Text('Move right'))),
-        const PopupMenuItem(
-            value: 'close', child: ListTile(leading: Icon(Icons.close), title: Text('Close tab'))),
+        PopupMenuItem(
+          value: 'close',
+          child: ListTile(
+            leading: Icon(Icons.close, color: scheme.error),
+            title: Text('Close tab', style: TextStyle(color: scheme.error)),
+          ),
+        ),
       ],
     );
     switch (picked) {
@@ -716,89 +748,105 @@ class _TerminalScreenState extends State<TerminalScreen> with SingleTickerProvid
         notificationPredicate: (_) => false,
         // A step above the terminal's surface, so the current tab stands out joined to the terminal.
         backgroundColor: scheme.surfaceContainerHigh,
-        // The workspace header: tapping it opens the workspace's actions.
-        title: InkWell(
-          borderRadius: BorderRadius.circular(8),
-          onTap: workspace == null
+        // The workspace header: on mobile, tapping opens the workspace actions sheet;
+        // on Linux, tapping does nothing and right-clicking opens the context menu.
+        title: GestureDetector(
+          onSecondaryTapUp: workspace == null
               ? null
-              : () => showWorkspaceActions(context, client, workspace,
-                  onDelete: widget.embedded ? null : () => Navigator.maybePop(context)),
-          child: Padding(
+              : (d) => showWorkspaceContextMenu(
+                    context,
+                    client,
+                    workspace,
+                    d.globalPosition,
+                    onDelete: widget.embedded ? null : () => Navigator.maybePop(context),
+                  ),
+          child: InkWell(
+            borderRadius: BorderRadius.circular(8),
+            onTap: (Platform.isLinux || workspace == null)
+                ? null
+                : () => showWorkspaceActions(context, client, workspace,
+                    onDelete: widget.embedded ? null : () => Navigator.maybePop(context)),
+            child: Padding(
             padding: const EdgeInsets.symmetric(vertical: 4),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               mainAxisSize: MainAxisSize.min,
               children: [
-                Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    if (isWorktree) ...[
-                      Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
-                        decoration: BoxDecoration(
-                          color: scheme.secondaryContainer,
-                          borderRadius: BorderRadius.circular(4),
-                        ),
-                        child: Text(
-                          'worktree',
-                          style: Theme.of(context).textTheme.labelSmall?.copyWith(
-                            color: scheme.onSecondaryContainer,
-                            fontSize: 10,
-                            fontWeight: FontWeight.w500,
+                Text(
+                  title,
+                  style: Theme.of(context).textTheme.titleMedium,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
+                if (isWorktree || branch.isNotEmpty)
+                  Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      if (isWorktree) ...[
+                        Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
+                          decoration: BoxDecoration(
+                            color: scheme.secondaryContainer,
+                            borderRadius: BorderRadius.circular(4),
+                          ),
+                          child: Text(
+                            'worktree',
+                            style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                              color: scheme.onSecondaryContainer,
+                              fontSize: 10,
+                              fontWeight: FontWeight.w500,
+                            ),
                           ),
                         ),
-                      ),
-                      const SizedBox(width: 6),
+                        if (branch.isNotEmpty) const SizedBox(width: 6),
+                      ],
+                      if (branch.isNotEmpty)
+                        Flexible(
+                          child: Text(
+                            branch,
+                            style: Theme.of(context).textTheme.bodySmall?.copyWith(color: scheme.onSurfaceVariant),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ),
                     ],
-                    Flexible(
-                      child: Text(title,
-                          style: Theme.of(context).textTheme.titleMedium,
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis),
-                    ),
-                  ],
-                ),
-                if (branch.isNotEmpty)
-                  Text(
-                    branch,
-                    style: Theme.of(context).textTheme.bodySmall?.copyWith(color: scheme.onSurfaceVariant),
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
                   ),
               ],
             ),
           ),
         ),
+      ),
         actions: [
           Padding(
             padding: const EdgeInsets.only(right: 8),
-            child: ActionChip(
-              backgroundColor: scheme.secondaryContainer,
-              side: BorderSide.none,
-              labelStyle: TextStyle(color: scheme.onSecondaryContainer),
-              avatar: Container(
-                width: 8,
-                height: 8,
-                decoration: BoxDecoration(
-                  color: switch (client.machine) {
-                    final m when client.isOff(m) => scheme.onSurfaceVariant,
-                    final m when client.errorOf(m) != null => scheme.error,
-                    final m when client.isConnected(m) => Colors.green,
-                    _ => Colors.orange,
-                  },
-                  shape: BoxShape.circle,
+            child: Tooltip(
+              message: '${client.nameOf(client.machine)} · ${machineStatus(client, client.machine)}',
+              child: Chip(
+                backgroundColor: scheme.secondaryContainer,
+                side: BorderSide.none,
+                labelStyle: TextStyle(color: scheme.onSecondaryContainer),
+                avatar: Container(
+                  width: 8,
+                  height: 8,
+                  decoration: BoxDecoration(
+                    color: switch (client.machine) {
+                      final m when client.isOff(m) => scheme.onSurfaceVariant,
+                      final m when client.errorOf(m) != null => scheme.error,
+                      final m when client.isConnected(m) => Colors.green,
+                      _ => Colors.orange,
+                    },
+                    shape: BoxShape.circle,
+                  ),
+                ),
+                label: ConstrainedBox(
+                  constraints: const BoxConstraints(maxWidth: 120),
+                  child: Text(
+                    client.nameOf(client.machine),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
                 ),
               ),
-              label: ConstrainedBox(
-                constraints: const BoxConstraints(maxWidth: 120),
-                child: Text(
-                  client.nameOf(client.machine),
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                ),
-              ),
-              onPressed: () => showMachineDialog(context, client, client.machine),
-              tooltip: '${client.nameOf(client.machine)} · ${machineStatus(client, client.machine)}',
             ),
           ),
         ],
@@ -832,11 +880,10 @@ class _TerminalScreenState extends State<TerminalScreen> with SingleTickerProvid
                                       final label = Padding(
                                         padding: const EdgeInsets.symmetric(horizontal: 8),
                                         child: Row(
-                                          mainAxisSize: MainAxisSize.min,
                                           children: [
                                             AgentAvatar(name: tabAgent?.name ?? '', radius: 7.5, status: t.agentStatus),
                                             const SizedBox(width: 6),
-                                            Flexible(
+                                            Expanded(
                                               child: Text(
                                                 _tabSummary(t),
                                                 maxLines: 1,
@@ -864,7 +911,16 @@ class _TerminalScreenState extends State<TerminalScreen> with SingleTickerProvid
                                             child: label,
                                           ),
                                         ),
-                                        childWhenDragging: Opacity(opacity: 0.3, child: label),
+                                        childWhenDragging: Opacity(
+                                          opacity: 0.3,
+                                          child: Container(
+                                            width: 168,
+                                            decoration: j == i
+                                                ? BoxDecoration(color: background, borderRadius: top)
+                                                : null,
+                                            child: label,
+                                          ),
+                                        ),
                                         child: GestureDetector(
                                           onSecondaryTapUp: (d) => _showTabMenu(d, t, tabs, j),
                                           child: Container(

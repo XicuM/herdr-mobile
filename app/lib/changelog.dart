@@ -14,6 +14,7 @@ const changelog = <(String, List<String>)>[
       'Copied text loses the trailing spaces herdr pads each row with, and lines an agent wrapped are joined again.',
       'The ☰ menu lists every machine\'s workspaces with their worktrees, and Settings: tap one to open it, long-press for its actions, drag to reorder; the + by a machine\'s name opens a new workspace there.',
       'The search bar on top finds agents, workspaces, worktrees, tabs and machines by name, branch, place or status ("needs you").',
+      'Easier on the battery: a machine that can\'t be reached is retried less and less often (every few minutes at most), while the app is closed the connection is checked less often, and herdr-bridge no longer sends an update every second or two while an agent works (update it too).',
     ]
   ),
   (

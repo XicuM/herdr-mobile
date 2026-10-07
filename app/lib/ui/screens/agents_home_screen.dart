@@ -624,7 +624,18 @@ class _AgentsHomeScreenState extends State<AgentsHomeScreen> {
             ListTile(
               leading: StatusDot(ws.agentStatus, size: 10),
               minLeadingWidth: 10,
-              title: Row(
+              title: Text(
+                ws.isLinkedWorktree
+                    ? (s.workspaces
+                            .where((w) => !w.isLinkedWorktree && w.repoKey == ws.repoKey)
+                            .firstOrNull
+                            ?.displayName ??
+                        ws.displayName)
+                    : ws.displayName,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+              ),
+              subtitle: Row(
                 mainAxisSize: MainAxisSize.min,
                 children: [
                   if (ws.isLinkedWorktree) ...[
@@ -647,25 +658,16 @@ class _AgentsHomeScreenState extends State<AgentsHomeScreen> {
                   ],
                   Flexible(
                     child: Text(
-                      ws.isLinkedWorktree
-                          ? (s.workspaces
-                                  .where((w) => !w.isLinkedWorktree && w.repoKey == ws.repoKey)
-                                  .firstOrNull
-                                  ?.displayName ??
-                              ws.displayName)
-                          : ws.displayName,
+                      sub(m, [
+                        ws.isLinkedWorktree
+                            ? (ws.gitBranch?.replaceFirst('worktree/', '') ?? ws.displayName)
+                            : ws.gitBranch
+                      ]),
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                     ),
                   ),
                 ],
-              ),
-              subtitle: Text(
-                sub(m, [
-                  ws.isLinkedWorktree ? (ws.gitBranch?.replaceFirst('worktree/', '') ?? ws.displayName) : ws.gitBranch
-                ]),
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
               ),
               onTap: () => open(m, () => client.selectWorkspace(ws.id)),
               onLongPress: () {

@@ -22,6 +22,9 @@ class HerdrMobileApp extends StatelessWidget {
 
   final _messenger = GlobalKey<ScaffoldMessengerState>();
 
+  /// The light and dark themes of an accent: this rebuilds with every snapshot, and making them is costly.
+  static (Color, ThemeData, ThemeData)? _themes;
+
   @override
   Widget build(BuildContext context) {
     // Material 3 throughout: colors come from the scheme's roles and text from its type scale. Only the
@@ -32,19 +35,22 @@ class HerdrMobileApp extends StatelessWidget {
         );
     return ListenableBuilder(
       listenable: client,
-      builder: (_, home) => MaterialApp(
-        title: 'Herdr Mobile',
-        scaffoldMessengerKey: _messenger,
-        debugShowCheckedModeBanner: false,
-        theme: theme(Brightness.light),
-        darkTheme: theme(Brightness.dark),
-        themeMode: switch (client.brightness) {
-          Brightness.light => ThemeMode.light,
-          Brightness.dark => ThemeMode.dark,
-          null => ThemeMode.system,
-        },
-        home: home,
-      ),
+      builder: (_, home) {
+        if (_themes?.$1 != client.seed) _themes = (client.seed, theme(Brightness.light), theme(Brightness.dark));
+        return MaterialApp(
+          title: 'Herdr Mobile',
+          scaffoldMessengerKey: _messenger,
+          debugShowCheckedModeBanner: false,
+          theme: _themes!.$2,
+          darkTheme: _themes!.$3,
+          themeMode: switch (client.brightness) {
+            Brightness.light => ThemeMode.light,
+            Brightness.dark => ThemeMode.dark,
+            null => ThemeMode.system,
+          },
+          home: home,
+        );
+      },
       child: AgentsHomeScreen(client: client),
     );
   }

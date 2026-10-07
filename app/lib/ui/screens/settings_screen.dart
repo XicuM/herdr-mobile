@@ -1,3 +1,4 @@
+import 'dart:io';
 import 'package:flutter/material.dart';
 import '../../services/herdr_client.dart';
 
@@ -11,6 +12,22 @@ class SettingsScreen extends StatefulWidget {
 }
 
 class _SettingsScreenState extends State<SettingsScreen> {
+  bool? _batteryOptimized;
+
+  @override
+  void initState() {
+    super.initState();
+    _checkBattery();
+  }
+
+  void _checkBattery() {
+    if (Platform.isAndroid) {
+      widget.client.isIgnoringBatteryOptimizations().then((ignored) {
+        if (mounted) setState(() => _batteryOptimized = !ignored);
+      });
+    }
+  }
+
   /// Accent colours to pick from, besides the system's.
   static const _seeds = [
     Color(0xFF38BDF8), // sky
@@ -24,6 +41,87 @@ class _SettingsScreenState extends State<SettingsScreen> {
     Color(0xFF14B8A6), // teal
     Color(0xFF94A3B8), // slate
   ];
+
+  void _showMutedAgents(BuildContext context, HerdrClientService client) {
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      builder: (context) => ListenableBuilder(
+        listenable: client,
+        builder: (context, _) {
+          final muted = client.muted.toList();
+          if (muted.isEmpty) {
+            return const SizedBox(
+              height: 160,
+              child: Center(child: Text('No muted agents')),
+            );
+          }
+          return SafeArea(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 16, 8, 8),
+                  child: Row(
+                    children: [
+                      Text('Muted agents', style: Theme.of(context).textTheme.titleMedium),
+                      const Spacer(),
+                      TextButton(
+                        onPressed: () {
+                          client.unmuteAll();
+                          Navigator.pop(context);
+                        },
+                        child: const Text('Unmute all'),
+                      ),
+                    ],
+                  ),
+                ),
+                const Divider(height: 1),
+                Flexible(
+                  child: ListView.separated(
+                    shrinkWrap: true,
+                    itemCount: muted.length,
+                    separatorBuilder: (_, __) => const Divider(height: 1),
+                    itemBuilder: (context, index) {
+                      final key = muted[index];
+                      final parts = key.split('/');
+                      final m = parts.first;
+                      final paneId = parts.sublist(1).join('/');
+                      final snap = client.snapshotOf(m);
+                      final pane = snap?.panes.where((p) => p.id == paneId).firstOrNull;
+                      final agent = snap?.agents.where((a) => a.paneId == paneId).firstOrNull;
+                      final ws = snap?.workspaces.where((w) => w.id == pane?.workspaceId).firstOrNull;
+                      final agentName = agent?.name.isNotEmpty == true ? agent!.name : '';
+                      final title = pane?.terminalTitle.isNotEmpty == true
+                          ? pane!.terminalTitle
+                          : agentName.isNotEmpty
+                              ? agentName
+                              : paneId;
+                      final subtitle = [if (ws != null) ws.displayName, client.nameOf(m)].join(' · ');
+
+                      return ListTile(
+                        leading: const Icon(Icons.volume_off_outlined),
+                        title: Text(title, maxLines: 1, overflow: TextOverflow.ellipsis),
+                        subtitle: subtitle.isNotEmpty ? Text(subtitle, maxLines: 1, overflow: TextOverflow.ellipsis) : null,
+                        trailing: IconButton(
+                          tooltip: 'Unmute',
+                          icon: const Icon(Icons.volume_up_outlined),
+                          onPressed: () {
+                            client.setMuted(paneId, false, m);
+                            if (client.muted.isEmpty) Navigator.pop(context);
+                          },
+                        ),
+                      );
+                    },
+                  ),
+                ),
+              ],
+            ),
+          );
+        },
+      ),
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -82,6 +180,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
             const Divider(),
             section('Notifications'),
             SwitchListTile(
+              secondary: const Icon(Icons.notifications_outlined),
               title: const Text('Agent alerts'),
               subtitle: const Text(
                   'Alert when an agent on any saved machine needs input or finishes, even in the background.'),
@@ -89,39 +188,90 @@ class _SettingsScreenState extends State<SettingsScreen> {
               onChanged: (v) => setState(() => client.setAlerts(v)),
             ),
             if (client.alerts) ...[
+              if (_batteryOptimized == true)
+                Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+                  child: Card(
+                    color: scheme.errorContainer,
+                    child: Padding(
+                      padding: const EdgeInsets.all(12),
+                      child: Row(
+                        children: [
+                          Icon(Icons.battery_alert, color: scheme.onErrorContainer),
+                          const SizedBox(width: 12),
+                          Expanded(
+                            child: Text(
+                              'Battery optimization may pause background alerts when asleep.',
+                              style: TextStyle(color: scheme.onErrorContainer, fontSize: 13),
+                            ),
+                          ),
+                          TextButton(
+                            onPressed: () {
+                              client.askBattery();
+                              _checkBattery();
+                            },
+                            child: const Text('Fix'),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ),
               SwitchListTile(
+                secondary: const Icon(Icons.error_outline),
                 title: const Text('Needs you'),
                 subtitle: const Text('Alert when an agent is blocked or waiting for input'),
                 value: client.alertBlocked,
                 onChanged: (v) => setState(() => client.setAlertBlocked(v)),
               ),
               SwitchListTile(
+                secondary: const Icon(Icons.check_circle_outline),
                 title: const Text('Finished'),
                 subtitle: const Text('Alert when an agent finishes its task'),
                 value: client.alertFinished,
                 onChanged: (v) => setState(() => client.setAlertFinished(v)),
               ),
-              SwitchListTile(
-                title: const Text('Sound'),
-                subtitle: const Text('Play an audio alert tone'),
-                value: client.alertSound,
-                onChanged: (v) => setState(() => client.setAlertSound(v)),
-              ),
-              SwitchListTile(
-                title: const Text('Desktop notifications'),
-                subtitle: const Text('Show desktop notification banners on Linux'),
-                value: client.alertDesktop,
-                onChanged: (v) => setState(() => client.setAlertDesktop(v)),
+              if (Platform.isAndroid)
+                ListTile(
+                  leading: const Icon(Icons.notifications_active_outlined),
+                  title: const Text('System notification settings'),
+                  subtitle: const Text('Manage alert sounds, vibration, and channels'),
+                  trailing: const Icon(Icons.chevron_right),
+                  onTap: client.openNotificationSettings,
+                ),
+              if (Platform.isLinux) ...[
+                SwitchListTile(
+                  secondary: const Icon(Icons.volume_up_outlined),
+                  title: const Text('Sound'),
+                  subtitle: const Text('Play an audio alert tone'),
+                  value: client.alertSound,
+                  onChanged: (v) => setState(() => client.setAlertSound(v)),
+                ),
+                SwitchListTile(
+                  secondary: const Icon(Icons.desktop_windows_outlined),
+                  title: const Text('Desktop notifications'),
+                  subtitle: const Text('Show desktop notification banners on Linux'),
+                  value: client.alertDesktop,
+                  onChanged: (v) => setState(() => client.setAlertDesktop(v)),
+                ),
+              ],
+              ListTile(
+                leading: const Icon(Icons.volume_off_outlined),
+                title: const Text('Muted agents'),
+                subtitle: Text(client.muted.isEmpty ? 'None' : '${client.muted.length} muted'),
+                trailing: client.muted.isNotEmpty ? const Icon(Icons.chevron_right) : null,
+                onTap: client.muted.isNotEmpty ? () => _showMutedAgents(context, client) : null,
               ),
             ],
             const Divider(),
             section('Terminal'),
             ListTile(
               title: const Text('Font size'),
-              subtitle: client.pinchZoom || client.volumeKeys == VolumeKeys.fontSize
+              subtitle: client.pinchZoom || (Platform.isAndroid && client.volumeKeys == VolumeKeys.fontSize) || Platform.isLinux
                   ? Text('Or ${[
+                      if (Platform.isLinux) 'use Ctrl + / Ctrl -',
                       if (client.pinchZoom) 'pinch the terminal',
-                      if (client.volumeKeys == VolumeKeys.fontSize) 'use the volume keys',
+                      if (Platform.isAndroid && client.volumeKeys == VolumeKeys.fontSize) 'use the volume keys',
                     ].join(', or ')}')
                   : null,
               trailing: Row(

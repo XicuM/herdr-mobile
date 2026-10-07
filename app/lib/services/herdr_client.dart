@@ -16,7 +16,13 @@ enum VolumeKeys { fontSize, arrows, volume }
 /// One machine's `/ws/session` link, its last snapshot, and the pane last viewed on it.
 class _Conn {
   WebSocketChannel? channel;
+
+  /// [channel]'s socket, once connected, whose ping interval follows the app on and off screen.
+  WebSocket? socket;
   Timer? retry;
+
+  /// Failed attempts in a row, which space the retries out.
+  int fails = 0;
   bool connected = false;
   SessionSnapshot? snapshot;
   String? selectedPaneId;
@@ -45,6 +51,9 @@ class HerdrClientService extends ChangeNotifier {
   Brightness? _brightness;
   List<String> _machines = [];
   Map<String, String> _names = {};
+
+  /// The SSH target of each machine a bridge reaches, as its herdr has it.
+  Map<String, String> _targets = {};
 
   /// Machines the user disconnected; every other saved machine stays connected.
   Set<String> _off = {};
@@ -84,14 +93,21 @@ class HerdrClientService extends ChangeNotifier {
     _native('ready');
     _loadSystemSeed();
     // Back from sleep, a connect attempt made while the network was down may still be pending, or the
-    // retry timer frozen; try again right away instead of waiting on either.
-    AppLifecycleListener(onResume: () {
-      _loadSystemSeed();
-      for (final m in _machines) {
-        if (!_off.contains(m) && !isConnected(m)) _close(m);
-      }
-      notifyListeners();
-    });
+    // retry timer frozen or backed off; try again right away instead of waiting on either.
+    AppLifecycleListener(
+      onResume: () {
+        _loadSystemSeed();
+        for (final m in _machines) {
+          if (!_off.contains(m) && !isConnected(m)) _close(m);
+        }
+        notifyListeners();
+      },
+      onStateChange: (_) {
+        for (final c in _conns.values) {
+          c.socket?.pingInterval = _ping;
+        }
+      },
+    );
   }
 
   /// Fails harmlessly off Android (e.g. in tests).
@@ -157,6 +173,9 @@ class HerdrClientService extends ChangeNotifier {
   /// The name given to [machine] when it was added, or its address.
   String nameOf(String machine) => _names[machine] ?? machine;
 
+  /// [m]'s SSH target (`user@host`) when a bridge reaches it, once that bridge has listed it.
+  String? targetOf(String m) => _targets[m];
+
   /// What [m]'s agents are doing, e.g. "1 needs you · 2 working", in the alerts' words.
   String summaryOf(String m) {
     final counts = <String, int>{};
@@ -218,6 +237,9 @@ class HerdrClientService extends ChangeNotifier {
   /// When the agent in [paneId] on [machine] (or the active machine) last changed status, if this app saw it.
   DateTime? changedAt(String paneId, [String? machine]) => _conns[machine ?? this.machine]?.changes[paneId]?.$3;
 
+  /// Panes that never raise an alert, as `machine/pane_id`.
+  Set<String> get muted => Set.unmodifiable(_muted);
+
   bool isMuted(String paneId, [String? machine]) => _muted.contains('${machine ?? this.machine}/$paneId');
 
   /// Silences, or unsilences, the alerts of [paneId] on [machine] (or the active machine).
@@ -226,6 +248,31 @@ class HerdrClientService extends ChangeNotifier {
     _muted = on ? {..._muted, key} : ({..._muted}..remove(key));
     SharedPreferences.getInstance().then((p) => p.setStringList('muted_panes', _muted.toList()));
     notifyListeners();
+  }
+
+  /// Unmutes all muted panes across all machines.
+  void unmuteAll() {
+    if (_muted.isEmpty) return;
+    _muted = {};
+    SharedPreferences.getInstance().then((p) => p.setStringList('muted_panes', []));
+    notifyListeners();
+  }
+
+  /// Opens the system notification settings for this application on Android.
+  void openNotificationSettings() => _native('openNotificationSettings');
+
+  /// Opens battery optimization settings on Android.
+  void askBattery() => _native('askBattery');
+
+  /// Checks whether battery optimization is ignored on Android.
+  Future<bool> isIgnoringBatteryOptimizations() async {
+    if (!Platform.isAndroid) return true;
+    try {
+      final res = await _android.invokeMethod<bool>('isIgnoringBatteryOptimizations');
+      return res ?? true;
+    } catch (_) {
+      return true;
+    }
   }
 
   /// Whether the bottom bar shows the control keys in place of the message box.
@@ -292,6 +339,7 @@ class HerdrClientService extends ChangeNotifier {
   void start() {
     _started = true;
     warmAgentIcons();
+    warmAlertSounds();
     notifyListeners();
   }
 
@@ -321,12 +369,18 @@ class HerdrClientService extends ChangeNotifier {
     }
   }
 
+  /// Pings notice a connection that died silently (e.g. the phone changed networks), so it reconnects. Each
+  /// wakes the phone's radio, so off screen, where only alerts need the connection, they're rarer.
+  static Duration get _ping => WidgetsBinding.instance.lifecycleState == AppLifecycleState.resumed
+      ? const Duration(seconds: 20)
+      : const Duration(seconds: 90);
+
   void _open(String m, _Conn c) {
     try {
-      // Pings notice a connection that died silently (e.g. the phone changed networks), so it reconnects.
       // Without a timeout, an attempt made while the network is down can hang and never retry.
-      final channel = IOWebSocketChannel.connect(Uri.parse('ws://$m/ws/session'),
-          pingInterval: const Duration(seconds: 20), connectTimeout: const Duration(seconds: 5));
+      final channel = IOWebSocketChannel(WebSocket.connect('ws://$m/ws/session')
+          .then((s) => c.socket = s..pingInterval = _ping)
+          .timeout(const Duration(seconds: 5)));
       c.channel = channel;
       // Connection failures also reach the stream's onError, which retries.
       channel.ready.ignore();
@@ -336,6 +390,7 @@ class HerdrClientService extends ChangeNotifier {
           if (c.channel != channel) return;
           if (!c.connected) {
             c.connected = true;
+            c.fails = 0;
             if (parentOf(m) == null) _discover(m);
             notifyListeners();
           }
@@ -349,13 +404,15 @@ class HerdrClientService extends ChangeNotifier {
     }
   }
 
-  /// Retries in 3 s, unless [c] was closed or reopened meanwhile.
+  /// Retries in 3 s, doubling with each failure in a row up to about 3 min, so a machine that's asleep or
+  /// off the network doesn't keep the phone awake; unless [c] was closed or reopened meanwhile.
   void _dropped(_Conn c, WebSocketChannel? channel) {
     if (c.channel != channel || _disposed) return;
     c.channel = null;
     c.connected = false;
-    c.retry = Timer(const Duration(seconds: 3), () {
+    c.retry = Timer(Duration(seconds: 3 << c.fails.clamp(0, 6)), () {
       c.retry = null;
+      c.fails++;
       _sync();
     });
     notifyListeners();
@@ -367,6 +424,7 @@ class HerdrClientService extends ChangeNotifier {
     if (c == null) return;
     c.retry?.cancel();
     c.retry = null;
+    c.fails = 0;
     final channel = c.channel;
     c.channel = null;
     channel?.sink.close();
@@ -457,6 +515,35 @@ class HerdrClientService extends ChangeNotifier {
     _saveMachines();
   }
 
+  /// Saves [target] (`user@host`, or a host from the SSH config) in [bridge]'s herdr, which gets herdr
+  /// ready there; the bridge then reaches it like the machines saved there already. False on failure,
+  /// reported to [onError].
+  Future<bool> addSshMachine(String bridge, String target, String name) async {
+    final before = _machines.length;
+    await _request('add $target', 'POST', '/api/machines', body: {'target': target, 'label': name}, on: bridge);
+    await _discover(bridge);
+    return _machines.length > before;
+  }
+
+  /// Renames [m], a machine a bridge reaches, in that bridge's herdr and, given another [target], moves it
+  /// there: herdr adds it anew, so it comes back as a new machine. False on failure, reported to [onError].
+  Future<bool> editSshMachine(String m, String target, String name) async {
+    final bridge = parentOf(m)!;
+    final res = await _request('change ${nameOf(m)}', 'POST', '/api/machines/${m.substring(m.lastIndexOf('/') + 1)}',
+        body: {'target': target, 'label': name}, on: bridge);
+    if (res == null) return false;
+    if (name.isNotEmpty && _machines.contains(m)) _names = {..._names, m: name};
+    await _discover(bridge);
+    return true;
+  }
+
+  /// Removes [m], a machine a bridge reaches, from that bridge's herdr, which is where it comes from.
+  Future<void> removeSshMachine(String m) async {
+    final bridge = parentOf(m)!;
+    await _request('remove ${nameOf(m)}', 'DELETE', '/api/machines/${m.substring(m.lastIndexOf('/') + 1)}', on: bridge);
+    await _discover(bridge);
+  }
+
   /// Renames [m] and/or moves it to [to] (`host:port`), keeping its place in the list and its on/off
   /// state. The machines it reached are found again at the new address.
   void updateMachine(String m, {required String to, required String name}) {
@@ -489,6 +576,7 @@ class HerdrClientService extends ChangeNotifier {
     }
     if (!_machines.contains(m)) return;
     final children = {for (final f in found) '$m/m/${f['id']}': f['label'] as String};
+    _targets = {..._targets, for (final f in found) '$m/m/${f['id']}': f['target'] as String};
     _forget(_machines.where((x) => parentOf(x) == m && !children.containsKey(x)).toList());
     if (!_machines.contains(machine)) _setActive(m);
     final i = _machines.indexOf(m);
@@ -644,7 +732,7 @@ class HerdrClientService extends ChangeNotifier {
       final seen = completions[pane.id] ?? wasAgent?.completionSeq ?? 0;
       final seq = agent?.completionSeq ?? 0;
       if (seq > seen) completions[pane.id] = seq;
-      if (watching && pane.id == selectedPaneId || _muted.contains('$m/${pane.id}')) continue;
+      if (_muted.contains('$m/${pane.id}')) continue;
       final blocked = was != null && was.agentStatus != 'blocked' && pane.agentStatus == 'blocked';
       final finished = wasAgent != null && seq > seen;
       if (!blocked && !finished) continue;
@@ -657,15 +745,17 @@ class HerdrClientService extends ChangeNotifier {
       final text = [if (workspace != null) workspace.displayName, nameOf(m)].join(' · ');
       final iconName = agentName.isNotEmpty ? agentName : pane.terminalTitle;
       final iconBytes = agentIconBytes(iconName);
-      _native('alert', {
-        'key': '$m/${pane.id}',
-        'title': title,
-        'text': text,
-        'machine': m,
-        'pane': pane.id,
-        'urgent': blocked,
-        if (iconBytes != null) 'icon': iconBytes,
-      });
+      if (!watching || pane.id != selectedPaneId) {
+        _native('alert', {
+          'key': '$m/${pane.id}',
+          'title': title,
+          'text': text,
+          'machine': m,
+          'pane': pane.id,
+          'urgent': blocked,
+          if (iconBytes != null) 'icon': iconBytes,
+        });
+      }
       if (Platform.isLinux) {
         if (_alertDesktop) {
           final iconPath = agentIconPath(iconName) ?? 'utilities-terminal';
@@ -681,13 +771,34 @@ class HerdrClientService extends ChangeNotifier {
           ]).ignore();
         }
         if (_alertSound) {
-          Process.run('canberra-gtk-play', ['-i', blocked ? 'dialog-warning' : 'message-new-instant']).then((res) {
-            if (res.exitCode != 0) {
-              Process.run('paplay', [
-                '/usr/share/sounds/freedesktop/stereo/${blocked ? 'dialog-warning' : 'complete'}.oga',
-              ]).ignore();
-            }
-          }).ignore();
+          final file = File('${Directory.systemTemp.path}/${blocked ? 'herdr_blocked.mp3' : 'herdr_done.mp3'}');
+          final path = file.existsSync() ? file.path : null;
+          final soundName = blocked ? 'dialog-warning' : 'complete';
+
+          void playFallback() {
+            Process.run('canberra-gtk-play', ['-i', soundName]).then((res) {
+              if (res.exitCode != 0) {
+                Process.run('paplay', ['/usr/share/sounds/freedesktop/stereo/$soundName.oga']).then((res2) {
+                  if (res2.exitCode != 0) {
+                    Process.run('pw-play', ['/usr/share/sounds/freedesktop/stereo/$soundName.oga']).ignore();
+                  }
+                }).ignore();
+              }
+            }).ignore();
+          }
+
+          if (path != null) {
+            Process.run('pw-play', [path]).then((res) {
+              if (res.exitCode != 0) {
+                Process.run('paplay', [path]).then((res2) {
+                  if (res2.exitCode != 0) playFallback();
+                }).ignore();
+              }
+            }).ignore();
+          } else {
+            playFallback();
+            warmAlertSounds().ignore();
+          }
         }
       }
     }
@@ -832,5 +943,20 @@ class HerdrClientService extends ChangeNotifier {
     _disposed = true;
     _conns.keys.toList().forEach(_close);
     super.dispose();
+  }
+}
+
+/// Extracts and caches the bundled herdr sound files on Linux.
+Future<void> warmAlertSounds() async {
+  if (!Platform.isLinux) return;
+  for (final name in const ['herdr_blocked.mp3', 'herdr_done.mp3']) {
+    try {
+      final file = File('${Directory.systemTemp.path}/$name');
+      final data = await rootBundle.load('assets/sounds/$name');
+      final bytes = data.buffer.asUint8List();
+      if (!file.existsSync() || file.lengthSync() != bytes.length) {
+        file.writeAsBytesSync(bytes);
+      }
+    } catch (_) {}
   }
 }

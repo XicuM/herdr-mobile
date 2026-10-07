@@ -17,7 +17,7 @@ class WorkspaceList extends StatelessWidget {
     final scheme = Theme.of(context).colorScheme;
     final on = [
       for (final m in client.machines)
-        if (!client.isOff(m) && client.snapshotOf(m) != null) m
+        if (!client.isOff(m) && client.isConnected(m) && client.errorOf(m) == null && client.snapshotOf(m) != null) m
     ];
     // Requests go to the active machine, so each acts on its row's machine first.
     void at(String m, VoidCallback action) {
@@ -27,7 +27,8 @@ class WorkspaceList extends StatelessWidget {
 
     Widget row(String m, WorkspaceModel ws, {double indent = 0, Widget? handle}) => GestureDetector(
           key: ValueKey('$m/${ws.id}'),
-          onSecondaryTapUp: (d) => at(m, () => showWorkspaceActions(context, client, ws, onShow: open)),
+          onSecondaryTapUp: (d) =>
+              at(m, () => showWorkspaceContextMenu(context, client, ws, d.globalPosition, onShow: open)),
           child: ListTile(
             key: ValueKey('$m/${ws.id}-tile'),
             contentPadding: EdgeInsets.only(left: 16 + indent, right: 8),
@@ -167,6 +168,60 @@ class WorkspaceList extends StatelessWidget {
     );
   }
 }
+ 
+/// Desktop context menu on right-click for a workspace: Rename, New worktree, Open worktree, Delete.
+Future<void> showWorkspaceContextMenu(
+  BuildContext context,
+  HerdrClientService client,
+  WorkspaceModel ws,
+  Offset at, {
+  VoidCallback? onShow,
+  VoidCallback? onDelete,
+}) async {
+  final scheme = Theme.of(context).colorScheme;
+  final picked = await showMenu<String>(
+    context: context,
+    position: RelativeRect.fromLTRB(at.dx, at.dy, at.dx, at.dy),
+    items: [
+      const PopupMenuItem(
+        value: 'rename',
+        child: ListTile(leading: Icon(Icons.edit_outlined), title: Text('Rename')),
+      ),
+      const PopupMenuItem(
+        value: 'new_worktree',
+        child: ListTile(leading: Icon(Icons.call_split), title: Text('New worktree')),
+      ),
+      const PopupMenuItem(
+        value: 'open_worktree',
+        child: ListTile(leading: Icon(Icons.folder_open_outlined), title: Text('Open worktree')),
+      ),
+      PopupMenuItem(
+        value: 'delete',
+        child: ListTile(
+          leading: Icon(Icons.delete_outline, color: scheme.error),
+          title: Text('Delete', style: TextStyle(color: scheme.error)),
+        ),
+      ),
+    ],
+  );
+  if (picked == null || !context.mounted) return;
+  switch (picked) {
+    case 'rename':
+      final name = await prompt(context, 'Rename workspace', 'Workspace name',
+          initial: ws.label.isNotEmpty ? ws.label : ws.displayName);
+      if (name != null) client.renameWorkspace(ws.id, name);
+    case 'new_worktree':
+      final branch = await prompt(context, 'New worktree', 'Branch name', hint: 'e.g. feat/my-feature');
+      if (branch == null) return;
+      await client.createWorktree(ws.id, branch);
+      onShow?.call();
+    case 'open_worktree':
+      _openWorktree(context, client, ws, onShow);
+    case 'delete':
+      client.deleteWorkspace(ws.id, removeWorktree: ws.isLinkedWorktree);
+      onDelete?.call();
+  }
+}
 
 /// The workspace's actions, on the active machine: from the terminal's top bar, as a chat's header opens
 /// its info, or a long-press in the drawer or search. [onShow] runs once a new or opened worktree is selected,
@@ -199,41 +254,45 @@ void showWorkspaceActions(BuildContext context, HerdrClientService client, Works
           shrinkWrap: true,
           children: [
             ListTile(
-              title: Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  if (isWorktree) ...[
-                    Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
-                      decoration: BoxDecoration(
-                        color: scheme.secondaryContainer,
-                        borderRadius: BorderRadius.circular(4),
-                      ),
-                      child: Text(
-                        'worktree',
-                        style: Theme.of(sheetContext).textTheme.labelSmall?.copyWith(
-                          color: scheme.onSecondaryContainer,
-                          fontSize: 10,
-                          fontWeight: FontWeight.w500,
-                        ),
-                      ),
-                    ),
-                    const SizedBox(width: 6),
-                  ],
-                  Flexible(
-                    child: Text(title,
-                        style: Theme.of(sheetContext).textTheme.titleMedium,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis),
-                  ),
-                ],
+              title: Text(
+                title,
+                style: Theme.of(sheetContext).textTheme.titleMedium,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
               ),
-              subtitle: branch != null && branch.isNotEmpty
-                  ? Text(
-                      branch,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: Theme.of(sheetContext).textTheme.bodySmall?.copyWith(color: scheme.onSurfaceVariant),
+              subtitle: (isWorktree || (branch != null && branch.isNotEmpty))
+                  ? Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        if (isWorktree) ...[
+                          Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
+                            decoration: BoxDecoration(
+                              color: scheme.secondaryContainer,
+                              borderRadius: BorderRadius.circular(4),
+                            ),
+                            child: Text(
+                              'worktree',
+                              style: Theme.of(sheetContext).textTheme.labelSmall?.copyWith(
+                                    color: scheme.onSecondaryContainer,
+                                    fontSize: 10,
+                                    fontWeight: FontWeight.w500,
+                                  ),
+                            ),
+                          ),
+                          if (branch != null && branch.isNotEmpty) const SizedBox(width: 6),
+                        ],
+                        if (branch != null && branch.isNotEmpty)
+                          Flexible(
+                            child: Text(
+                              branch,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style:
+                                  Theme.of(sheetContext).textTheme.bodySmall?.copyWith(color: scheme.onSurfaceVariant),
+                            ),
+                          ),
+                      ],
                     )
                   : null,
             ),

@@ -81,6 +81,9 @@ class HerdrApp : Application() {
                 )
                 "cancel" -> nm.cancel(call.argument<String>("key").hashCode())
                 "askPermissions" -> askPermissions()
+                "askBattery" -> askBattery()
+                "openNotificationSettings" -> openNotificationSettings()
+                "isIgnoringBatteryOptimizations" -> return@setMethodCallHandler result.success(isIgnoringBatteryOptimizations())
                 // Material You's accent, from the wallpaper (Android 12+).
                 "systemColor" -> return@setMethodCallHandler result.success(
                     if (Build.VERSION.SDK_INT >= 31) getColor(android.R.color.system_accent1_500) else null)
@@ -183,6 +186,25 @@ class HerdrApp : Application() {
         if (Build.VERSION.SDK_INT < 23) return
         if (getSystemService(PowerManager::class.java)?.isIgnoringBatteryOptimizations(packageName) == true) return
         activity?.startActivity(Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS, Uri.parse("package:$packageName")))
+    }
+
+    /** Opens the system notification settings for this application. */
+    fun openNotificationSettings() {
+        val target = activity ?: this
+        val intent = if (Build.VERSION.SDK_INT >= 26) {
+            Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS).apply {
+                putExtra(Settings.EXTRA_APP_PACKAGE, packageName)
+            }
+        } else {
+            Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:$packageName"))
+        }
+        intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        target.startActivity(intent)
+    }
+
+    fun isIgnoringBatteryOptimizations(): Boolean {
+        if (Build.VERSION.SDK_INT < 23) return true
+        return getSystemService(PowerManager::class.java)?.isIgnoringBatteryOptimizations(packageName) == true
     }
 
     companion object {
