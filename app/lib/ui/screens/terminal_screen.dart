@@ -315,7 +315,7 @@ class _TerminalScreenState extends State<TerminalScreen> with SingleTickerProvid
 
   static Color _quotaColor(ColorScheme scheme, AgentUsage? usage) {
     if (usage == null || usage.limits.isEmpty) {
-      return scheme.onSurfaceVariant.withValues(alpha: 0.5);
+      return scheme.onSurfaceVariant.withAlpha(128);
     }
     final pct = usage.highestPercent ?? 0.0;
     if (pct >= 0.90) return scheme.error;

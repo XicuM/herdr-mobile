@@ -497,7 +497,7 @@ class _AgentsHomeScreenState extends State<AgentsHomeScreen> {
                                 separatorBuilder: (context, _) => Divider(
                                   height: 1,
                                   thickness: 0.5,
-                                  color: Theme.of(context).colorScheme.outlineVariant.withValues(alpha: 0.5),
+                                  color: Theme.of(context).colorScheme.outlineVariant.withAlpha(128),
                                 ),
                                 itemBuilder: (context, i) => _tile(context, rows[i], machines.length > 1),
                               );
