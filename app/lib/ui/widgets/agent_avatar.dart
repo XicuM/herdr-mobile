@@ -22,95 +22,49 @@ enum AgentKind {
   }
 }
 
-/// Avatar icon representing the AI agent tool/engine (Antigravity, Claude, Gemini, etc.)
-/// with an integrated [StatusDot] badge in the bottom-right corner.
+/// Canonical Material 3 Avatar representing the AI agent engine, badged with [StatusDot].
 class AgentAvatar extends StatelessWidget {
   final String name;
   final String? status;
-  final double size;
+  final double radius;
 
   const AgentAvatar({
     super.key,
     required this.name,
     this.status,
-    this.size = 44,
+    this.radius = 22,
   });
 
   @override
   Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
     final kind = AgentKind.fromName(name);
-    final (icon, bgColor, iconColor) = switch (kind) {
-      AgentKind.antigravity => (
-          Icons.change_history_rounded,
-          const Color(0xFF0284C7).withOpacity(0.18),
-          const Color(0xFF0284C7),
-        ),
-      AgentKind.claude => (
-          Icons.auto_awesome,
-          const Color(0xFFD97706).withOpacity(0.18),
-          const Color(0xFFD97706),
-        ),
-      AgentKind.gemini => (
-          Icons.flare_rounded,
-          const Color(0xFF6366F1).withOpacity(0.18),
-          const Color(0xFF6366F1),
-        ),
-      AgentKind.codex => (
-          Icons.hub_rounded,
-          const Color(0xFF10A37F).withOpacity(0.18),
-          const Color(0xFF10A37F),
-        ),
-      AgentKind.grok => (
-          Icons.close_rounded,
-          const Color(0xFF475569).withOpacity(0.18),
-          const Color(0xFF475569),
-        ),
-      AgentKind.aider => (
-          Icons.smart_toy_rounded,
-          const Color(0xFF8B5CF6).withOpacity(0.18),
-          const Color(0xFF8B5CF6),
-        ),
-      AgentKind.terminal => (
-          Icons.terminal_rounded,
-          const Color(0xFF64748B).withOpacity(0.18),
-          const Color(0xFF64748B),
-        ),
+
+    final (icon, bgColor, fgColor) = switch (kind) {
+      AgentKind.antigravity => (Icons.change_history_rounded, scheme.primaryContainer, scheme.onPrimaryContainer),
+      AgentKind.claude => (Icons.auto_awesome, scheme.tertiaryContainer, scheme.onTertiaryContainer),
+      AgentKind.gemini => (Icons.flare_rounded, scheme.secondaryContainer, scheme.onSecondaryContainer),
+      AgentKind.codex => (Icons.hub_rounded, scheme.primaryContainer, scheme.onPrimaryContainer),
+      AgentKind.grok => (Icons.close_rounded, scheme.surfaceContainerHighest, scheme.onSurfaceVariant),
+      AgentKind.aider => (Icons.smart_toy_rounded, scheme.tertiaryContainer, scheme.onTertiaryContainer),
+      AgentKind.terminal => (Icons.terminal_rounded, scheme.surfaceContainerHighest, scheme.onSurfaceVariant),
     };
 
-    return SizedBox(
-      width: size,
-      height: size,
-      child: Stack(
-        clipBehavior: Clip.none,
-        children: [
-          Container(
-            width: size,
-            height: size,
-            decoration: BoxDecoration(
-              shape: BoxShape.circle,
-              color: bgColor,
-            ),
-            child: Icon(
-              icon,
-              size: size * 0.52,
-              color: iconColor,
-            ),
-          ),
-          if (status != null)
-            Positioned(
-              right: 0,
-              bottom: 0,
-              child: Container(
-                decoration: BoxDecoration(
-                  shape: BoxShape.circle,
-                  color: Theme.of(context).colorScheme.surface,
-                ),
-                padding: const EdgeInsets.all(2),
-                child: StatusDot(status, size: size * 0.28),
-              ),
-            ),
-        ],
-      ),
+    final avatar = CircleAvatar(
+      radius: radius,
+      backgroundColor: bgColor,
+      foregroundColor: fgColor,
+      child: Icon(icon, size: radius * 1.1),
+    );
+
+    if (status == null) return avatar;
+
+    final agentStatus = AgentStatus.fromString(status);
+    return Badge(
+      alignment: Alignment.bottomRight,
+      backgroundColor: agentStatus == AgentStatus.unknown ? Colors.transparent : agentStatus.color,
+      smallSize: 10,
+      child: avatar,
     );
   }
 }

@@ -3,6 +3,7 @@ import '../../models/agent_status.dart';
 import '../../models/session.dart';
 import '../../services/herdr_client.dart';
 import '../screens/settings_screen.dart';
+import '../screens/terminal_screen.dart';
 import 'machine_drawer.dart';
 
 /// A Material 3 navigation drawer modelled on Herdr's sidebar: workspaces, with linked worktrees
@@ -10,8 +11,9 @@ import 'machine_drawer.dart';
 /// The machines take the lower half, each half scrolling on its own, with Settings at the foot. Tabs live in the top bar, agents in [showAgentSheet].
 class WorkspaceDrawer extends StatelessWidget {
   final HerdrClientService client;
+  final bool openTerminalOnSelect;
 
-  const WorkspaceDrawer({super.key, required this.client});
+  const WorkspaceDrawer({super.key, required this.client, this.openTerminalOnSelect = false});
 
   @override
   Widget build(BuildContext context) {
@@ -23,6 +25,9 @@ class WorkspaceDrawer extends StatelessWidget {
     void go(VoidCallback select) {
       select();
       Navigator.pop(context);
+      if (openTerminalOnSelect) {
+        Navigator.push(context, MaterialPageRoute(builder: (_) => TerminalScreen(client: client)));
+      }
     }
 
     Widget row({

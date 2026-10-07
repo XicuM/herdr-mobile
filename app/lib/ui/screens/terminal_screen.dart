@@ -608,6 +608,11 @@ class _TerminalScreenState extends State<TerminalScreen> with SingleTickerProvid
           ],
         ),
         actions: [
+          IconButton(
+            tooltip: 'Workspaces',
+            icon: const Icon(Icons.folder_outlined),
+            onPressed: () => _scaffoldKey.currentState?.openDrawer(),
+          ),
           // The machine on screen; tap for the drawer, whose foot lists all machines.
           Padding(
             padding: const EdgeInsets.only(right: 8),
