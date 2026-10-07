@@ -146,11 +146,11 @@ class HerdrClientService extends ChangeNotifier {
     notifyListeners();
   }
 
-  bool isMuted(String paneId) => _muted.contains('$machine/$paneId');
+  bool isMuted(String paneId, [String? machine]) => _muted.contains('${machine ?? this.machine}/$paneId');
 
-  /// Silences, or unsilences, the alerts of [paneId] on the active machine.
-  void setMuted(String paneId, bool on) {
-    final key = '$machine/$paneId';
+  /// Silences, or unsilences, the alerts of [paneId] on [machine] (or the active machine).
+  void setMuted(String paneId, bool on, [String? machine]) {
+    final key = '${machine ?? this.machine}/$paneId';
     _muted = on ? {..._muted, key} : ({..._muted}..remove(key));
     SharedPreferences.getInstance().then((p) => p.setStringList('muted_panes', _muted.toList()));
     notifyListeners();

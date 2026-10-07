@@ -698,10 +698,15 @@ void main() {
 
       // Tapping back returns to AgentsHomeScreen
       await tester.tap(find.byIcon(Icons.arrow_back));
-      await tester.pump();
-      await tester.pump(const Duration(milliseconds: 300));
+      await tester.pumpAndSettle();
 
       expect(find.text('Agents'), findsOneWidget);
+
+      // Swipe right to mute antigravity agent
+      await tester.drag(find.text('antigravity'), const Offset(500, 0), warnIfMissed: false);
+      await tester.pumpAndSettle();
+      expect(client.isMuted('w1:p2', '10.0.0.1:7788'), isTrue);
+      expect(find.byIcon(Icons.notifications_off_outlined), findsOneWidget);
     });
   });
 }
