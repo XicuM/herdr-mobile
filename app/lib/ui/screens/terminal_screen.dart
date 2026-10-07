@@ -917,7 +917,7 @@ class _TerminalScreenState extends State<TerminalScreen> with SingleTickerProvid
                 onPointerCancel: _trackSwipe,
                 child: Container(
                   color: background,
-                  padding: const EdgeInsets.fromLTRB(0, 4, 0, 6),
+                  padding: const EdgeInsets.fromLTRB(4, 4, 4, 6),
                   child: Row(
                     children: [
                       Theme(

@@ -72,18 +72,21 @@ class _KeyboardAccessoryBarState extends State<KeyboardAccessoryBar> {
   @override
   Widget build(BuildContext context) {
     final w = widget;
-    return Row(
-      children: [
-        _key('ESC', () => w.onKey(TerminalKey.escape)),
-        _key('^C', () => w.onText('\x03'), danger: true),
-        _key('TAB', () => w.onKey(TerminalKey.tab)),
-        _key('⇧TAB', () => w.onKey(TerminalKey.tab, shift: true)),
-        _key('CTRL', w.onCtrl, active: w.ctrl),
-        _key('←', () => w.onKey(TerminalKey.arrowLeft), repeat: true),
-        _key('↓', () => w.onKey(TerminalKey.arrowDown), repeat: true),
-        _key('↑', () => w.onKey(TerminalKey.arrowUp), repeat: true),
-        _key('→', () => w.onKey(TerminalKey.arrowRight), repeat: true),
-      ],
+    return Padding(
+      padding: const EdgeInsets.only(right: 8),
+      child: Row(
+        children: [
+          _key('ESC', () => w.onKey(TerminalKey.escape)),
+          _key('^C', () => w.onText('\x03'), danger: true),
+          _key('TAB', () => w.onKey(TerminalKey.tab)),
+          _key('⇧TAB', () => w.onKey(TerminalKey.tab, shift: true)),
+          _key('CTRL', w.onCtrl, active: w.ctrl),
+          _key('←', () => w.onKey(TerminalKey.arrowLeft), repeat: true),
+          _key('↓', () => w.onKey(TerminalKey.arrowDown), repeat: true),
+          _key('↑', () => w.onKey(TerminalKey.arrowUp), repeat: true),
+          _key('→', () => w.onKey(TerminalKey.arrowRight), repeat: true),
+        ],
+      ),
     );
   }
 }
