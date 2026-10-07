@@ -7,12 +7,14 @@ import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
+import android.app.Person
 import android.app.Service
 import android.content.ContentResolver
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.content.pm.ServiceInfo
 import android.graphics.BitmapFactory
+import android.graphics.drawable.Icon
 import android.media.AudioAttributes
 import android.net.Uri
 import android.os.Build
@@ -135,10 +137,24 @@ class HerdrApp : Application() {
             .setContentText(text)
             .setAutoCancel(true)
             .setContentIntent(openIntent(id, machine, pane))
+        if (Build.VERSION.SDK_INT >= 21) {
+            b.setCategory(Notification.CATEGORY_MESSAGE)
+        }
         if (iconBytes != null) {
             val bitmap = BitmapFactory.decodeByteArray(iconBytes, 0, iconBytes.size)
             if (bitmap != null) {
                 b.setLargeIcon(bitmap)
+                if (Build.VERSION.SDK_INT >= 28) {
+                    val user = Person.Builder().setName("User").build()
+                    val sender = Person.Builder()
+                        .setName(title)
+                        .setIcon(Icon.createWithBitmap(bitmap))
+                        .build()
+                    val messagingStyle = Notification.MessagingStyle(user)
+                        .setGroupConversation(false)
+                        .addMessage(Notification.MessagingStyle.Message(text, System.currentTimeMillis(), sender))
+                    b.setStyle(messagingStyle)
+                }
             }
         }
         nm.notify(id, b.build())
