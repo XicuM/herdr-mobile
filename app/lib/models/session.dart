@@ -169,12 +169,16 @@ class AgentModel {
   /// Bumped by herdr each time the agent's status changes.
   final int? stateChangeSeq;
 
+  /// Optional subscription usage and rate limits attached by the bridge.
+  final AgentUsage? usage;
+
   AgentModel({
     required this.name,
     required this.paneId,
     required this.status,
     this.completionSeq,
     this.stateChangeSeq,
+    this.usage,
   });
 
   factory AgentModel.fromJson(Map<String, dynamic> json) {
@@ -185,6 +189,61 @@ class AgentModel {
       status: json['status'] ?? json['agent_status'] ?? 'unknown',
       completionSeq: json['completion_seq'],
       stateChangeSeq: json['state_change_seq'],
+      usage: json['usage'] is Map<String, dynamic> ? AgentUsage.fromJson(json['usage'] as Map<String, dynamic>) : null,
     );
   }
 }
+
+class AgentUsage {
+  final String? tierLabel;
+  final List<UsageLimit> limits;
+  final int? todayTokens;
+  final int? todayPrompts;
+
+  AgentUsage({
+    this.tierLabel,
+    this.limits = const [],
+    this.todayTokens,
+    this.todayPrompts,
+  });
+
+  /// The highest utilization percentage among active limits (0.0 to 1.0), or null if no limits.
+  double? get highestPercent {
+    if (limits.isEmpty) return null;
+    return limits.map((l) => l.percent).reduce((a, b) => a > b ? a : b);
+  }
+
+  factory AgentUsage.fromJson(Map<String, dynamic> json) {
+    return AgentUsage(
+      tierLabel: json['tier_label'] ?? json['tierLabel'],
+      limits: (json['limits'] as List<dynamic>? ?? [])
+          .map((e) => UsageLimit.fromJson(e as Map<String, dynamic>))
+          .toList(),
+      todayTokens: json['today_tokens'] ?? json['todayTotalTokens'],
+      todayPrompts: json['today_prompts'] ?? json['todayPrompts'],
+    );
+  }
+}
+
+class UsageLimit {
+  final String label;
+  final double percent;
+  final String? resetsAt;
+
+  UsageLimit({
+    required this.label,
+    required this.percent,
+    this.resetsAt,
+  });
+
+  factory UsageLimit.fromJson(Map<String, dynamic> json) {
+    var p = (json['percent'] as num?)?.toDouble() ?? 0.0;
+    if (p > 1.0) p = p / 100.0;
+    return UsageLimit(
+      label: json['label'] ?? json['title'] ?? 'Quota',
+      percent: p.clamp(0.0, 1.0),
+      resetsAt: json['resets_at'] ?? json['resetsAt'],
+    );
+  }
+}
+

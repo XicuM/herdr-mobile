@@ -43,6 +43,9 @@ class _TerminalScreenState extends State<TerminalScreen> with SingleTickerProvid
   final _controller = TerminalController();
   final _view = GlobalKey<TerminalViewState>();
   final _message = TextEditingController();
+  final _messageFocus = FocusNode();
+  int _historyIndex = -1;
+  String _savedDraft = '';
   PtyChannel? _ptyChannel;
   late final AppLifecycleListener _lifecycle;
   bool _ctrl = false;
@@ -89,6 +92,7 @@ class _TerminalScreenState extends State<TerminalScreen> with SingleTickerProvid
     _terminal.addListener(_findBackground);
 
     _message.addListener(_onMessageChanged);
+    _messageFocus.onKeyEvent = _onMessageKeyEvent;
     _controller.addListener(() => setState(() {})); // shows the Copy button while text is selected
     widget.client.addListener(_onClientUpdate);
     HardwareKeyboard.instance.addHandler(_onHardwareKey);
@@ -99,7 +103,52 @@ class _TerminalScreenState extends State<TerminalScreen> with SingleTickerProvid
     SharedPreferences.getInstance().then((p) => _history = p.getStringList('message_history') ?? []);
   }
 
+  KeyEventResult _onMessageKeyEvent(FocusNode node, KeyEvent event) {
+    if (event is! KeyDownEvent) return KeyEventResult.ignored;
+    if (event.logicalKey == LogicalKeyboardKey.arrowUp) {
+      if (_history.isNotEmpty) {
+        if (_historyIndex == -1) _savedDraft = _message.text;
+        if (_historyIndex + 1 < _history.length) {
+          setState(() {
+            _historyIndex++;
+            final text = _history[_historyIndex];
+            _message.value = TextEditingValue(
+              text: text,
+              selection: TextSelection.collapsed(offset: text.length),
+            );
+          });
+          return KeyEventResult.handled;
+        }
+      }
+    } else if (event.logicalKey == LogicalKeyboardKey.arrowDown) {
+      if (_historyIndex > 0) {
+        setState(() {
+          _historyIndex--;
+          final text = _history[_historyIndex];
+          _message.value = TextEditingValue(
+            text: text,
+            selection: TextSelection.collapsed(offset: text.length),
+          );
+        });
+        return KeyEventResult.handled;
+      } else if (_historyIndex == 0) {
+        setState(() {
+          _historyIndex = -1;
+          _message.value = TextEditingValue(
+            text: _savedDraft,
+            selection: TextSelection.collapsed(offset: _savedDraft.length),
+          );
+        });
+        return KeyEventResult.handled;
+      }
+    }
+    return KeyEventResult.ignored;
+  }
+
   void _onMessageChanged() {
+    if (_historyIndex != -1 && (_historyIndex >= _history.length || _message.text != _history[_historyIndex])) {
+      _historyIndex = -1;
+    }
     if (_draftKey != null) {
       if (_message.text.isNotEmpty) {
         TerminalScreen._drafts[_draftKey!] = _message.text;
@@ -196,6 +245,8 @@ class _TerminalScreenState extends State<TerminalScreen> with SingleTickerProvid
         if (_ptyChannel == channel) channel?.sendInput('\r');
       });
     }
+    _historyIndex = -1;
+    _savedDraft = '';
     if (quickReply != null) return;
     _message.clear();
     if (text.trim().isEmpty) return;
@@ -206,6 +257,7 @@ class _TerminalScreenState extends State<TerminalScreen> with SingleTickerProvid
   /// Quick replies, sent as soon as picked, and earlier messages, which go in the message box to edit or send.
   void _showHistory() {
     void pick(String text) {
+      _historyIndex = -1;
       _message.value = TextEditingValue(text: text, selection: TextSelection.collapsed(offset: text.length));
       Navigator.pop(context);
     }
@@ -258,6 +310,192 @@ class _TerminalScreenState extends State<TerminalScreen> with SingleTickerProvid
           ],
         ),
       ),
+    );
+  }
+
+  static Color _quotaColor(ColorScheme scheme, AgentUsage? usage) {
+    if (usage == null || usage.limits.isEmpty) {
+      return scheme.onSurfaceVariant.withValues(alpha: 0.5);
+    }
+    final pct = usage.highestPercent ?? 0.0;
+    if (pct >= 0.90) return scheme.error;
+    if (pct >= 0.75) return Colors.orange;
+    return Colors.green;
+  }
+
+  static String _formatResetTime(String raw) {
+    try {
+      final parsed = DateTime.parse(raw).toLocal();
+      final diff = parsed.difference(DateTime.now());
+      if (diff.isNegative) return 'shortly';
+      if (diff.inHours > 24) {
+        final days = (diff.inHours / 24).ceil();
+        return 'in $days ${days == 1 ? 'day' : 'days'}';
+      }
+      if (diff.inHours > 0) {
+        final m = diff.inMinutes % 60;
+        return 'in ${diff.inHours}h ${m}m';
+      }
+      if (diff.inMinutes > 0) {
+        return 'in ${diff.inMinutes}m';
+      }
+      return 'in < 1m';
+    } catch (_) {
+      return raw;
+    }
+  }
+
+  static String _formatTokens(int count) {
+    if (count >= 1000000000) return '${(count / 1000000000).toStringAsFixed(1)}B';
+    if (count >= 1000000) return '${(count / 1000000).toStringAsFixed(1)}M';
+    if (count >= 1000) return '${(count / 1000).toStringAsFixed(1)}k';
+    return '$count';
+  }
+
+  void _showUsage(AgentModel? agent, AgentUsage? usage) {
+    showModalBottomSheet(
+      context: context,
+      builder: (context) {
+        final theme = Theme.of(context);
+        final scheme = theme.colorScheme;
+        final title = agent?.name.isNotEmpty == true ? agent!.name : 'Agent';
+        final tier = usage?.tierLabel;
+        final limits = usage?.limits ?? [];
+
+        return SafeArea(
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(20, 16, 20, 24),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    AgentAvatar(name: agent?.name ?? '', radius: 18, status: agent?.status),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(title, style: theme.textTheme.titleMedium?.copyWith(fontWeight: FontWeight.bold)),
+                          if (tier != null && tier.isNotEmpty)
+                            Text(tier, style: theme.textTheme.bodySmall?.copyWith(color: scheme.onSurfaceVariant)),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 16),
+                if (limits.isNotEmpty) ...[
+                  for (final limit in limits) ...[
+                    Builder(builder: (context) {
+                      final leftPct = ((1.0 - limit.percent).clamp(0.0, 1.0) * 100).round();
+                      final usedPct = (limit.percent.clamp(0.0, 1.0) * 100).round();
+                      final statusColor = limit.percent >= 0.90
+                          ? scheme.error
+                          : limit.percent >= 0.75
+                              ? Colors.orange
+                              : Colors.green;
+                      return Container(
+                        margin: const EdgeInsets.symmetric(vertical: 4),
+                        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+                        decoration: BoxDecoration(
+                          color: scheme.surfaceContainerLow,
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Row(
+                              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                              children: [
+                                Text(
+                                  limit.label,
+                                  style: theme.textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w600),
+                                ),
+                                Text(
+                                  '$leftPct% left',
+                                  style: theme.textTheme.titleSmall?.copyWith(
+                                    fontWeight: FontWeight.bold,
+                                    color: statusColor,
+                                  ),
+                                ),
+                              ],
+                            ),
+                            const SizedBox(height: 8),
+                            ClipRRect(
+                              borderRadius: BorderRadius.circular(4),
+                              child: LinearProgressIndicator(
+                                value: limit.percent.clamp(0.0, 1.0),
+                                minHeight: 8,
+                                backgroundColor: scheme.surfaceContainerHighest,
+                                valueColor: AlwaysStoppedAnimation<Color>(statusColor),
+                              ),
+                            ),
+                            const SizedBox(height: 8),
+                            Row(
+                              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                              children: [
+                                Text(
+                                  '$usedPct% used',
+                                  style: theme.textTheme.labelSmall?.copyWith(color: scheme.onSurfaceVariant),
+                                ),
+                                if (limit.resetsAt != null && limit.resetsAt!.isNotEmpty)
+                                  Text(
+                                    'Resets ${_formatResetTime(limit.resetsAt!)}',
+                                    style: theme.textTheme.labelSmall?.copyWith(color: scheme.onSurfaceVariant),
+                                  ),
+                              ],
+                            ),
+                          ],
+                        ),
+                      );
+                    }),
+                  ],
+                ] else
+                  Padding(
+                    padding: const EdgeInsets.symmetric(vertical: 12),
+                    child: Text(
+                      'No active rate limits recorded for this agent.',
+                      style: theme.textTheme.bodyMedium?.copyWith(color: scheme.onSurfaceVariant),
+                    ),
+                  ),
+                if (usage?.todayTokens != null || usage?.todayPrompts != null) ...[
+                  const SizedBox(height: 8),
+                  Container(
+                    padding: const EdgeInsets.symmetric(vertical: 12),
+                    decoration: BoxDecoration(
+                      color: scheme.surfaceContainerLow,
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    child: Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceAround,
+                      children: [
+                        if (usage?.todayTokens case final tokens?)
+                          Column(
+                            children: [
+                              Text(_formatTokens(tokens),
+                                  style: theme.textTheme.titleMedium?.copyWith(fontWeight: FontWeight.bold)),
+                              Text('Tokens today', style: theme.textTheme.labelSmall?.copyWith(color: scheme.onSurfaceVariant)),
+                            ],
+                          ),
+                        if (usage?.todayPrompts case final prompts?)
+                          Column(
+                            children: [
+                              Text('$prompts',
+                                  style: theme.textTheme.titleMedium?.copyWith(fontWeight: FontWeight.bold)),
+                              Text('Prompts today', style: theme.textTheme.labelSmall?.copyWith(color: scheme.onSurfaceVariant)),
+                            ],
+                          ),
+                      ],
+                    ),
+                  ),
+                ],
+              ],
+            ),
+          ),
+        );
+      },
     );
   }
 
@@ -325,6 +563,10 @@ class _TerminalScreenState extends State<TerminalScreen> with SingleTickerProvid
       return;
     }
     _swipeFrom = null;
+    if (e is PointerUpEvent && !_swiping && d.dy < -30 && d.dy.abs() > d.dx.abs() * 1.5) {
+      _showHistory();
+      return;
+    }
     if (!_swiping) return;
     _swiping = false;
     final ms = (e.timeStamp - _swipeTime).inMilliseconds.clamp(1, 1 << 30);
@@ -695,6 +937,7 @@ class _TerminalScreenState extends State<TerminalScreen> with SingleTickerProvid
   void dispose() {
     _onMessageChanged();
     _message.removeListener(_onMessageChanged);
+    _messageFocus.dispose();
     _slide.dispose();
     _lifecycle.dispose();
     widget.client.removeListener(_onClientUpdate);
@@ -703,6 +946,23 @@ class _TerminalScreenState extends State<TerminalScreen> with SingleTickerProvid
     HardwareKeyboard.instance.removeHandler(_onHardwareKey);
     _ptyChannel?.dispose();
     super.dispose();
+  }
+
+  AgentModel? _currentAgent() {
+    final snapshot = widget.client.snapshot;
+    if (snapshot == null) return null;
+    final paneId = widget.client.selectedPaneId;
+    if (paneId != null) {
+      final agent = snapshot.agentOf(paneId);
+      if (agent != null) return agent;
+      final pane = snapshot.panes.where((p) => p.id == paneId).firstOrNull;
+      if (pane != null) {
+        final tabPanes = snapshot.panes.where((p) => p.tabId == pane.tabId).map((p) => p.id).toSet();
+        final agentInTab = snapshot.agents.where((a) => tabPanes.contains(a.paneId)).firstOrNull;
+        if (agentInTab != null) return agentInTab;
+      }
+    }
+    return null;
   }
 
   @override
@@ -719,6 +979,8 @@ class _TerminalScreenState extends State<TerminalScreen> with SingleTickerProvid
           );
     final snapshot = client.snapshot;
     final pane = client.selectedPane;
+    final currentAgent = _currentAgent();
+    final currentUsage = currentAgent?.usage;
     final workspace = snapshot?.workspaces.where((w) => w.id == pane?.workspaceId).firstOrNull;
     final connecting = client.machines.isNotEmpty && !client.connected && !client.isDisconnected;
     if (pane?.tabId != _shownTabId) {
@@ -1134,6 +1396,7 @@ class _TerminalScreenState extends State<TerminalScreen> with SingleTickerProvid
                               )
                             : TextField(
                                 controller: _message,
+                                focusNode: _messageFocus,
                                 minLines: 1,
                                 maxLines: 4,
                                 textCapitalization: TextCapitalization.sentences,
@@ -1151,9 +1414,9 @@ class _TerminalScreenState extends State<TerminalScreen> with SingleTickerProvid
                                     borderSide: BorderSide.none,
                                   ),
                                   prefixIcon: IconButton(
-                                    tooltip: 'Quick replies and history',
-                                    icon: const Icon(Icons.history),
-                                    onPressed: _showHistory,
+                                    tooltip: 'Usage and quotas',
+                                    icon: Icon(Icons.bolt, color: _quotaColor(scheme, currentUsage)),
+                                    onPressed: () => _showUsage(currentAgent, currentUsage),
                                   ),
                                 ),
                               ),

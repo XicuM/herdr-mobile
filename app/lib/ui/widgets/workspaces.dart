@@ -34,29 +34,7 @@ class WorkspaceList extends StatelessWidget {
             contentPadding: EdgeInsets.only(left: 16 + indent, right: 8),
             leading: StatusDot(ws.agentStatus, size: 10),
             minLeadingWidth: 10,
-            title: ws.isLinkedWorktree
-                ? Row(
-                    children: [
-                      Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
-                        decoration: BoxDecoration(
-                          color: scheme.secondaryContainer,
-                          borderRadius: BorderRadius.circular(4),
-                        ),
-                        child: Text(
-                          'worktree',
-                          style: Theme.of(context).textTheme.labelSmall?.copyWith(
-                            color: scheme.onSecondaryContainer,
-                            fontSize: 10,
-                            fontWeight: FontWeight.w500,
-                          ),
-                        ),
-                      ),
-                      const SizedBox(width: 6),
-                      Flexible(child: Text(ws.displayName, maxLines: 1, overflow: TextOverflow.ellipsis)),
-                    ],
-                  )
-                : Text(ws.displayName, maxLines: 1, overflow: TextOverflow.ellipsis),
+            title: Text(ws.displayName, maxLines: 1, overflow: TextOverflow.ellipsis),
             subtitle: ws.isLinkedWorktree || ws.gitBranch == null ? null : Text(ws.gitBranch!, maxLines: 1),
             trailing: handle,
             onTap: () => at(m, () {
@@ -260,39 +238,13 @@ void showWorkspaceActions(BuildContext context, HerdrClientService client, Works
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
               ),
-              subtitle: (isWorktree || (branch != null && branch.isNotEmpty))
-                  ? Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        if (isWorktree) ...[
-                          Container(
-                            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
-                            decoration: BoxDecoration(
-                              color: scheme.secondaryContainer,
-                              borderRadius: BorderRadius.circular(4),
-                            ),
-                            child: Text(
-                              'worktree',
-                              style: Theme.of(sheetContext).textTheme.labelSmall?.copyWith(
-                                    color: scheme.onSecondaryContainer,
-                                    fontSize: 10,
-                                    fontWeight: FontWeight.w500,
-                                  ),
-                            ),
-                          ),
-                          if (branch != null && branch.isNotEmpty) const SizedBox(width: 6),
-                        ],
-                        if (branch != null && branch.isNotEmpty)
-                          Flexible(
-                            child: Text(
-                              branch,
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                              style:
-                                  Theme.of(sheetContext).textTheme.bodySmall?.copyWith(color: scheme.onSurfaceVariant),
-                            ),
-                          ),
-                      ],
+              subtitle: (branch != null && branch.isNotEmpty)
+                  ? Text(
+                      branch,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style:
+                          Theme.of(sheetContext).textTheme.bodySmall?.copyWith(color: scheme.onSurfaceVariant),
                     )
                   : null,
             ),

@@ -936,10 +936,11 @@ void main() {
       expect(find.text('agent-task'), findsOneWidget);
       expect(find.text('ws1'), findsOneWidget);
       expect(find.text('Needs you'), findsOneWidget);
-      // Status text is below the date in the trailing column
+      // Status text is below the date in the trailing column and aligned with the subtitle at the bottom
       final dateFinder = find
           .text(AgentsHomeScreen.formatWhen(tester.element(find.byType(AgentsHomeScreen)), client.changedAt('w1:p1')!));
       expect(tester.getTopLeft(find.text('Needs you')).dy, greaterThan(tester.getTopLeft(dateFinder).dy));
+      expect(tester.getBottomLeft(find.text('Needs you')).dy, closeTo(tester.getBottomLeft(find.text('ws1')).dy, 3.0));
     });
 
     test('Viewing a done agent (idle, same seq) keeps when it changed', () {
@@ -1430,7 +1431,7 @@ void main() {
       // Branch is vertically below the repo name
       expect(tester.getTopLeft(branchInBar).dy, greaterThan(tester.getTopLeft(repoInBar).dy));
 
-      // showWorkspaceActions shows the chip before branch
+      // showWorkspaceActions shows repo and branch without worktree tag
       showWorkspaceActions(tester.element(appBarFinder), client, snap.workspaces[1]);
       await tester.pump();
       await tester.pump(const Duration(milliseconds: 300));
@@ -1440,11 +1441,10 @@ void main() {
       final repoInSheet = find.descendant(of: sheetHeader, matching: find.text('herdr-mobile'));
       final branchInSheet = find.descendant(of: sheetHeader, matching: find.text('feat-login'));
 
-      expect(chipInSheet, findsOneWidget);
+      expect(chipInSheet, findsNothing);
       expect(repoInSheet, findsOneWidget);
       expect(branchInSheet, findsOneWidget);
-      expect(tester.getTopLeft(chipInSheet).dy, greaterThan(tester.getTopLeft(repoInSheet).dy));
-      expect(tester.getTopLeft(chipInSheet).dx, lessThan(tester.getTopLeft(branchInSheet).dx));
+      expect(tester.getTopLeft(branchInSheet).dy, greaterThan(tester.getTopLeft(repoInSheet).dy));
     });
 
     testWidgets('Ctrl + and Ctrl - change terminal zoom on Linux/desktop', (tester) async {
@@ -1539,5 +1539,189 @@ void main() {
       await tester.pump();
       expect(client.fontSize, equals(14.0));
     });
+
+    test('AgentUsage and UsageLimit parse correctly from JSON', () {
+      final json = {
+        'version': '0.9.3',
+        'protocol': 22,
+        'workspaces': [],
+        'tabs': [],
+        'panes': [],
+        'agents': [
+          {
+            'name': 'claude',
+            'pane_id': 'w1:p1',
+            'agent_status': 'working',
+            'usage': {
+              'tier_label': 'Team',
+              'limits': [
+                {'label': 'Session (5-hour)', 'percent': 0.52, 'resets_at': '2026-10-07T17:39:59Z'},
+                {'label': 'Weekly (7-day)', 'percent': 0.47, 'resets_at': '2026-10-13T07:59:59Z'},
+              ],
+              'today_tokens': 105691105,
+              'today_prompts': 645,
+            }
+          }
+        ],
+      };
+
+      final snapshot = SessionSnapshot.fromJson(json);
+      final agent = snapshot.agents.first;
+      expect(agent.usage, isNotNull);
+      expect(agent.usage!.tierLabel, equals('Team'));
+      expect(agent.usage!.limits.length, equals(2));
+      expect(agent.usage!.limits.first.label, equals('Session (5-hour)'));
+      expect(agent.usage!.limits.first.percent, equals(0.52));
+      expect(agent.usage!.highestPercent, equals(0.52));
+      expect(agent.usage!.todayTokens, equals(105691105));
+      expect(agent.usage!.todayPrompts, equals(645));
+    });
+
+    testWidgets('TerminalScreen message box has quota bolt button that opens usage sheet', (tester) async {
+      final client = HerdrClientService();
+      final snap = SessionSnapshot.fromJson({
+        'version': '0.9.3',
+        'protocol': 22,
+        'focused_workspace_id': 'w1',
+        'focused_tab_id': 'w1:t1',
+        'focused_pane_id': 'w1:p1',
+        'workspaces': [
+          {'workspace_id': 'w1', 'number': 1, 'label': 'main', 'active_tab_id': 'w1:t1', 'agent_status': 'working'},
+        ],
+        'tabs': [
+          {'tab_id': 'w1:t1', 'workspace_id': 'w1', 'number': 1, 'label': 'Tab 1', 'agent_status': 'working'},
+        ],
+        'panes': [
+          {'pane_id': 'w1:p1', 'workspace_id': 'w1', 'tab_id': 'w1:t1', 'focused': true, 'agent_status': 'working', 'terminal_title': 'Task'},
+        ],
+        'agents': [
+          {
+            'name': 'claude',
+            'pane_id': 'w1:p1',
+            'agent_status': 'working',
+            'usage': {
+              'tier_label': 'Team Plan',
+              'limits': [
+                {'label': 'Session (5-hour)', 'percent': 0.85, 'resets_at': '2026-10-07T18:00:00Z'},
+              ],
+              'today_tokens': 50000,
+              'today_prompts': 10,
+            }
+          }
+        ],
+      });
+      client.setSnapshotForTesting(snap);
+      client.selectPane('w1:p1');
+
+      await tester.pumpWidget(MaterialApp(home: TerminalScreen(client: client)));
+      await tester.pump(const Duration(milliseconds: 300));
+
+      // The bolt icon button is inside the message box
+      final boltFinder = find.byIcon(Icons.bolt);
+      expect(boltFinder, findsOneWidget);
+
+      // Tap the bolt icon button to open the usage sheet
+      await tester.tap(boltFinder);
+      await tester.pumpAndSettle();
+
+      expect(find.text('claude'), findsOneWidget);
+      expect(find.text('Team Plan'), findsOneWidget);
+      expect(find.byType(AgentAvatar), findsWidgets);
+      expect(find.text('Session (5-hour)'), findsOneWidget);
+      expect(find.text('15% left'), findsOneWidget);
+      expect(find.text('85% used'), findsOneWidget);
+      expect(find.text('50.0k'), findsOneWidget);
+      expect(find.text('10'), findsOneWidget);
+    });
+
+    testWidgets('Swiping up on message bar opens recent history sheet', (tester) async {
+      SharedPreferences.setMockInitialValues({'message_history': ['fix bug in layout', 'run tests']});
+      final client = HerdrClientService();
+      final snap = SessionSnapshot.fromJson({
+        'version': '0.9.3',
+        'protocol': 22,
+        'focused_workspace_id': 'w1',
+        'focused_tab_id': 'w1:t1',
+        'focused_pane_id': 'w1:p1',
+        'workspaces': [
+          {'workspace_id': 'w1', 'number': 1, 'label': 'main', 'active_tab_id': 'w1:t1', 'agent_status': 'idle'},
+        ],
+        'tabs': [
+          {'tab_id': 'w1:t1', 'workspace_id': 'w1', 'number': 1, 'label': 'Tab 1', 'agent_status': 'idle'},
+        ],
+        'panes': [
+          {'pane_id': 'w1:p1', 'workspace_id': 'w1', 'tab_id': 'w1:t1', 'focused': true, 'agent_status': 'idle', 'terminal_title': ''},
+        ],
+        'agents': [],
+      });
+      client.setSnapshotForTesting(snap);
+      client.selectPane('w1:p1');
+
+      await tester.pumpWidget(MaterialApp(home: TerminalScreen(client: client)));
+      await tester.pump(const Duration(milliseconds: 300));
+
+      // Drag up on the text field / bottom container
+      final messageField = find.byType(TextField);
+      expect(messageField, findsOneWidget);
+
+      await tester.drag(messageField, const Offset(0, -100));
+      await tester.pumpAndSettle();
+
+      expect(find.text('Recent messages'), findsOneWidget);
+      expect(find.text('fix bug in layout'), findsOneWidget);
+      expect(find.text('run tests'), findsOneWidget);
+    });
+
+    testWidgets('Arrow Up/Down in message TextField navigates history', (tester) async {
+      SharedPreferences.setMockInitialValues({'message_history': ['first command', 'second command']});
+      final client = HerdrClientService();
+      final snap = SessionSnapshot.fromJson({
+        'version': '0.9.3',
+        'protocol': 22,
+        'focused_workspace_id': 'w1',
+        'focused_tab_id': 'w1:t1',
+        'focused_pane_id': 'w1:p1',
+        'workspaces': [
+          {'workspace_id': 'w1', 'number': 1, 'label': 'main', 'active_tab_id': 'w1:t1', 'agent_status': 'idle'},
+        ],
+        'tabs': [
+          {'tab_id': 'w1:t1', 'workspace_id': 'w1', 'number': 1, 'label': 'Tab 1', 'agent_status': 'idle'},
+        ],
+        'panes': [
+          {'pane_id': 'w1:p1', 'workspace_id': 'w1', 'tab_id': 'w1:t1', 'focused': true, 'agent_status': 'idle', 'terminal_title': ''},
+        ],
+        'agents': [],
+      });
+      client.setSnapshotForTesting(snap);
+      client.selectPane('w1:p1');
+
+      await tester.pumpWidget(MaterialApp(home: TerminalScreen(client: client)));
+      await tester.pump(const Duration(milliseconds: 300));
+
+      final textField = find.byType(TextField);
+      await tester.tap(textField);
+      await tester.pump();
+
+      // Press Arrow Up to get first history entry
+      await tester.sendKeyEvent(LogicalKeyboardKey.arrowUp);
+      await tester.pump();
+      expect(find.text('first command'), findsOneWidget);
+
+      // Press Arrow Up to get second history entry
+      await tester.sendKeyEvent(LogicalKeyboardKey.arrowUp);
+      await tester.pump();
+      expect(find.text('second command'), findsOneWidget);
+
+      // Press Arrow Down to go back to first history entry
+      await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
+      await tester.pump();
+      expect(find.text('first command'), findsOneWidget);
+
+      // Press Arrow Down to go back to empty draft
+      await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
+      await tester.pump();
+      expect(find.text('first command'), findsNothing);
+    });
   });
 }
+

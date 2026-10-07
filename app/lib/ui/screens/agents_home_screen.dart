@@ -635,39 +635,14 @@ class _AgentsHomeScreenState extends State<AgentsHomeScreen> {
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
               ),
-              subtitle: Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  if (ws.isLinkedWorktree) ...[
-                    Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
-                      decoration: BoxDecoration(
-                        color: theme.colorScheme.secondaryContainer,
-                        borderRadius: BorderRadius.circular(4),
-                      ),
-                      child: Text(
-                        'worktree',
-                        style: theme.textTheme.labelSmall?.copyWith(
-                          color: theme.colorScheme.onSecondaryContainer,
-                          fontSize: 10,
-                          fontWeight: FontWeight.w500,
-                        ),
-                      ),
-                    ),
-                    const SizedBox(width: 6),
-                  ],
-                  Flexible(
-                    child: Text(
-                      sub(m, [
-                        ws.isLinkedWorktree
-                            ? (ws.gitBranch?.replaceFirst('worktree/', '') ?? ws.displayName)
-                            : ws.gitBranch
-                      ]),
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                    ),
-                  ),
-                ],
+              subtitle: Text(
+                sub(m, [
+                  ws.isLinkedWorktree
+                      ? (ws.gitBranch?.replaceFirst('worktree/', '') ?? ws.displayName)
+                      : ws.gitBranch
+                ]),
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
               ),
               onTap: () => open(m, () => client.selectWorkspace(ws.id)),
               onLongPress: () {
@@ -706,6 +681,7 @@ class _AgentsHomeScreenState extends State<AgentsHomeScreen> {
     final statusLabel = hasDraft ? 'Draft' : status.label;
     final statusColor = hasDraft ? AgentStatus.draftColor : status.color;
     final muted = client.isMuted(agent.paneId, machine);
+    final at = client.changedAt(agent.paneId, machine);
     final key = (machine, agent.paneId);
     final selected = _selected.contains(key);
     // The summary its terminal shows on top, as what matters; under it where it is.
@@ -778,27 +754,30 @@ class _AgentsHomeScreenState extends State<AgentsHomeScreen> {
                 overflow: TextOverflow.ellipsis,
               )
             : null,
-        // A chat's column: when it last changed status, its status text below the date, and muted icon if muted.
+        // A chat's column: when it last changed status on top, and muted icon + status text aligned at bottom.
         trailing: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
+          mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.end,
           children: [
-            if (client.changedAt(agent.paneId, machine) case final at?)
-              Text(
-                AgentsHomeScreen.formatWhen(context, at),
-                style: theme.textTheme.labelSmall?.copyWith(color: scheme.onSurfaceVariant),
-              ),
-            if (statusLabel.isNotEmpty) ...[
-              if (client.changedAt(agent.paneId, machine) != null) const SizedBox(height: 2),
-              Text(
-                statusLabel,
-                style: theme.textTheme.labelSmall?.copyWith(color: statusColor),
-              ),
-            ],
-            if (muted) ...[
-              const SizedBox(height: 2),
-              Icon(Icons.notifications_off_outlined, size: 16, color: scheme.onSurfaceVariant),
-            ],
+            Text(
+              at != null ? AgentsHomeScreen.formatWhen(context, at) : '',
+              style: theme.textTheme.labelSmall?.copyWith(color: scheme.onSurfaceVariant),
+            ),
+            const SizedBox(height: 8),
+            Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                if (muted) ...[
+                  Icon(Icons.notifications_off_outlined, size: 16, color: scheme.onSurfaceVariant),
+                  if (statusLabel.isNotEmpty) const SizedBox(width: 4),
+                ],
+                if (statusLabel.isNotEmpty)
+                  Text(
+                    statusLabel,
+                    style: theme.textTheme.labelSmall?.copyWith(color: statusColor),
+                  ),
+              ],
+            ),
           ],
         ),
         onTap: () => _selected.isEmpty ? _openAgent(context, machine, agent.paneId) : _toggle(key),
