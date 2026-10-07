@@ -5,15 +5,13 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:xterm/xterm.dart';
 // ignore: implementation_imports
 import 'package:xterm/src/ui/palette_builder.dart'; // the palette xterm paints with, to resolve a cell's colour
-import '../../changelog.dart';
-import '../../models/agent_status.dart';
 import '../../models/session.dart';
 import '../../services/herdr_client.dart';
 import '../../services/pty_channel.dart';
-import '../widgets/workspace_drawer.dart';
+import '../widgets/agent_avatar.dart';
 import '../widgets/keyboard_accessory_bar.dart';
-import '../widgets/machine_drawer.dart';
-import 'settings_screen.dart';
+import '../widgets/machines.dart';
+import '../widgets/workspaces.dart';
 
 /// Offered below the message history; picking one sends it straight away.
 const _quickReplies = ['yes', 'no', 'continue', '/clear', '/exit'];
@@ -21,14 +19,25 @@ const _quickReplies = ['yes', 'no', 'continue', '/clear', '/exit'];
 class TerminalScreen extends StatefulWidget {
   final HerdrClientService client;
 
-  const TerminalScreen({super.key, required this.client});
+  /// Beside the agents on a wide screen, rather than a screen of its own: then it never goes back, and
+  /// the home screen shows something else once its pane or machine is gone.
+  final bool embedded;
+
+  const TerminalScreen({super.key, required this.client, this.embedded = false});
+
+  // Unsent message box text per pane, by `machine/pane`; static, so it outlives the screen, which goes back
+  // to the agent list.
+  static final _drafts = <String, String>{};
+  static bool hasDraft(String paneId, String machine) => _drafts['$machine/$paneId']?.isNotEmpty ?? false;
+  static String? draftOf(String paneId, String machine) => _drafts['$machine/$paneId'];
+  static void setDraftForTesting(String paneId, String machine, String text) => _drafts['$machine/$paneId'] = text;
+  static void clearDraftsForTesting() => _drafts.clear();
 
   @override
   State<TerminalScreen> createState() => _TerminalScreenState();
 }
 
 class _TerminalScreenState extends State<TerminalScreen> with SingleTickerProviderStateMixin {
-  final _scaffoldKey = GlobalKey<ScaffoldState>();
   final _terminal = Terminal();
   final _controller = TerminalController();
   final _view = GlobalKey<TerminalViewState>();
@@ -36,8 +45,10 @@ class _TerminalScreenState extends State<TerminalScreen> with SingleTickerProvid
   PtyChannel? _ptyChannel;
   late final AppLifecycleListener _lifecycle;
   bool _ctrl = false;
-  List<String> _history = []; // sent messages, newest first
+  List<String> _history = []; // sent messages, newest first, shared by every pane
+  String? _draftKey; // the pane whose draft is in the message box
   int _scrolledUp = 0; // scrolls back into the pane's history; 0 is live
+  bool _left = false; // popped back to the agents, since the machine went off
 
   // Pinch-to-zoom and history scrolling, tracked from raw pointers so they don't fight the
   // terminal's own gestures.
@@ -58,9 +69,8 @@ class _TerminalScreenState extends State<TerminalScreen> with SingleTickerProvid
 
   // The current tab in the top bar's strip, scrolled into view when it changes.
   final _currentTab = GlobalKey();
-  // The tab being dragged, and how far, to tell a drag from a long-press let go in place.
+  // The tab being dragged.
   String? _draggedTab;
-  double _dragDistance = 0;
   String? _shownTabId;
 
   // The terminal's true background: the colour most of the screen's edges are painted, since full-screen agents
@@ -77,71 +87,25 @@ class _TerminalScreenState extends State<TerminalScreen> with SingleTickerProvid
     _terminal.onResize = (cols, rows, _, __) => _ptyChannel?.sendResize(cols, rows);
     _terminal.addListener(_findBackground);
 
-    widget.client.onError = _showError;
+    _message.addListener(_onMessageChanged);
     _controller.addListener(() => setState(() {})); // shows the Copy button while text is selected
     widget.client.addListener(_onClientUpdate);
     HardwareKeyboard.instance.addHandler(_onHardwareKey);
     // The app now keeps running in the background (for alerts), so the pane is attached only while shown.
     _lifecycle = AppLifecycleListener(onStateChange: (_) => _connectTerminal());
     _connectTerminal();
-    WidgetsBinding.instance.addPostFrameCallback((_) => _showIntroOrChangelog());
+    if (widget.client.selectedPaneId case final paneId?) _swapDraft('${widget.client.machine}/$paneId');
     SharedPreferences.getInstance().then((p) => _history = p.getStringList('message_history') ?? []);
   }
 
-  /// Welcome on first launch; afterwards, the changelog entries newer than the last one seen.
-  Future<void> _showIntroOrChangelog() async {
-    final prefs = await SharedPreferences.getInstance();
-    final seen = prefs.getString('last_seen_changelog');
-    final latest = changelog.first.$1;
-    if (seen == latest || !mounted) return;
-    await prefs.setString('last_seen_changelog', latest);
-    final firstRun = seen == null && widget.client.machines.isEmpty;
-    final entries = changelog.takeWhile((e) => e.$1 != seen).toList();
-    if (!mounted) return;
-    final addMachine = await showDialog<bool>(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: Text(firstRun ? 'Welcome to Herdr Mobile' : "What's new"),
-        content: SingleChildScrollView(
-          child: firstRun
-              ? const Text(
-                  'Herdr Mobile is a remote control for Herdr, the terminal multiplexer for AI coding agents.\n\n'
-                  '1. On each computer running Herdr, start herdr-bridge (deploy/start-bridge.sh). '
-                  'It listens on port 7788 on the computer\'s Tailscale IP.\n'
-                  '2. Make sure this phone is on the same Tailscale network.\n'
-                  '3. Add each computer here as a machine, using its Tailscale IP or MagicDNS name.\n\n'
-                  'The menu button at the top left lists workspaces and machines. The workspace\'s tabs sit under '
-                  'the top bar; long-press one to rename it, or long-press and drag it to move it, or onto the bin '
-                  'to close it. Swipe the message bar sideways to go from agent to agent. The square right of the '
-                  'message box lists every agent. Type messages '
-                  'in the box at the bottom, with autocorrect and voice; the history button brings back earlier '
-                  'ones. Pinch or use the volume keys to change the font size (Settings can make them ↑/↓ instead).',
-                )
-              : Column(
-                  mainAxisSize: MainAxisSize.min,
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    for (final (version, notes) in entries) ...[
-                      Text(version, style: Theme.of(context).textTheme.titleSmall),
-                      for (final n in notes) Text('• $n'),
-                      const SizedBox(height: 12),
-                    ],
-                  ],
-                ),
-        ),
-        actions: [
-          if (firstRun)
-            TextButton(onPressed: () => Navigator.pop(context, true), child: const Text('Add a machine'))
-          else
-            TextButton(onPressed: () => Navigator.pop(context), child: const Text('OK')),
-        ],
-      ),
-    );
-    if (addMachine == true) _openSettings();
-  }
-
-  void _openSettings() {
-    Navigator.push(context, MaterialPageRoute(builder: (_) => SettingsScreen(client: widget.client)));
+  void _onMessageChanged() {
+    if (_draftKey != null) {
+      if (_message.text.isNotEmpty) {
+        TerminalScreen._drafts[_draftKey!] = _message.text;
+      } else {
+        TerminalScreen._drafts.remove(_draftKey);
+      }
+    }
   }
 
   /// Volume keys zoom the terminal font or send ↑/↓ while this screen is on top, as set in Settings.
@@ -231,7 +195,7 @@ class _TerminalScreenState extends State<TerminalScreen> with SingleTickerProvid
               child: ListView(
                 shrinkWrap: true,
                 children: [
-                  // Headed like the agent sheet.
+                  // Headed like the other sheets.
                   Padding(
                     padding: const EdgeInsets.fromLTRB(16, 0, 16, 10),
                     child: Text('Recent messages',
@@ -313,7 +277,13 @@ class _TerminalScreenState extends State<TerminalScreen> with SingleTickerProvid
   /// Raw pointers, so the swipe works over the message box too, whose own drags would win the arena.
   /// A drag that is mostly sideways moves the terminal with the finger.
   void _trackSwipe(PointerEvent e) {
-    final width = MediaQuery.sizeOf(context).width;
+    // Swiping between agents is a one-finger (left-button) gesture; right/middle drags select text.
+    if (_isMouseSecondary(e)) {
+      _swipeFrom = null;
+      _swiping = false;
+      return;
+    }
+    final width = context.size!.width;
     if (e is PointerDownEvent) {
       _swipeFrom = e.position;
       _swipeTime = e.timeStamp;
@@ -340,23 +310,66 @@ class _TerminalScreenState extends State<TerminalScreen> with SingleTickerProvid
     }
   }
 
-  Future<void> _renameTab(TabModel tab) async {
-    final name = await WorkspaceDrawer.prompt(context, 'Rename tab', 'Tab name', initial: tab.label);
-    if (name != null) widget.client.renameTab(tab.id, name);
+  /// The agent running in a tab (focused pane's first), or null if it runs none.
+  AgentModel? _tabAgent(TabModel tab) {
+    final snapshot = widget.client.snapshot;
+    if (snapshot == null) return null;
+    final panes = snapshot.panes.where((p) => p.tabId == tab.id).toList();
+    final focusedPane = panes.where((p) => p.focused).firstOrNull ?? panes.firstOrNull;
+    if (focusedPane != null) {
+      final agent = snapshot.agents.where((a) => a.paneId == focusedPane.id).firstOrNull;
+      if (agent != null) return agent;
+    }
+    final paneIds = {for (final p in panes) p.id};
+    return snapshot.agents.where((a) => paneIds.contains(a.paneId)).firstOrNull;
   }
 
-  /// The names of the agents in a tab, or null if it runs none.
-  String? _tabAgents(TabModel tab) {
-    final snapshot = widget.client.snapshot!;
-    final panes = {
-      for (final p in snapshot.panes)
-        if (p.tabId == tab.id) p.id
-    };
-    final names = [
-      for (final a in snapshot.agents)
-        if (panes.contains(a.paneId)) a.name
-    ];
-    return names.isEmpty ? null : names.join(' · ');
+  /// A concise summary of what's happening in [tab]: the terminal title of its focused pane,
+  /// or the running agent's name, falling back to the tab's display name.
+  String _tabSummary(TabModel tab) {
+    final snapshot = widget.client.snapshot;
+    if (snapshot == null) return tab.displayName;
+    final panes = snapshot.panes.where((p) => p.tabId == tab.id).toList();
+    final pane = panes.where((p) => p.focused).firstOrNull ?? panes.firstOrNull;
+    if (pane != null && pane.terminalTitle.isNotEmpty) {
+      return pane.terminalTitle;
+    }
+    final agent = _tabAgent(tab);
+    if (agent != null && agent.name.isNotEmpty) {
+      return agent.name;
+    }
+    return tab.displayName;
+  }
+
+  /// Desktop right-click on a tab: select it, close it, or move it without long-press dragging.
+  Future<void> _showTabMenu(TapUpDetails details, TabModel tab, List<TabModel> tabs, int index) async {
+    final client = widget.client;
+    final at = details.globalPosition;
+    final picked = await showMenu<String>(
+      context: context,
+      position: RelativeRect.fromLTRB(at.dx, at.dy, at.dx, at.dy),
+      items: [
+        const PopupMenuItem(value: 'open', child: ListTile(leading: Icon(Icons.tab), title: Text('Open tab'))),
+        if (index > 0)
+          const PopupMenuItem(
+              value: 'left', child: ListTile(leading: Icon(Icons.arrow_back), title: Text('Move left'))),
+        if (index < tabs.length - 1)
+          const PopupMenuItem(
+              value: 'right', child: ListTile(leading: Icon(Icons.arrow_forward), title: Text('Move right'))),
+        const PopupMenuItem(
+            value: 'close', child: ListTile(leading: Icon(Icons.close), title: Text('Close tab'))),
+      ],
+    );
+    switch (picked) {
+      case 'open':
+        client.selectTab(tab.id);
+      case 'left':
+        if (index > 0) client.moveTab(tab.id, tabs[index - 1].id);
+      case 'right':
+        if (index < tabs.length - 1) client.moveTab(tab.id, tabs[index + 1].id);
+      case 'close':
+        client.closeTab(tab.id);
+    }
   }
 
   /// The workspace's tabs, and the current one's index in them.
@@ -368,37 +381,47 @@ class _TerminalScreenState extends State<TerminalScreen> with SingleTickerProvid
     return (tabs, tabs.indexWhere((t) => t.id == pane.tabId));
   }
 
-  /// Where a sideways swipe goes: every agent in herdr's order (workspace, tab, pane), as labels and
-  /// how to show each, with the current one's index. The pane on screen is among them even when it runs
-  /// no agent, so a plain shell still has neighbours.
+  /// Where a sideways swipe goes: every agent on every connected machine, each machine's in herdr's order
+  /// (workspace, tab, pane), as labels and how to show each, with the current one's index. The pane on
+  /// screen is among them even when it runs no agent, so a plain shell still has neighbours.
   (List<(String, VoidCallback)>, int)? _stops() {
     final client = widget.client;
-    final snapshot = client.snapshot;
     final current = client.selectedPane;
     if (current == null) return null;
-    final ws = [for (final w in snapshot!.workspaces) w.id];
-    final tabs = [for (final t in snapshot.tabs) t.id];
-    final names = {for (final a in snapshot.agents) a.paneId: a.name};
-    final wsName = {for (final w in snapshot.workspaces) w.id: w.displayName};
-    final order = snapshot.panes.indexOf;
-    final panes = snapshot.panes.where((p) => names.containsKey(p.id) || p == current).toList()
-      ..sort((a, b) => [
-            ws.indexOf(a.workspaceId).compareTo(ws.indexOf(b.workspaceId)),
-            tabs.indexOf(a.tabId).compareTo(tabs.indexOf(b.tabId)),
-            order(a).compareTo(order(b)),
-          ].firstWhere((c) => c != 0, orElse: () => 0));
-    return (
-      [
-        for (final p in panes)
-          (
-            [if (p.workspaceId != current.workspaceId) wsName[p.workspaceId], names[p.id] ?? 'shell']
-                .whereType<String>()
-                .join(' · '),
-            () => client.selectPane(p.id),
-          ),
-      ],
-      panes.indexOf(current),
-    );
+    final stops = <(String, VoidCallback)>[];
+    var at = -1;
+    for (final m in client.machines) {
+      final snapshot = client.snapshotOf(m);
+      if (client.isOff(m) || snapshot == null) continue;
+      final here = m == client.machine;
+      final ws = [for (final w in snapshot.workspaces) w.id];
+      final tabs = [for (final t in snapshot.tabs) t.id];
+      final names = {for (final a in snapshot.agents) a.paneId: a.name};
+      final wsName = {for (final w in snapshot.workspaces) w.id: w.displayName};
+      final order = snapshot.panes.indexOf;
+      final panes = snapshot.panes.where((p) => names.containsKey(p.id) || here && p.id == current.id).toList()
+        ..sort((a, b) => [
+              ws.indexOf(a.workspaceId).compareTo(ws.indexOf(b.workspaceId)),
+              tabs.indexOf(a.tabId).compareTo(tabs.indexOf(b.tabId)),
+              order(a).compareTo(order(b)),
+            ].firstWhere((c) => c != 0, orElse: () => 0));
+      for (final p in panes) {
+        if (here && p.id == current.id) at = stops.length;
+        final tabNumber = snapshot.tabs.where((t) => t.id == p.tabId).firstOrNull?.number ?? 1;
+        stops.add((
+          [
+            if (!here) client.nameOf(m),
+            if (!here || p.workspaceId != current.workspaceId) wsName[p.workspaceId],
+            names[p.id] ?? '${wsName[p.workspaceId]} ($tabNumber)',
+          ].whereType<String>().join(' · '),
+          () {
+            if (client.machine != m) client.switchMachine(m);
+            client.selectPane(p.id);
+          },
+        ));
+      }
+    }
+    return (stops, at);
   }
 
   /// Slides the terminal out, moves [step] agents (wrapping around past either end), and slides the new
@@ -419,7 +442,28 @@ class _TerminalScreenState extends State<TerminalScreen> with SingleTickerProvid
   }
 
   void _copySelection() {
-    Clipboard.setData(ClipboardData(text: _terminal.buffer.getText(_controller.selection)));
+    // herdr repaints every cell, blanks included, so each row ends in spaces up to the terminal's width.
+    // And agents wrap their own text into rows, continued indented, so a row is joined to the next when
+    // that one is indented, isn't a list item, and its first word wouldn't have fit on this row.
+    final selection = _controller.selection!.normalized;
+    final lines = _terminal.buffer.lines;
+    final text = StringBuffer();
+    var joined = false;
+    for (final segment in selection.toSegments()) {
+      final row = segment.line;
+      if (row < 0 || row >= lines.length) continue;
+      final part = lines[row].getText(segment.start, segment.end).trimRight();
+      text.write(joined ? part.trimLeft() : part);
+      if (row == selection.end.y || row + 1 >= lines.length) break;
+      final line = lines[row].getText().trimRight();
+      final next = RegExp(r'^( +)(?![-*•] |\d+[.)] )(\S+)').firstMatch(lines[row + 1].getText());
+      joined = line.trim().isNotEmpty &&
+          next != null &&
+          next[1]!.length >= line.length - line.trimLeft().length &&
+          line.length + 1 + next[2]!.length >= _terminal.viewWidth;
+      text.write(joined ? ' ' : '\n');
+    }
+    Clipboard.setData(ClipboardData(text: text.toString()));
     _controller.clearSelection();
     ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Copied')));
   }
@@ -433,7 +477,70 @@ class _TerminalScreenState extends State<TerminalScreen> with SingleTickerProvid
     return above >= 0 ? above : render.getOffset(selection.end).dy + render.lineHeight + 8;
   }
 
+  /// Right/middle mouse buttons never start pinch-zoom or history scrolling: they are
+  /// for selection and the context menu. Up/cancel still clears the tracked pointer.
+  bool _isMouseSecondary(PointerEvent e) =>
+      e.kind == PointerDeviceKind.mouse &&
+      e is! PointerUpEvent &&
+      e is! PointerCancelEvent &&
+      (e.buttons & (kSecondaryMouseButton | kMiddleMouseButton)) != 0;
+
+  /// Desktop context menu: copy the selection, paste the clipboard, select all.
+  /// Right-click never clears the selection, unlike a left tap.
+  Future<void> _showTerminalMenu(TapDownDetails details) async {
+    final hasSelection = _controller.selection != null;
+    final clipboard = await Clipboard.getData(Clipboard.kTextPlain);
+    final canPaste =
+        (clipboard?.text?.isNotEmpty ?? false) && _ptyChannel != null && widget.client.connected;
+    if (!mounted) return;
+    final at = details.globalPosition;
+    final picked = await showMenu<String>(
+      context: context,
+      position: RelativeRect.fromLTRB(at.dx, at.dy, at.dx, at.dy),
+      items: [
+        if (hasSelection)
+          const PopupMenuItem(value: 'copy', child: ListTile(leading: Icon(Icons.content_copy), title: Text('Copy'))),
+        if (canPaste)
+          const PopupMenuItem(value: 'paste', child: ListTile(leading: Icon(Icons.content_paste), title: Text('Paste'))),
+        const PopupMenuItem(
+            value: 'selectAll', child: ListTile(leading: Icon(Icons.select_all), title: Text('Select all'))),
+        if (hasSelection)
+          const PopupMenuItem(
+              value: 'clear', child: ListTile(leading: Icon(Icons.clear), title: Text('Clear selection'))),
+      ],
+    );
+    switch (picked) {
+      case 'copy':
+        _copySelection();
+      case 'paste':
+        _pasteFromClipboard(clipboard?.text);
+      case 'selectAll':
+        _selectAll();
+      case 'clear':
+        _controller.clearSelection();
+    }
+  }
+
+  /// Pastes clipboard text as one bracketed paste (like the message box), then Enter is left to the user.
+  void _pasteFromClipboard(String? text) {
+    if (text == null || text.isEmpty) return;
+    _toLive();
+    _ptyChannel?.sendInput(_terminal.bracketedPasteMode ? '\x1b[200~$text\x1b[201~' : text);
+  }
+
+  /// Selects the visible screen, like xterm's own Select-all action.
+  void _selectAll() {
+    final buffer = _terminal.buffer;
+    final top = buffer.height - _terminal.viewHeight;
+    _controller.setSelection(
+      buffer.createAnchor(0, top < 0 ? 0 : top),
+      buffer.createAnchor(_terminal.viewWidth, buffer.height - 1),
+    );
+    setState(() {});
+  }
+
   void _trackPointer(PointerEvent e) {
+    if (_isMouseSecondary(e)) return;
     if (e is PointerUpEvent || e is PointerCancelEvent) {
       _pointers.remove(e.pointer);
     } else {
@@ -500,8 +607,27 @@ class _TerminalScreenState extends State<TerminalScreen> with SingleTickerProvid
     setState(() => _scrolledUp = (_scrolledUp + lines.sign).clamp(0, 1000));
   }
 
+  /// Parks the box's text as the current pane's draft and brings back [key]'s.
+  void _swapDraft(String? key) {
+    if (_draftKey != null) TerminalScreen._drafts[_draftKey!] = _message.text;
+    TerminalScreen._drafts.removeWhere((_, text) => text.isEmpty);
+    _draftKey = key;
+    final text = TerminalScreen._drafts[key] ?? '';
+    _message.value = TextEditingValue(text: text, selection: TextSelection.collapsed(offset: text.length));
+  }
+
   void _onClientUpdate() {
     if (!mounted) return;
+    // Each pane keeps its own draft: park the box's text and bring back the new pane's.
+    final paneId = widget.client.selectedPaneId;
+    final key = paneId == null ? null : '${widget.client.machine}/$paneId';
+    if (key != _draftKey) _swapDraft(key);
+    // Switched off (e.g. from the notification) or removed: nothing to show, so back to the agents, once.
+    final client = widget.client;
+    if ((client.isDisconnected || !client.machines.contains(client.machine)) && !_left && !widget.embedded) {
+      _left = true;
+      Navigator.maybePop(context);
+    }
     setState(() {});
     _connectTerminal();
   }
@@ -535,10 +661,11 @@ class _TerminalScreenState extends State<TerminalScreen> with SingleTickerProvid
 
   @override
   void dispose() {
+    _onMessageChanged();
+    _message.removeListener(_onMessageChanged);
     _slide.dispose();
     _lifecycle.dispose();
     widget.client.removeListener(_onClientUpdate);
-    widget.client.onError = null;
     _controller.dispose();
     _message.dispose();
     HardwareKeyboard.instance.removeHandler(_onHardwareKey);
@@ -556,8 +683,7 @@ class _TerminalScreenState extends State<TerminalScreen> with SingleTickerProvid
     final onBackground = ThemeData.estimateBrightnessForColor(background) == scheme.brightness
         ? Theme.of(context)
         : Theme.of(context).copyWith(
-            colorScheme:
-                scheme.copyWith(onSurfaceVariant: scheme.onInverseSurface, primary: scheme.onInverseSurface),
+            colorScheme: scheme.copyWith(onSurfaceVariant: scheme.onInverseSurface, primary: scheme.onInverseSurface),
           );
     final snapshot = client.snapshot;
     final pane = client.selectedPane;
@@ -571,79 +697,121 @@ class _TerminalScreenState extends State<TerminalScreen> with SingleTickerProvid
       });
     }
 
+    final isWorktree = workspace?.isLinkedWorktree ?? false;
+    final mainRepo = isWorktree
+        ? snapshot?.workspaces.where((w) => !w.isLinkedWorktree && w.repoKey == workspace?.repoKey).firstOrNull
+        : null;
+    final title =
+        (isWorktree ? mainRepo?.displayName : workspace?.displayName) ?? workspace?.displayName ?? 'workspace';
+    final branch = isWorktree
+        ? (workspace?.gitBranch?.replaceFirst('worktree/', '') ?? workspace?.displayName ?? '')
+        : (workspace?.gitBranch ?? '');
+
     return Scaffold(
-      key: _scaffoldKey,
-      // The app bar's own menu button opens it: workspaces and machines.
-      drawer: WorkspaceDrawer(client: client),
       appBar: AppBar(
-        leading: ModalRoute.of(context)?.canPop == true
-            ? IconButton(
-                icon: const Icon(Icons.arrow_back),
-                tooltip: 'Back to agents',
-                onPressed: () => Navigator.pop(context),
-              )
-            : null,
-        titleSpacing: ModalRoute.of(context)?.canPop == true ? 0 : 0,
-        // Just tall enough for the title and branch, so the tabs sit right under them.
-        toolbarHeight: 48,
+        automaticallyImplyLeading: !widget.embedded,
+        // Beside the back button; embedded, with none, the usual inset from the agents.
+        titleSpacing: widget.embedded ? NavigationToolbar.kMiddleSpacing : 0,
         // The terminal isn't content scrolling under the bar: keep the bar's colour when it scrolls.
         notificationPredicate: (_) => false,
         // A step above the terminal's surface, so the current tab stands out joined to the terminal.
-        backgroundColor: scheme.surfaceContainer,
-        // The workspace, with its git branch underneath, like the drawer.
-        title: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(
-              workspace?.displayName ?? 'Herdr',
-              style: Theme.of(context).textTheme.titleMedium,
-              overflow: TextOverflow.ellipsis,
+        backgroundColor: scheme.surfaceContainerHigh,
+        // The workspace header: tapping it opens the workspace's actions.
+        title: InkWell(
+          borderRadius: BorderRadius.circular(8),
+          onTap: workspace == null
+              ? null
+              : () => showWorkspaceActions(context, client, workspace,
+                  onDelete: widget.embedded ? null : () => Navigator.maybePop(context)),
+          child: Padding(
+            padding: const EdgeInsets.symmetric(vertical: 4),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    if (isWorktree) ...[
+                      Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
+                        decoration: BoxDecoration(
+                          color: scheme.secondaryContainer,
+                          borderRadius: BorderRadius.circular(4),
+                        ),
+                        child: Text(
+                          'worktree',
+                          style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                            color: scheme.onSecondaryContainer,
+                            fontSize: 10,
+                            fontWeight: FontWeight.w500,
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 6),
+                    ],
+                    Flexible(
+                      child: Text(title,
+                          style: Theme.of(context).textTheme.titleMedium,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis),
+                    ),
+                  ],
+                ),
+                if (branch.isNotEmpty)
+                  Text(
+                    branch,
+                    style: Theme.of(context).textTheme.bodySmall?.copyWith(color: scheme.onSurfaceVariant),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+              ],
             ),
-            if (workspace?.gitBranch != null)
-              Text(
-                workspace!.gitBranch!,
-                style: Theme.of(context).textTheme.bodyMedium?.copyWith(color: scheme.onSurfaceVariant),
-                overflow: TextOverflow.ellipsis,
-              ),
-          ],
+          ),
         ),
         actions: [
-          IconButton(
-            tooltip: 'Workspaces',
-            icon: const Icon(Icons.folder_outlined),
-            onPressed: () => _scaffoldKey.currentState?.openDrawer(),
-          ),
-          // The machine on screen; tap for the drawer, whose foot lists all machines.
           Padding(
             padding: const EdgeInsets.only(right: 8),
             child: ActionChip(
-              tooltip: 'Machines',
-              visualDensity: VisualDensity.compact,
-              side: BorderSide.none,
               backgroundColor: scheme.secondaryContainer,
+              side: BorderSide.none,
               labelStyle: TextStyle(color: scheme.onSecondaryContainer),
-              avatar: Center(child: machineDot(context, client, client.machine)),
+              avatar: Container(
+                width: 8,
+                height: 8,
+                decoration: BoxDecoration(
+                  color: switch (client.machine) {
+                    final m when client.isOff(m) => scheme.onSurfaceVariant,
+                    final m when client.errorOf(m) != null => scheme.error,
+                    final m when client.isConnected(m) => Colors.green,
+                    _ => Colors.orange,
+                  },
+                  shape: BoxShape.circle,
+                ),
+              ),
               label: ConstrainedBox(
-                constraints: const BoxConstraints(maxWidth: 110),
+                constraints: const BoxConstraints(maxWidth: 120),
                 child: Text(
-                  client.machines.isEmpty ? 'No machines' : client.nameOf(client.machine),
+                  client.nameOf(client.machine),
+                  maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                 ),
               ),
-              onPressed: () => _scaffoldKey.currentState?.openDrawer(),
+              onPressed: () => showMachineDialog(context, client, client.machine),
+              tooltip: '${client.nameOf(client.machine)} · ${machineStatus(client, client.machine)}',
             ),
           ),
         ],
-        // The workspace's tabs, like Vivaldi's: a thin strip of tabs as wide as their names (64-200dp),
-        // scrolling when they overflow. The current one is rounded on top and takes the terminal's color,
-        // joined to it below. Each shows its label and its agents. Long-press a tab to move, rename or close it.
+        // The workspace's tabs, like Vivaldi's: equal 168dp tabs, scrolling when they overflow.
+        // The current one is rounded on top and takes the terminal's color, joined to it below.
+        // Each shows its agent icon with an online status ring and truncated tab summary. Long-press a tab to move or close it.
         bottom: PreferredSize(
-          preferredSize: const Size.fromHeight(32),
+          preferredSize: const Size.fromHeight(34),
           // While connecting, a thin progress bar over the strip's top edge, taking no room of its own.
           child: Stack(
             children: [
               SizedBox(
-                height: 32,
+                height: 34,
                 child: switch (_tabs()) {
                   (final tabs, final i) when i >= 0 => Row(
                       children: [
@@ -654,67 +822,54 @@ class _TerminalScreenState extends State<TerminalScreen> with SingleTickerProvid
                               crossAxisAlignment: CrossAxisAlignment.stretch,
                               children: [
                                 for (final (j, t) in tabs.indexed)
-                                  if (_tabAgents(t) case final agents)
-                                    // Long-press and drag a tab onto another to take its place, or onto
-                                    // the bin; long-press and let go to rename it.
-                                    DragTarget<String>(
-                                      onWillAcceptWithDetails: (d) => d.data != t.id,
-                                      onAcceptWithDetails: (d) => client.moveTab(d.data, t.id),
-                                      builder: (context, over, _) {
-                                        final label = Padding(
-                                          padding: const EdgeInsets.symmetric(horizontal: 10),
-                                          child: Row(
-                                            mainAxisSize: MainAxisSize.min,
-                                            children: [
-                                              StatusDot(t.agentStatus),
-                                              const SizedBox(width: 8),
-                                              Flexible(
-                                                child: Text.rich(
-                                                  TextSpan(children: [
-                                                    TextSpan(
-                                                        text: t.label.isNotEmpty ? t.label : agents ?? t.displayName),
-                                                    if (t.label.isNotEmpty && agents != null)
-                                                      TextSpan(
-                                                        text: ' · $agents',
-                                                        style: TextStyle(color: scheme.onSurfaceVariant),
-                                                      ),
-                                                  ]),
-                                                  maxLines: 1,
-                                                  overflow: TextOverflow.ellipsis,
-                                                  style: Theme.of(context).textTheme.labelLarge?.copyWith(
-                                                      color: j == i ? scheme.onSurface : scheme.onSurfaceVariant),
-                                                ),
+                                  // Long-press and drag a tab onto another to take its place, or onto
+                                  // the bin.
+                                  DragTarget<String>(
+                                    onWillAcceptWithDetails: (d) => d.data != t.id,
+                                    onAcceptWithDetails: (d) => client.moveTab(d.data, t.id),
+                                    builder: (context, over, _) {
+                                      final tabAgent = _tabAgent(t);
+                                      final label = Padding(
+                                        padding: const EdgeInsets.symmetric(horizontal: 8),
+                                        child: Row(
+                                          mainAxisSize: MainAxisSize.min,
+                                          children: [
+                                            AgentAvatar(name: tabAgent?.name ?? '', radius: 7.5, status: t.agentStatus),
+                                            const SizedBox(width: 6),
+                                            Flexible(
+                                              child: Text(
+                                                _tabSummary(t),
+                                                maxLines: 1,
+                                                overflow: TextOverflow.ellipsis,
+                                                style: Theme.of(context).textTheme.labelMedium?.copyWith(
+                                                    color: j == i ? scheme.onSurface : scheme.onSurfaceVariant),
                                               ),
-                                            ],
-                                          ),
-                                        );
-                                        const top = BorderRadius.vertical(top: Radius.circular(10));
-                                        return LongPressDraggable<String>(
-                                          data: t.id,
-                                          axis: Axis.horizontal,
-                                          onDragStarted: () => setState(() {
-                                            _draggedTab = t.id;
-                                            _dragDistance = 0;
-                                          }),
-                                          onDragUpdate: (d) => _dragDistance += d.delta.distance,
-                                          onDragEnd: (d) {
-                                            setState(() => _draggedTab = null);
-                                            if (!d.wasAccepted && _dragDistance < 8) _renameTab(t);
-                                          },
-                                          feedback: Material(
-                                            color: scheme.secondaryContainer,
-                                            elevation: 3,
-                                            borderRadius: top,
-                                            child: Container(
-                                              height: 32,
-                                              constraints: const BoxConstraints(minWidth: 64, maxWidth: 200),
-                                              child: label,
                                             ),
+                                          ],
+                                        ),
+                                      );
+                                      const top = BorderRadius.vertical(top: Radius.circular(10));
+                                      return LongPressDraggable<String>(
+                                        data: t.id,
+                                        axis: Axis.horizontal,
+                                        onDragStarted: () => setState(() => _draggedTab = t.id),
+                                        onDragEnd: (_) => setState(() => _draggedTab = null),
+                                        feedback: Material(
+                                          color: scheme.secondaryContainer,
+                                          elevation: 3,
+                                          borderRadius: top,
+                                          child: SizedBox(
+                                            height: 34,
+                                            width: 168,
+                                            child: label,
                                           ),
-                                          childWhenDragging: Opacity(opacity: 0.3, child: label),
+                                        ),
+                                        childWhenDragging: Opacity(opacity: 0.3, child: label),
+                                        child: GestureDetector(
+                                          onSecondaryTapUp: (d) => _showTabMenu(d, t, tabs, j),
                                           child: Container(
                                             key: j == i ? _currentTab : null,
-                                            constraints: const BoxConstraints(minWidth: 64, maxWidth: 200),
+                                            width: 168,
                                             decoration: over.isNotEmpty
                                                 ? BoxDecoration(color: scheme.secondaryContainer, borderRadius: top)
                                                 : j == i
@@ -726,9 +881,10 @@ class _TerminalScreenState extends State<TerminalScreen> with SingleTickerProvid
                                               child: label,
                                             ),
                                           ),
-                                        );
-                                      },
-                                    ),
+                                        ),
+                                      );
+                                    },
+                                  ),
                               ],
                             ),
                           ),
@@ -739,8 +895,8 @@ class _TerminalScreenState extends State<TerminalScreen> with SingleTickerProvid
                           builder: (context, over, _) => IconButton(
                             tooltip: _draggedTab == null ? 'New tab' : 'Close tab',
                             padding: EdgeInsets.zero,
-                            constraints: const BoxConstraints.tightFor(width: 44, height: 32),
-                            iconSize: 20,
+                            constraints: const BoxConstraints.tightFor(width: 40, height: 34),
+                            iconSize: 18,
                             color: _draggedTab == null ? null : scheme.error,
                             style: over.isEmpty ? null : IconButton.styleFrom(backgroundColor: scheme.errorContainer),
                             icon: Icon(_draggedTab == null ? Icons.add : Icons.delete_outline),
@@ -761,155 +917,137 @@ class _TerminalScreenState extends State<TerminalScreen> with SingleTickerProvid
         child: Column(
           children: [
             Expanded(
-              child: client.machines.isEmpty
+              // Connected to its bridge, which can't show it: e.g. a machine it reaches over SSH is down.
+              child: client.errorOf(client.machine) != null && snapshot == null
                   ? Center(
-                      child: FilledButton.icon(
-                        onPressed: _openSettings,
-                        icon: const Icon(Icons.add),
-                        label: const Text('Add a machine to get started'),
+                      child: Padding(
+                        padding: const EdgeInsets.all(24),
+                        child: Column(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Icon(Icons.cloud_off, size: 48, color: scheme.onSurfaceVariant),
+                            const SizedBox(height: 12),
+                            Text("Can't reach ${client.nameOf(client.machine)}",
+                                style: Theme.of(context).textTheme.titleMedium),
+                            const SizedBox(height: 8),
+                            Text(client.errorOf(client.machine)!,
+                                textAlign: TextAlign.center, style: TextStyle(color: scheme.onSurfaceVariant)),
+                          ],
+                        ),
                       ),
                     )
-                  // Switched off in the machine drawer: no terminal, just the way back.
-                  : client.isDisconnected
-                      ? Center(
-                          child: Column(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              Icon(Icons.link_off, size: 48, color: scheme.onSurfaceVariant),
-                              const SizedBox(height: 12),
-                              Text('Disconnected from ${client.nameOf(client.machine)}'),
-                              const SizedBox(height: 16),
-                              FilledButton(onPressed: client.connect, child: const Text('Connect')),
-                            ],
-                          ),
-                        )
-                      // Connected to its bridge, which can't show it: e.g. a machine it reaches over SSH is down.
-                      : client.errorOf(client.machine) != null && snapshot == null
-                          ? Center(
-                              child: Padding(
-                                padding: const EdgeInsets.all(24),
-                                child: Column(
-                                  mainAxisSize: MainAxisSize.min,
-                                  children: [
-                                    Icon(Icons.cloud_off, size: 48, color: scheme.onSurfaceVariant),
-                                    const SizedBox(height: 12),
-                                    Text("Can't reach ${client.nameOf(client.machine)}",
-                                        style: Theme.of(context).textTheme.titleMedium),
-                                    const SizedBox(height: 8),
-                                    Text(client.errorOf(client.machine)!,
-                                        textAlign: TextAlign.center, style: TextStyle(color: scheme.onSurfaceVariant)),
-                                  ],
-                                ),
+                  : Stack(
+                      children: [
+                        // Revealed beside the terminal while it slides: where the swipe leads.
+                        if (_stops() case (final stops, final i) when i >= 0 && stops.length > 1)
+                          Positioned.fill(
+                            child: Padding(
+                              padding: const EdgeInsets.symmetric(horizontal: 24),
+                              child: Row(
+                                children: [
+                                  const Icon(Icons.chevron_left),
+                                  Text(stops[(i - 1) % stops.length].$1, style: Theme.of(context).textTheme.labelLarge),
+                                  const Spacer(),
+                                  Text(stops[(i + 1) % stops.length].$1, style: Theme.of(context).textTheme.labelLarge),
+                                  const Icon(Icons.chevron_right),
+                                ],
                               ),
-                            )
-                          : Stack(
-                              children: [
-                                // Revealed beside the terminal while it slides: where the swipe leads.
-                                if (_stops() case (final stops, final i) when i >= 0 && stops.length > 1)
-                                  Positioned.fill(
-                                    child: Padding(
-                                      padding: const EdgeInsets.symmetric(horizontal: 24),
-                                      child: Row(
-                                        children: [
-                                          const Icon(Icons.chevron_left),
-                                          Text(stops[(i - 1) % stops.length].$1,
-                                              style: Theme.of(context).textTheme.labelLarge),
-                                          const Spacer(),
-                                          Text(stops[(i + 1) % stops.length].$1,
-                                              style: Theme.of(context).textTheme.labelLarge),
-                                          const Icon(Icons.chevron_right),
-                                        ],
-                                      ),
-                                    ),
-                                  ),
-                                Positioned.fill(
-                                  child: AnimatedBuilder(
-                                    animation: _slide,
-                                    builder: (_, child) =>
-                                        FractionalTranslation(translation: Offset(_slide.value, 0), child: child),
-                                    child: Listener(
-                                      onPointerDown: _trackPointer,
-                                      onPointerMove: _trackPointer,
-                                      onPointerUp: _trackPointer,
-                                      onPointerCancel: _trackPointer,
-                                      onPointerSignal: _scrollSignal,
-                                      onPointerPanZoomUpdate: _scrollSignal,
-                                      child: TerminalView(
-                                        _terminal,
-                                        key: _view,
-                                        controller: _controller,
-                                        backgroundOpacity: 1.0,
-                                        // xterm's default colours, on the app's surface.
-                                        theme: TerminalTheme(
-                                          cursor: _defaultTheme.cursor,
-                                          selection: _defaultTheme.selection,
-                                          foreground: scheme.onSurface,
-                                          background: scheme.surface,
-                                          black: _defaultTheme.black,
-                                          white: _defaultTheme.white,
-                                          red: _defaultTheme.red,
-                                          green: _defaultTheme.green,
-                                          yellow: _defaultTheme.yellow,
-                                          blue: _defaultTheme.blue,
-                                          magenta: _defaultTheme.magenta,
-                                          cyan: _defaultTheme.cyan,
-                                          brightBlack: _defaultTheme.brightBlack,
-                                          brightRed: _defaultTheme.brightRed,
-                                          brightGreen: _defaultTheme.brightGreen,
-                                          brightYellow: _defaultTheme.brightYellow,
-                                          brightBlue: _defaultTheme.brightBlue,
-                                          brightMagenta: _defaultTheme.brightMagenta,
-                                          brightCyan: _defaultTheme.brightCyan,
-                                          brightWhite: _defaultTheme.brightWhite,
-                                          searchHitBackground: _defaultTheme.searchHitBackground,
-                                          searchHitBackgroundCurrent: _defaultTheme.searchHitBackgroundCurrent,
-                                          searchHitForeground: _defaultTheme.searchHitForeground,
-                                        ),
-                                        textStyle: TerminalStyle(
-                                          fontSize: client.fontSize,
-                                          fontFamily: 'MesloLGS Nerd Font Mono',
-                                          height: 1.1,
-                                        ),
-                                        autofocus: true,
-                                        simulateScroll: false,
-                                      ),
-                                    ),
-                                  ),
-                                ),
-                                if (_copyTop() case final top?)
-                                  // Copy floats by the selection, like Android's own text toolbar.
-                                  Positioned(
-                                    top: top,
-                                    left: 0,
-                                    right: 0,
-                                    child: Center(
-                                      child: FilledButton.tonalIcon(
-                                        onPressed: _copySelection,
-                                        icon: const Icon(Icons.content_copy, size: 18),
-                                        label: const Text('Copy'),
-                                      ),
-                                    ),
-                                  ),
-                                if (_scrolledUp > 0)
-                                  // Back to live: a small round arrow, centred at the bottom.
-                                  Positioned(
-                                    bottom: 12,
-                                    left: 0,
-                                    right: 0,
-                                    child: Center(
-                                      child: FloatingActionButton.small(
-                                        tooltip: 'Back to live',
-                                        onPressed: _toLive,
-                                        child: const Icon(Icons.arrow_downward),
-                                      ),
-                                    ),
-                                  ),
-                              ],
                             ),
+                          ),
+                        Positioned.fill(
+                          child: AnimatedBuilder(
+                            animation: _slide,
+                            // Clipped, so sliding out doesn't paint over the agents beside it on a wide screen.
+                            builder: (_, child) => ClipRect(
+                                child: FractionalTranslation(translation: Offset(_slide.value, 0), child: child)),
+                            child: Listener(
+                              onPointerDown: _trackPointer,
+                              onPointerMove: _trackPointer,
+                              onPointerUp: _trackPointer,
+                              onPointerCancel: _trackPointer,
+                              onPointerSignal: _scrollSignal,
+                              onPointerPanZoomUpdate: _scrollSignal,
+                              // Embedded, a little room from the agents and the screen's edge, in the pane's colour.
+                              child: Container(
+                                  color: background,
+                                  padding: EdgeInsets.symmetric(horizontal: widget.embedded ? 4 : 0),
+                                  child: TerminalView(
+                                    _terminal,
+                                    key: _view,
+                                    controller: _controller,
+                                    onSecondaryTapDown: (details, _) => _showTerminalMenu(details),
+                                    backgroundOpacity: 1.0,
+                                    // xterm's default colours, on the app's surface.
+                                    theme: TerminalTheme(
+                                      cursor: _defaultTheme.cursor,
+                                      selection: _defaultTheme.selection,
+                                      foreground: scheme.onSurface,
+                                      background: scheme.surface,
+                                      black: _defaultTheme.black,
+                                      white: _defaultTheme.white,
+                                      red: _defaultTheme.red,
+                                      green: _defaultTheme.green,
+                                      yellow: _defaultTheme.yellow,
+                                      blue: _defaultTheme.blue,
+                                      magenta: _defaultTheme.magenta,
+                                      cyan: _defaultTheme.cyan,
+                                      brightBlack: _defaultTheme.brightBlack,
+                                      brightRed: _defaultTheme.brightRed,
+                                      brightGreen: _defaultTheme.brightGreen,
+                                      brightYellow: _defaultTheme.brightYellow,
+                                      brightBlue: _defaultTheme.brightBlue,
+                                      brightMagenta: _defaultTheme.brightMagenta,
+                                      brightCyan: _defaultTheme.brightCyan,
+                                      brightWhite: _defaultTheme.brightWhite,
+                                      searchHitBackground: _defaultTheme.searchHitBackground,
+                                      searchHitBackgroundCurrent: _defaultTheme.searchHitBackgroundCurrent,
+                                      searchHitForeground: _defaultTheme.searchHitForeground,
+                                    ),
+                                    textStyle: TerminalStyle(
+                                      fontSize: client.fontSize,
+                                      fontFamily: 'MesloLGS Nerd Font Mono',
+                                      height: 1.1,
+                                    ),
+                                    autofocus: true,
+                                    simulateScroll: false,
+                                  )),
+                            ),
+                          ),
+                        ),
+                        if (_copyTop() case final top?)
+                          // Copy floats by the selection, like Android's own text toolbar.
+                          Positioned(
+                            top: top,
+                            left: 0,
+                            right: 0,
+                            child: Center(
+                              child: FilledButton.tonalIcon(
+                                onPressed: _copySelection,
+                                icon: const Icon(Icons.content_copy, size: 18),
+                                label: const Text('Copy'),
+                              ),
+                            ),
+                          ),
+                        if (_scrolledUp > 0)
+                          // Back to live: a small round arrow, centred at the bottom.
+                          Positioned(
+                            bottom: 12,
+                            left: 0,
+                            right: 0,
+                            child: Center(
+                              child: FloatingActionButton.small(
+                                tooltip: 'Back to live',
+                                onPressed: _toLive,
+                                child: const Icon(Icons.arrow_downward),
+                              ),
+                            ),
+                          ),
+                      ],
+                    ),
             ),
-            // Swipe sideways here to move between agents in herdr's order. The keyboard
+            // Swipe sideways here to move between agents in herdr's order, machine by machine. The keyboard
             // button swaps the message box for the control keys and back. It takes the terminal's background.
-            if (!client.isDisconnected)
+            if (!client.hideMessageTerminal)
               Listener(
                 onPointerDown: _trackSwipe,
                 onPointerMove: _trackSwipe,

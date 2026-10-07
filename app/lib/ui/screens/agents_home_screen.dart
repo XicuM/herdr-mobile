@@ -1,476 +1,829 @@
 import 'package:flutter/material.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+import '../../changelog.dart';
+import '../../models/agent_status.dart';
 import '../../models/session.dart';
 import '../../services/herdr_client.dart';
 import '../widgets/agent_avatar.dart';
-import '../widgets/workspace_drawer.dart';
+import '../widgets/machines.dart';
+import '../widgets/workspaces.dart';
 import 'settings_screen.dart';
 import 'terminal_screen.dart';
 
+/// Most urgent first; any other status after these.
 const _urgency = ['blocked', 'working', 'done', 'idle'];
 
-class _AgentItem {
-  final String machine;
-  final AgentModel agent;
-  final PaneModel? pane;
-  final WorkspaceModel? workspace;
-  final TabModel? tab;
-
-  _AgentItem({
-    required this.machine,
-    required this.agent,
-    this.pane,
-    this.workspace,
-    this.tab,
-  });
-}
-
-/// Unified Material 3 home screen listing all AI agents across all machines.
+/// The home screen, like a chat list: every agent on every connected machine, most urgent first and
+/// within that most recently changed first. Each row shows, as its terminal's top bar does, the summary
+/// the agent's terminal title gives, and under it its workspace, tab and status.
+/// Tap one for its terminal; swipe it right to mute it, left to close it (with Undo). Long-press one, or
+/// tap its avatar, to select it, as in Gmail: then taps select more and the top bar mutes or closes them all.
+/// The top bar is Gmail's: ☰ opens the workspaces (and Settings), the search finds agents, workspaces,
+/// tabs and machines, a section each, and the machines' icon, green while one is connected, opens them.
 class AgentsHomeScreen extends StatefulWidget {
   final HerdrClientService client;
 
   const AgentsHomeScreen({super.key, required this.client});
+
+  /// The time today, the day this year, the date before that.
+  static String formatWhen(BuildContext context, DateTime at) {
+    final l = MaterialLocalizations.of(context);
+    final now = DateTime.now();
+    if (DateUtils.isSameDay(at, now)) return l.formatTimeOfDay(TimeOfDay.fromDateTime(at));
+    return at.year == now.year ? l.formatShortMonthDay(at) : l.formatCompactDate(at);
+  }
 
   @override
   State<AgentsHomeScreen> createState() => _AgentsHomeScreenState();
 }
 
 class _AgentsHomeScreenState extends State<AgentsHomeScreen> {
-  void _openSettings() {
-    Navigator.push(
-      context,
-      MaterialPageRoute(builder: (_) => SettingsScreen(client: widget.client)),
-    );
+  HerdrClientService get client => widget.client;
+
+  /// The selected agents, as (machine, pane id).
+  final _selected = <(String, String)>{};
+
+  final _scaffold = GlobalKey<ScaffoldState>();
+
+  /// Agents closed but still undoable: hidden from the list until their SnackBar goes.
+  final _closing = <(String, String)>{};
+
+  /// What's searched for; null while the search is closed.
+  String? _query;
+  final _search = TextEditingController();
+  final _searchFocus = FocusNode();
+
+  /// The terminal's own screen, while it's pushed over the agents (on a narrow screen).
+  Route<void>? _terminalRoute;
+  bool? _wasWide;
+
+  /// Wide enough for the terminal beside the agents, as Material's list-detail layout: a tablet in
+  /// landscape, though not a phone in landscape, whose terminal would be left too narrow.
+  static bool _isWide(BuildContext context) {
+    final size = MediaQuery.sizeOf(context);
+    return size.width >= 840 && size.shortestSide >= 600;
   }
 
-  void _openAgent(String machine, String paneId) {
-    if (widget.client.machine != machine) {
-      widget.client.switchMachine(machine);
-    }
-    widget.client.selectPane(paneId);
-    Navigator.push(
-      context,
-      MaterialPageRoute(builder: (_) => TerminalScreen(client: widget.client)),
+  @override
+  void dispose() {
+    _search.dispose();
+    _searchFocus.dispose();
+    super.dispose();
+  }
+
+  void _closeSearch() {
+    _searchFocus.unfocus();
+    setState(() {
+      _query = null;
+      _search.clear();
+    });
+  }
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) => _showIntroOrChangelog());
+  }
+
+  /// Welcome on first launch; afterwards, the changelog entries newer than the last one seen.
+  Future<void> _showIntroOrChangelog() async {
+    final prefs = await SharedPreferences.getInstance();
+    final seen = prefs.getString('last_seen_changelog');
+    final latest = changelog.first.$1;
+    if (seen == latest || !mounted) return;
+    await prefs.setString('last_seen_changelog', latest);
+    final firstRun = seen == null && client.machines.isEmpty;
+    final entries = changelog.takeWhile((e) => e.$1 != seen).toList();
+    if (!mounted) return;
+    final addMachine = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text(firstRun ? 'Welcome to Herdr Mobile' : "What's new"),
+        content: SingleChildScrollView(
+          child: firstRun
+              ? const Text(
+                  'Herdr Mobile is a remote control for Herdr, the terminal multiplexer for AI coding agents.\n\n'
+                  '1. On each computer running Herdr, start herdr-bridge (deploy/start-bridge.sh). '
+                  'It listens on port 7788 on the computer\'s Tailscale IP.\n'
+                  '2. Make sure this phone is on the same Tailscale network.\n'
+                  '3. Add each computer here as a machine, using its Tailscale IP or MagicDNS name.\n\n'
+                  'Every agent on every machine is listed here, the ones that need you first. Tap one for its '
+                  'terminal, swipe it right to mute it or left to close it, and long-press to pick several. '
+                  'In a terminal, tap the top bar for the workspace\'s actions; the tabs sit under it. Type in '
+                  'the box at the bottom, with autocorrect and voice, and swipe it sideways to go from agent to '
+                  'agent. Pinch or use the volume keys to change the font size.',
+                )
+              : Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    for (final (version, notes) in entries) ...[
+                      Text(version, style: Theme.of(context).textTheme.titleSmall),
+                      for (final n in notes) Text('• $n'),
+                      const SizedBox(height: 12),
+                    ],
+                  ],
+                ),
+        ),
+        actions: [
+          if (firstRun)
+            TextButton(onPressed: () => Navigator.pop(context, true), child: const Text('Add a machine'))
+          else
+            TextButton(onPressed: () => Navigator.pop(context), child: const Text('OK')),
+        ],
+      ),
     );
+    if (addMachine == true && mounted) _addMachine();
+  }
+
+  void _toggle((String, String) agent) =>
+      setState(() => _selected.contains(agent) ? _selected.remove(agent) : _selected.add(agent));
+
+  /// Desktop right-click on an agent row: the swipe actions (mute/close) as a menu, plus open/select.
+  Future<void> _agentMenu(TapUpDetails details, String machine, AgentModel agent) async {
+    final key = (machine, agent.paneId);
+    final muted = client.isMuted(agent.paneId, machine);
+    final at = details.globalPosition;
+    final picked = await showMenu<String>(
+      context: context,
+      position: RelativeRect.fromLTRB(at.dx, at.dy, at.dx, at.dy),
+      items: [
+        const PopupMenuItem(value: 'open', child: ListTile(leading: Icon(Icons.terminal), title: Text('Open terminal'))),
+        PopupMenuItem(
+            value: 'mute',
+            child: ListTile(
+                leading: Icon(muted ? Icons.notifications_outlined : Icons.notifications_off_outlined),
+                title: Text(muted ? 'Unmute' : 'Mute'))),
+        PopupMenuItem(
+            value: 'select',
+            child: ListTile(
+                leading: Icon(_selected.contains(key) ? Icons.check_box_outline_blank : Icons.check_box_outlined),
+                title: Text(_selected.contains(key) ? 'Deselect' : 'Select'))),
+        const PopupMenuItem(
+            value: 'close', child: ListTile(leading: Icon(Icons.delete_outline), title: Text('Close'))),
+      ],
+    );
+    if (!mounted) return;
+    switch (picked) {
+      case 'open':
+        if (_selected.isEmpty) {
+          _openAgent(context, machine, agent.paneId);
+        } else {
+          _toggle(key);
+          _openAgent(context, machine, agent.paneId);
+        }
+      case 'mute':
+        client.setMuted(agent.paneId, !muted, machine);
+      case 'select':
+        _toggle(key);
+      case 'close':
+        _close([key]);
+    }
+  }
+
+  /// Mutes them all, or unmutes them when all already are.
+  void _muteSelected() {
+    final on = _selected.any((a) => !client.isMuted(a.$2, a.$1));
+    for (final (m, id) in _selected) {
+      client.setMuted(id, on, m);
+    }
+    setState(_selected.clear);
+  }
+
+  /// Hides [agents] at once and closes them once the SnackBar goes without Undo, or another replaces it.
+  /// One at a time, so each close sees the snapshot after the last and keeps their workspace alive.
+  void _close(List<(String, String)> agents) {
+    setState(() {
+      _selected.clear();
+      _closing.addAll(agents);
+    });
+    final messenger = ScaffoldMessenger.of(context)..hideCurrentSnackBar();
+    messenger
+        .showSnackBar(SnackBar(
+          content: Text(agents.length == 1 ? 'Agent closed' : '${agents.length} agents closed'),
+          action: SnackBarAction(label: 'Undo', onPressed: () {}),
+        ))
+        .closed
+        .then((reason) async {
+      if (reason != SnackBarClosedReason.action) {
+        for (final (m, id) in agents) {
+          await client.closePane(id, m);
+        }
+      }
+      if (mounted) setState(() => _closing.removeAll(agents));
+    });
+  }
+
+  /// To the machines' panel, adding one.
+  void _addMachine() {
+    _openMachines();
+    showMachineDialog(context, client);
+  }
+
+  void _openMachines() => _scaffold.currentState?.openEndDrawer();
+
+  /// Closes the drawer, then goes on to [to].
+  void _fromDrawer(void Function(BuildContext) to) {
+    _scaffold.currentState?.closeDrawer();
+    to(context);
+  }
+
+  void _openSettings(BuildContext context) =>
+      Navigator.push(context, MaterialPageRoute(builder: (_) => SettingsScreen(client: client)));
+
+  /// Pushes the selected pane's terminal; on a wide screen it's already beside the agents.
+  Future<void> _openTerminal(BuildContext context) async {
+    if (_isWide(context)) {
+      setState(() {});
+      return;
+    }
+    final route = _terminalRoute = MaterialPageRoute(builder: (_) => TerminalScreen(client: client));
+    await Navigator.push(context, route);
+    if (_terminalRoute == route) _terminalRoute = null;
+    if (mounted) setState(() {});
+  }
+
+  /// Turning wide (rotated, or the window resized), the terminal's own screen moves beside the agents;
+  /// turning narrow, the terminal beside them gets its own screen back.
+  void _onWidthChange(bool wide, bool showing) {
+    final was = _wasWide;
+    _wasWide = wide;
+    if (was == null || was == wide) return;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      final route = _terminalRoute;
+      if (wide && route != null && route.isActive) {
+        Navigator.popUntil(context, (r) => r == route);
+        Navigator.pop(context);
+      } else if (!wide && showing && ModalRoute.of(context)?.isCurrent == true) {
+        _openTerminal(context);
+      }
+    });
+  }
+
+  void _openAgent(BuildContext context, String machine, String paneId) {
+    if (client.machine != machine) client.switchMachine(machine);
+    client.selectPane(paneId);
+    _openTerminal(context);
   }
 
   @override
   Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
-
     return ListenableBuilder(
-      listenable: widget.client,
+      listenable: client,
       builder: (context, _) {
-        final client = widget.client;
         final machines = client.machines;
-
-        if (machines.isEmpty) {
-          return Scaffold(
-            appBar: AppBar(
-              title: const Text('Agents'),
-              actions: [
-                IconButton(
-                  tooltip: 'Settings',
-                  icon: const Icon(Icons.settings_outlined),
-                  onPressed: _openSettings,
-                ),
-              ],
-            ),
-            body: _buildEmptyMachinesState(context, scheme),
-          );
-        }
-
-        // Gather all agents across all machines
-        final allAgents = <_AgentItem>[];
-        for (final m in machines) {
-          final snapshot = client.snapshotOf(m);
-          final paneById = {for (final p in snapshot?.panes ?? <PaneModel>[]) p.id: p};
-          final wsById = {for (final w in snapshot?.workspaces ?? <WorkspaceModel>[]) w.id: w};
-          final tabById = {for (final t in snapshot?.tabs ?? <TabModel>[]) t.id: t};
-
-          for (final agent in snapshot?.agents ?? <AgentModel>[]) {
-            final pane = paneById[agent.paneId];
-            allAgents.add(_AgentItem(
-              machine: m,
-              agent: agent,
-              pane: pane,
-              workspace: pane != null ? wsById[pane.workspaceId] : null,
-              tab: pane != null ? tabById[pane.tabId] : null,
-            ));
+        final on = machines.where((m) => !client.isOff(m)).toList();
+        final connected = on.where(client.isConnected).toList();
+        final rows = <(String, SessionSnapshot, AgentModel, PaneModel?)>[];
+        for (final m in on) {
+          final s = client.snapshotOf(m);
+          if (s == null) continue;
+          final pane = {for (final p in s.panes) p.id: p};
+          for (final a in s.agents) {
+            if (!_closing.contains((m, a.paneId))) rows.add((m, s, a, pane[a.paneId]));
           }
         }
+        int rank(AgentModel a) => switch (_urgency.indexOf(a.status)) { -1 => _urgency.length, final i => i };
+        DateTime at(String m, AgentModel a) => client.changedAt(a.paneId, m) ?? DateTime(0);
+        // Those with no time (there before the app saw them change) by herdr's seq, one counter for all its panes.
+        rows.sort((x, y) => rank(x.$3) != rank(y.$3)
+            ? rank(x.$3) - rank(y.$3)
+            : switch (at(y.$1, y.$3).compareTo(at(x.$1, x.$3))) {
+                0 => (y.$3.stateChangeSeq ?? 0) - (x.$3.stateChangeSeq ?? 0),
+                final c => c,
+              });
+        // Agents that have gone drop out of the selection.
+        _selected.retainWhere((a) => rows.any((r) => r.$1 == a.$1 && r.$3.paneId == a.$2));
+        final selecting = _selected.isNotEmpty;
+        final allMuted = _selected.every((a) => client.isMuted(a.$2, a.$1));
 
-        // Sort by urgency: blocked first, then working, then done, then idle
-        final sortedAgents = [
-          for (final s in _urgency) ...allAgents.where((item) => item.agent.status == s),
-          ...allAgents.where((item) => !_urgency.contains(item.agent.status)),
+        // Each word must be somewhere in what a result shows or is known by.
+        final searching = _query != null;
+        final words = (_query ?? '').toLowerCase().split(RegExp(r'\s+')).where((w) => w.isNotEmpty).toList();
+        bool hit(Iterable<String?> fields) {
+          final text = fields.whereType<String>().join(' ').toLowerCase();
+          return words.every(text.contains);
+        }
+
+        final agentHits = [
+          for (final r in rows)
+            if (hit([
+              r.$4?.terminalTitle,
+              r.$3.name,
+              client.nameOf(r.$1),
+              if (r.$4 != null) r.$2.placeOf(r.$4!),
+              AgentStatus.fromString(r.$3.status).label,
+              if (TerminalScreen.hasDraft(r.$3.paneId, r.$1)) 'Draft',
+            ]))
+              r
         ];
+        final workspaceHits = <(String, SessionSnapshot, WorkspaceModel)>[];
+        final tabHits = <(String, SessionSnapshot, TabModel)>[];
+        final machineHits = <String>[];
+        if (words.isNotEmpty) {
+          for (final m in on) {
+            final s = client.snapshotOf(m);
+            if (s == null) continue;
+            for (final ws in s.workspaces) {
+              // A worktree is also found by its repository's workspace.
+              final repo = ws.isLinkedWorktree
+                  ? s.workspaces.where((w) => !w.isLinkedWorktree && w.repoKey == ws.repoKey).firstOrNull
+                  : null;
+              if (hit([
+                ws.displayName,
+                ws.gitBranch,
+                repo?.displayName,
+                client.nameOf(m),
+                AgentStatus.fromString(ws.agentStatus).label
+              ])) {
+                workspaceHits.add((m, s, ws));
+              }
+            }
+            for (final t in s.tabs) {
+              if (hit([
+                t.displayName,
+                s.workspaces.where((w) => w.id == t.workspaceId).firstOrNull?.displayName,
+                client.nameOf(m),
+              ])) {
+                tabHits.add((m, s, t));
+              }
+            }
+          }
+          machineHits.addAll(machines.where((m) => hit([
+                client.nameOf(m),
+                m,
+                if (HerdrClientService.parentOf(m) case final parent?) client.nameOf(parent),
+                machineStatus(client, m),
+              ])));
+        }
+        final shown = searching ? agentHits : rows;
 
-        return Scaffold(
-          drawer: WorkspaceDrawer(client: client, openTerminalOnSelect: true),
-          appBar: AppBar(
-            title: const Text('Agents'),
-            centerTitle: false,
-            actions: [
-              IconButton(
-                tooltip: 'Settings',
-                icon: const Icon(Icons.settings_outlined),
-                onPressed: _openSettings,
-              ),
-            ],
-          ),
-          body: sortedAgents.isEmpty
-              ? _buildNoAgentsState(context, scheme)
-              : ListView.separated(
-                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-                  itemCount: sortedAgents.length,
-                  separatorBuilder: (_, __) => const SizedBox(height: 10),
-                  itemBuilder: (context, i) => _buildDismissibleAgentCard(
-                    context,
-                    sortedAgents[i],
-                    machines.length > 1,
-                    scheme,
+        // On a wide screen the selected pane's terminal is beside the list, while there's one to show.
+        final wide = _isWide(context);
+        final paneId = client.selectedPaneId;
+        final showing = paneId != null &&
+            !client.isDisconnected &&
+            machines.contains(client.machine) &&
+            !_closing.contains((client.machine, paneId)) &&
+            (client.snapshot == null || client.selectedPane != null);
+        _onWidthChange(wide, showing);
+
+        final PreferredSizeWidget bar = selecting
+            ? AppBar(
+                leading: IconButton(
+                  tooltip: 'Clear selection',
+                  icon: const Icon(Icons.close),
+                  onPressed: () => setState(_selected.clear),
+                ),
+                title: Text('${_selected.length}'),
+                actions: [
+                  IconButton(
+                    tooltip: 'Select all',
+                    icon: const Icon(Icons.select_all),
+                    onPressed: () => setState(() => _selected.addAll([for (final r in shown) (r.$1, r.$3.paneId)])),
+                  ),
+                  IconButton(
+                    tooltip: allMuted ? 'Unmute' : 'Mute',
+                    icon: Icon(allMuted ? Icons.notifications_outlined : Icons.notifications_off_outlined),
+                    onPressed: _muteSelected,
+                  ),
+                  IconButton(
+                    tooltip: 'Close',
+                    icon: const Icon(Icons.delete_outline),
+                    onPressed: () => _close(_selected.toList()),
+                  ),
+                ],
+              )
+            // The ☰ for the workspaces, the search between, and the machines on the right: each icon in
+            // a 56dp slot, so the search sits in the middle.
+            : AppBar(
+                leadingWidth: 56,
+                leading: searching
+                    ? BackButton(onPressed: _closeSearch)
+                    : IconButton(
+                        tooltip: 'Workspaces',
+                        icon: const Icon(Icons.menu),
+                        onPressed: () => _scaffold.currentState?.openDrawer(),
+                      ),
+                titleSpacing: 0,
+                // A pill with its text centred, which M3's SearchBar can't do: the search icon on the left
+                // and as wide a slot on the right, for the clear button.
+                title: Container(
+                  height: 48,
+                  decoration: ShapeDecoration(
+                    color: Theme.of(context).colorScheme.surfaceContainerHigh,
+                    shape: const StadiumBorder(),
+                  ),
+                  child: Row(
+                    children: [
+                      SizedBox(
+                        width: 48,
+                        child: Icon(Icons.search, color: Theme.of(context).colorScheme.onSurfaceVariant),
+                      ),
+                      Expanded(
+                        child: TextField(
+                          controller: _search,
+                          focusNode: _searchFocus,
+                          textAlign: TextAlign.center,
+                          decoration: InputDecoration.collapsed(
+                            // "Connecting…", like WhatsApp's title while it has no connection.
+                            hintText: connected.isEmpty && on.isNotEmpty ? 'Connecting…' : 'Search',
+                          ),
+                          onTap: () => setState(() => _query ??= ''),
+                          onChanged: (q) => setState(() => _query = q),
+                        ),
+                      ),
+                      SizedBox(
+                        width: 48,
+                        child: _query?.isNotEmpty ?? false
+                            ? IconButton(
+                                tooltip: 'Clear',
+                                icon: const Icon(Icons.close),
+                                onPressed: () => setState(() {
+                                  _search.clear();
+                                  _query = '';
+                                }),
+                              )
+                            : null,
+                      ),
+                    ],
                   ),
                 ),
+                actions: [
+                  // Green while one is connected.
+                  SizedBox(
+                    width: 56,
+                    child: IconButton(
+                      tooltip: 'Machines',
+                      icon: Icon(Icons.computer,
+                          color: connected.isEmpty ? Theme.of(context).colorScheme.onSurfaceVariant : Colors.green),
+                      onPressed: _openMachines,
+                    ),
+                  ),
+                ],
+              );
+        final Widget list = searching
+            ? _results(context, words.isEmpty, agentHits, workspaceHits, tabHits, machineHits, machines.length > 1)
+            : machines.isEmpty
+                ? _empty(
+                    context,
+                    Icons.computer_outlined,
+                    'No machines',
+                    'Add a machine running herdr-bridge to see its agents.',
+                    FilledButton.icon(
+                      onPressed: _addMachine,
+                      icon: const Icon(Icons.add),
+                      label: const Text('Add a machine'),
+                    ),
+                  )
+                : on.isEmpty
+                    ? _empty(
+                        context,
+                        Icons.link_off,
+                        'All machines are off',
+                        'Switch one on to see its agents.',
+                        FilledButton.tonal(onPressed: _openMachines, child: const Text('Machines')),
+                      )
+                    : rows.isEmpty && connected.isEmpty
+                        ? const Center(child: CircularProgressIndicator())
+                        : rows.isEmpty
+                            ? _empty(context, Icons.smart_toy_outlined, 'No agents',
+                                'Agents started in herdr show up here.', null)
+                            : ListView.separated(
+                                padding: const EdgeInsets.only(bottom: 16),
+                                itemCount: rows.length,
+                                // A hairline across the whole row, faint like WhatsApp's chat list.
+                                separatorBuilder: (context, _) => Divider(
+                                  height: 1,
+                                  thickness: 0.5,
+                                  color: Theme.of(context).colorScheme.outlineVariant.withValues(alpha: 0.5),
+                                ),
+                                itemBuilder: (context, i) => _tile(context, rows[i], machines.length > 1),
+                              );
+
+        return PopScope(
+          // Back leaves the selection first, then the search.
+          canPop: !selecting && !searching,
+          onPopInvokedWithResult: (didPop, _) {
+            if (didPop) return;
+            if (selecting) return setState(_selected.clear);
+            _closeSearch();
+          },
+          child: Scaffold(
+            key: _scaffold,
+            // Only the ☰ opens it: an edge swipe would fight the rows' swipe to mute and Android's back.
+            drawerEnableOpenDragGesture: false,
+            drawer: Drawer(
+              child: SafeArea(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Padding(
+                      padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
+                      child: Text('Workspaces', style: Theme.of(context).textTheme.titleLarge),
+                    ),
+                    Expanded(child: WorkspaceList(client: client, open: () => _fromDrawer(_openTerminal))),
+                    const Divider(height: 1),
+                    ListTile(
+                      leading: const Icon(Icons.settings_outlined),
+                      title: const Text('Settings'),
+                      onTap: () => _fromDrawer(_openSettings),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+            // The machines, on the side their icon is: each with how it's doing and a switch; its + adds one.
+            endDrawerEnableOpenDragGesture: false,
+            endDrawer: Drawer(
+              child: SafeArea(
+                child: Column(
+                  children: [
+                    Padding(
+                      padding: const EdgeInsets.fromLTRB(16, 8, 4, 0),
+                      child: Row(
+                        children: [
+                          Expanded(child: Text('Machines', style: Theme.of(context).textTheme.titleLarge)),
+                          IconButton(
+                            tooltip: 'Add machine',
+                            icon: const Icon(Icons.add),
+                            onPressed: () => showMachineDialog(context, client),
+                          ),
+                        ],
+                      ),
+                    ),
+                    Expanded(child: MachineList(client: client)),
+                  ],
+                ),
+              ),
+            ),
+            appBar: wide ? null : bar,
+            body: wide
+                ? Row(
+                    children: [
+                      SizedBox(width: 360, child: Column(children: [bar, Expanded(child: list)])),
+                      const VerticalDivider(width: 1),
+                      Expanded(
+                        child: showing
+                            // Its scrolling (the terminal's output, the tab strip) stops here, or it would tint
+                            // the agents' top bar as if the list had scrolled under it.
+                            ? NotificationListener<Notification>(
+                                onNotification: (n) => n is ScrollNotification || n is ScrollMetricsNotification,
+                                child: TerminalScreen(client: client, embedded: true),
+                              )
+                            : _empty(context, Icons.terminal, 'No agent open', 'Pick one to see its terminal.', null),
+                      ),
+                    ],
+                  )
+                : list,
+          ),
         );
       },
     );
   }
 
-  Widget _buildEmptyMachinesState(BuildContext context, ColorScheme scheme) {
-    return Center(
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 32),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Icon(Icons.smart_toy_outlined, size: 64, color: scheme.primary),
-            const SizedBox(height: 16),
-            Text(
-              'No machines connected',
-              style: Theme.of(context).textTheme.titleLarge,
-            ),
-            const SizedBox(height: 8),
-            Text(
-              'Add a machine running herdr-bridge over Tailscale or local network to see and interact with your agents.',
-              textAlign: TextAlign.center,
-              style: Theme.of(context).textTheme.bodyMedium?.copyWith(color: scheme.onSurfaceVariant),
-            ),
-            const SizedBox(height: 24),
-            FilledButton.icon(
-              onPressed: _openSettings,
-              icon: const Icon(Icons.add),
-              label: const Text('Add a machine'),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _buildNoAgentsState(BuildContext context, ColorScheme scheme) {
-    return Center(
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 32),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Icon(Icons.check_circle_outline_rounded, size: 64, color: scheme.secondary),
-            const SizedBox(height: 16),
-            Text(
-              'No agents running',
-              style: Theme.of(context).textTheme.titleLarge,
-            ),
-            const SizedBox(height: 8),
-            Text(
-              'All tasks are completed or idle across your connected machines.',
-              textAlign: TextAlign.center,
-              style: Theme.of(context).textTheme.bodyMedium?.copyWith(color: scheme.onSurfaceVariant),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _buildDismissibleAgentCard(
+  /// The search's results, a section each, in the order they're likeliest wanted.
+  Widget _results(
     BuildContext context,
-    _AgentItem item,
-    bool showMachineName,
-    ColorScheme scheme,
+    bool blank,
+    List<(String, SessionSnapshot, AgentModel, PaneModel?)> agents,
+    List<(String, SessionSnapshot, WorkspaceModel)> workspaces,
+    List<(String, SessionSnapshot, TabModel)> tabs,
+    List<String> machines,
+    bool showMachine,
   ) {
-    final client = widget.client;
-    final agent = item.agent;
-    final isMuted = client.isMuted(agent.paneId, item.machine);
-    final isBlocked = agent.status == 'blocked';
-    final isWorking = agent.status == 'working';
-    final isDone = agent.status == 'done';
+    final theme = Theme.of(context);
+    if (blank) return const SizedBox.shrink();
+    if (agents.isEmpty && workspaces.isEmpty && tabs.isEmpty && machines.isEmpty) {
+      return _empty(context, Icons.search_off, 'No results', 'Nothing matches "${_query!.trim()}".', null);
+    }
+    Widget header(String text) => Padding(
+          padding: const EdgeInsets.fromLTRB(16, 16, 16, 4),
+          child: Text(text, style: theme.textTheme.titleSmall?.copyWith(color: theme.colorScheme.primary)),
+        );
+    // Requests and the terminal go to the active machine, so a result switches to its own first.
+    void open(String m, VoidCallback select) {
+      if (client.machine != m) client.switchMachine(m);
+      select();
+      _openTerminal(context);
+    }
 
-    final wsLabel = item.workspace?.displayName ?? '';
-    final branch = item.workspace?.gitBranch;
-    final tabLabel = item.tab?.displayName ?? '';
-    final hasTerminalTitle = item.pane?.terminalTitle.isNotEmpty == true;
-
-    final locationParts = [
-      if (showMachineName) client.nameOf(item.machine),
-      if (wsLabel.isNotEmpty) wsLabel,
-      if (branch != null && branch.isNotEmpty) branch,
-      if (tabLabel.isNotEmpty && tabLabel != wsLabel) tabLabel,
-    ];
-
-    return Dismissible(
-      key: Key('${item.machine}/${agent.paneId}'),
-      background: Container(
-        decoration: BoxDecoration(
-          color: scheme.secondaryContainer,
-          borderRadius: BorderRadius.circular(16),
-        ),
-        alignment: Alignment.centerLeft,
-        padding: const EdgeInsets.symmetric(horizontal: 24),
-        child: Row(
-          children: [
-            Icon(
-              isMuted ? Icons.notifications_active : Icons.notifications_off,
-              color: scheme.onSecondaryContainer,
-            ),
-            const SizedBox(width: 8),
-            Text(
-              isMuted ? 'Unmute' : 'Mute',
-              style: TextStyle(
-                color: scheme.onSecondaryContainer,
-                fontWeight: FontWeight.bold,
-              ),
-            ),
-          ],
-        ),
-      ),
-      secondaryBackground: Container(
-        decoration: BoxDecoration(
-          color: scheme.errorContainer,
-          borderRadius: BorderRadius.circular(16),
-        ),
-        alignment: Alignment.centerRight,
-        padding: const EdgeInsets.symmetric(horizontal: 24),
-        child: Row(
-          mainAxisAlignment: MainAxisAlignment.end,
-          children: [
-            Text(
-              'Close',
-              style: TextStyle(
-                color: scheme.onErrorContainer,
-                fontWeight: FontWeight.bold,
-              ),
-            ),
-            const SizedBox(width: 8),
-            Icon(Icons.delete_outline, color: scheme.onErrorContainer),
-          ],
-        ),
-      ),
-      confirmDismiss: (direction) async {
-        if (direction == DismissDirection.startToEnd) {
-          // Swipe right: toggle mute without removing from list
-          client.setMuted(agent.paneId, !isMuted, item.machine);
-          return false;
-        } else if (direction == DismissDirection.endToStart) {
-          // Swipe left: close pane and remove from list
-          if (client.machine != item.machine) {
-            client.switchMachine(item.machine);
-          }
-          client.closePane(agent.paneId);
-          return true;
-        }
-        return false;
-      },
-      child: Card(
-        margin: EdgeInsets.zero,
-        elevation: 0,
-        color: isBlocked
-            ? scheme.errorContainer.withValues(alpha: 0.18)
-            : scheme.surfaceContainerLow,
-        shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(16),
-          side: BorderSide(
-            color: isBlocked
-                ? scheme.error.withValues(alpha: 0.4)
-                : scheme.outlineVariant.withValues(alpha: 0.4),
-            width: 1,
-          ),
-        ),
-        clipBehavior: Clip.antiAlias,
-        child: InkWell(
-          onTap: () => _openAgent(item.machine, agent.paneId),
-          child: Padding(
-            padding: const EdgeInsets.all(16),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                // Top Header Row: Avatar, Name + Mute icon, Status Badge
-                Row(
-                  crossAxisAlignment: CrossAxisAlignment.center,
-                  children: [
-                    AgentAvatar(
-                      name: agent.name,
-                      status: agent.status,
-                      radius: 22,
-                    ),
-                    const SizedBox(width: 14),
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Row(
-                            children: [
-                              Flexible(
-                                child: Text(
-                                  agent.name,
-                                  style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                                        fontWeight: FontWeight.bold,
-                                      ),
-                                  overflow: TextOverflow.ellipsis,
-                                ),
-                              ),
-                              if (isMuted) ...[
-                                const SizedBox(width: 6),
-                                Icon(
-                                  Icons.notifications_off_outlined,
-                                  size: 16,
-                                  color: scheme.onSurfaceVariant,
-                                ),
-                              ],
-                            ],
-                          ),
-                          const SizedBox(height: 2),
-                          Text(
-                            isBlocked
-                                ? 'Waiting for your reply'
-                                : isWorking
-                                    ? 'Executing task...'
-                                    : isDone
-                                        ? 'Task completed'
-                                        : 'Idle',
-                            style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                                  color: isBlocked
-                                      ? scheme.error
-                                      : scheme.onSurfaceVariant,
-                                  fontWeight: isBlocked ? FontWeight.w600 : FontWeight.normal,
-                                ),
-                          ),
-                        ],
+    String sub(String m, Iterable<String?> parts) =>
+        [...parts.whereType<String>(), if (showMachine) client.nameOf(m)].where((p) => p.isNotEmpty).join(' · ');
+    return ListView(
+      padding: const EdgeInsets.only(bottom: 16),
+      children: [
+        if (agents.isNotEmpty) ...[
+          header('Agents'),
+          for (final r in agents) _tile(context, r, showMachine),
+        ],
+        if (workspaces.isNotEmpty) ...[
+          header('Workspaces'),
+          for (final (m, s, ws) in workspaces)
+            ListTile(
+              leading: StatusDot(ws.agentStatus, size: 10),
+              minLeadingWidth: 10,
+              title: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  if (ws.isLinkedWorktree) ...[
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
+                      decoration: BoxDecoration(
+                        color: theme.colorScheme.secondaryContainer,
+                        borderRadius: BorderRadius.circular(4),
+                      ),
+                      child: Text(
+                        'worktree',
+                        style: theme.textTheme.labelSmall?.copyWith(
+                          color: theme.colorScheme.onSecondaryContainer,
+                          fontSize: 10,
+                          fontWeight: FontWeight.w500,
+                        ),
                       ),
                     ),
-                    const SizedBox(width: 8),
-                    _buildStatusPill(context, agent.status, scheme),
+                    const SizedBox(width: 6),
                   ],
-                ),
-
-                // Location metadata: Clean inline typography (no chips/boxes)
-                if (locationParts.isNotEmpty) ...[
-                  const SizedBox(height: 10),
-                  Row(
-                    children: [
-                      Icon(
-                        Icons.folder_open_outlined,
-                        size: 15,
-                        color: scheme.onSurfaceVariant,
-                      ),
-                      const SizedBox(width: 6),
-                      Expanded(
-                        child: Text(
-                          locationParts.join(' · '),
-                          style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                                color: scheme.onSurfaceVariant,
-                                fontWeight: FontWeight.w500,
-                              ),
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                        ),
-                      ),
-                    ],
+                  Flexible(
+                    child: Text(
+                      ws.isLinkedWorktree
+                          ? (s.workspaces
+                                  .where((w) => !w.isLinkedWorktree && w.repoKey == ws.repoKey)
+                                  .firstOrNull
+                                  ?.displayName ??
+                              ws.displayName)
+                          : ws.displayName,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
                   ),
                 ],
+              ),
+              subtitle: Text(
+                sub(m, [
+                  ws.isLinkedWorktree ? (ws.gitBranch?.replaceFirst('worktree/', '') ?? ws.displayName) : ws.gitBranch
+                ]),
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+              ),
+              onTap: () => open(m, () => client.selectWorkspace(ws.id)),
+              onLongPress: () {
+                if (client.machine != m) client.switchMachine(m);
+                showWorkspaceActions(context, client, ws, onShow: () => _openTerminal(context));
+              },
+            ),
+        ],
+        if (tabs.isNotEmpty) ...[
+          header('Tabs'),
+          for (final (m, s, t) in tabs)
+            ListTile(
+              leading: StatusDot(t.agentStatus, size: 10),
+              minLeadingWidth: 10,
+              title: Text(t.displayName, maxLines: 1, overflow: TextOverflow.ellipsis),
+              subtitle: Text(sub(m, [s.workspaces.where((w) => w.id == t.workspaceId).firstOrNull?.displayName]),
+                  maxLines: 1, overflow: TextOverflow.ellipsis),
+              onTap: () => open(m, () => client.selectTab(t.id)),
+            ),
+        ],
+        if (machines.isNotEmpty) ...[
+          header('Machines'),
+          MachineList(client: client, only: machines),
+        ],
+      ],
+    );
+  }
 
-                // Terminal title / command preview line
-                if (hasTerminalTitle) ...[
-                  const SizedBox(height: 6),
-                  Row(
-                    children: [
-                      Icon(
-                        Icons.terminal_rounded,
-                        size: 15,
-                        color: scheme.onSurfaceVariant,
-                      ),
-                      const SizedBox(width: 6),
-                      Expanded(
-                        child: Text(
-                          item.pane!.terminalTitle,
-                          style: TextStyle(
-                            fontFamily: 'monospace',
-                            fontSize: 12,
-                            color: scheme.onSurfaceVariant,
-                          ),
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                        ),
-                      ),
-                    ],
-                  ),
-                ],
+  Widget _tile(BuildContext context, (String, SessionSnapshot, AgentModel, PaneModel?) row, bool showMachine) {
+    final (machine, snapshot, agent, pane) = row;
+    final theme = Theme.of(context);
+    final scheme = theme.colorScheme;
+    final status = AgentStatus.fromString(agent.status);
+    final needsYou = status == AgentStatus.blocked;
+    final hasDraft = TerminalScreen.hasDraft(agent.paneId, machine);
+    final statusLabel = hasDraft ? 'Draft' : status.label;
+    final statusColor = hasDraft ? AgentStatus.draftColor : status.color;
+    final muted = client.isMuted(agent.paneId, machine);
+    final key = (machine, agent.paneId);
+    final selected = _selected.contains(key);
+    // The summary its terminal shows on top, as what matters; under it where it is.
+    final title = switch (pane?.terminalTitle ?? '') { '' => agent.name, final t => t };
+    final place = [
+      if (pane != null) snapshot.placeOf(pane),
+      if (showMachine) client.nameOf(machine),
+    ].where((p) => p.isNotEmpty).join(' · ');
+
+    // What a swipe does, drawn under the row: its colour, with its icon and label at the edge it leaves.
+    Widget behind(Color bg, Color fg, IconData icon, String label, bool start) => ColoredBox(
+          color: bg,
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 24),
+            child: Row(
+              mainAxisAlignment: start ? MainAxisAlignment.start : MainAxisAlignment.end,
+              children: [
+                Icon(icon, color: fg),
+                const SizedBox(width: 12),
+                Text(label, style: theme.textTheme.labelLarge?.copyWith(color: fg)),
               ],
             ),
           ),
+        );
+
+    // Swipe right to mute (the row stays), left to close.
+    return Dismissible(
+      key: ValueKey('$machine/${agent.paneId}'),
+      direction: _selected.isEmpty ? DismissDirection.horizontal : DismissDirection.none,
+      background: behind(scheme.secondaryContainer, scheme.onSecondaryContainer,
+          muted ? Icons.notifications_outlined : Icons.notifications_off_outlined, muted ? 'Unmute' : 'Mute', true),
+      secondaryBackground: behind(scheme.errorContainer, scheme.onErrorContainer, Icons.delete_outline, 'Close', false),
+      confirmDismiss: (direction) async {
+        if (direction == DismissDirection.startToEnd) {
+          client.setMuted(agent.paneId, !muted, machine);
+          return false;
+        }
+        return true;
+      },
+      onDismissed: (_) => _close([key]),
+      child: GestureDetector(
+        onSecondaryTapUp: (d) => _agentMenu(d, machine, agent),
+        child: ListTile(
+        // On a wide screen, the agent whose terminal is beside the list is marked, as an open chat is.
+        tileColor: selected
+            ? scheme.secondaryContainer
+            : _isWide(context) && client.machine == machine && client.selectedPaneId == agent.paneId
+                ? scheme.surfaceContainerHighest
+                : null,
+        leading: GestureDetector(
+          onTap: () => _toggle(key),
+          child: selected
+              ? CircleAvatar(
+                  radius: 20,
+                  backgroundColor: scheme.primary,
+                  child: Icon(Icons.check, color: scheme.onPrimary),
+                )
+              : AgentAvatar(name: agent.name, status: agent.status),
+        ),
+        // Bold while it needs you, like an unread chat.
+        title: Text(title,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: theme.textTheme.titleMedium?.copyWith(fontWeight: needsYou ? FontWeight.bold : null)),
+        subtitle: place.isNotEmpty
+            ? Text(
+                place,
+                style: theme.textTheme.bodySmall?.copyWith(color: scheme.onSurfaceVariant),
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+              )
+            : null,
+        // A chat's column: when it last changed status, its status text below the date, and muted icon if muted.
+        trailing: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          crossAxisAlignment: CrossAxisAlignment.end,
+          children: [
+            if (client.changedAt(agent.paneId, machine) case final at?)
+              Text(
+                AgentsHomeScreen.formatWhen(context, at),
+                style: theme.textTheme.labelSmall?.copyWith(color: scheme.onSurfaceVariant),
+              ),
+            if (statusLabel.isNotEmpty) ...[
+              if (client.changedAt(agent.paneId, machine) != null) const SizedBox(height: 2),
+              Text(
+                statusLabel,
+                style: theme.textTheme.labelSmall?.copyWith(color: statusColor),
+              ),
+            ],
+            if (muted) ...[
+              const SizedBox(height: 2),
+              Icon(Icons.notifications_off_outlined, size: 16, color: scheme.onSurfaceVariant),
+            ],
+          ],
+        ),
+        onTap: () => _selected.isEmpty ? _openAgent(context, machine, agent.paneId) : _toggle(key),
+        onLongPress: () => _toggle(key),
         ),
       ),
     );
   }
 
-  Widget _buildStatusPill(BuildContext context, String status, ColorScheme scheme) {
-    final (label, icon, bg, fg) = switch (status) {
-      'blocked' => (
-          'NEEDS INPUT',
-          Icons.priority_high_rounded,
-          scheme.errorContainer,
-          scheme.onErrorContainer
+  Widget _empty(BuildContext context, IconData icon, String title, String body, Widget? action) {
+    final theme = Theme.of(context);
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.all(32),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(icon, size: 48, color: theme.colorScheme.onSurfaceVariant),
+            const SizedBox(height: 16),
+            Text(title, style: theme.textTheme.titleLarge),
+            const SizedBox(height: 8),
+            Text(body,
+                textAlign: TextAlign.center,
+                style: theme.textTheme.bodyMedium?.copyWith(color: theme.colorScheme.onSurfaceVariant)),
+            if (action != null) ...[const SizedBox(height: 24), action],
+          ],
         ),
-      'working' => (
-          'WORKING',
-          Icons.sync_rounded,
-          scheme.primaryContainer,
-          scheme.onPrimaryContainer
-        ),
-      'done' => (
-          'DONE',
-          Icons.check_circle_outline_rounded,
-          scheme.secondaryContainer,
-          scheme.onSecondaryContainer
-        ),
-      _ => (
-          'IDLE',
-          Icons.pause_circle_outline_rounded,
-          scheme.surfaceContainerHighest,
-          scheme.onSurfaceVariant
-        ),
-    };
-
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-      decoration: BoxDecoration(
-        color: bg,
-        borderRadius: BorderRadius.circular(8),
-      ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Icon(icon, size: 12, color: fg),
-          const SizedBox(width: 4),
-          Text(
-            label,
-            style: Theme.of(context).textTheme.labelSmall?.copyWith(
-                  color: fg,
-                  fontWeight: FontWeight.bold,
-                  letterSpacing: 0.5,
-                ),
-          ),
-        ],
       ),
     );
   }
