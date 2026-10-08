@@ -1,6 +1,14 @@
 /// Newest first. Shown once after an update; add an entry when bumping the version in pubspec.yaml.
 const changelog = <(String, List<String>)>[
   (
+    '1.9.0',
+    [
+      'Alt key navigation shortcuts for hardware keyboards: Alt+Left/Right to switch tabs, Alt+1..9 to jump directly to a tab, Alt+Up/Down to switch workspaces, and Alt+O to jump to agents needing attention.',
+      'Shortcut keys to trigger search (Alt+G), workspaces drawer (Alt+B), machines panel (Alt+M), and toggle message input focus (Alt+I).',
+      'The bridge now binds to 0.0.0.0 by default, authenticating all incoming traffic via token for streamlined Tailscale and local access.',
+    ]
+  ),
+  (
     '1.8.1',
     [
       'herdr-bridge\'s token is now short, like K3MF-9QXA, and can be typed in any case. A token made before still works; to get a short one, delete ~/.config/herdr-bridge/token and restart the bridge.',

@@ -3,8 +3,9 @@ import '../../services/herdr_client.dart';
 
 /// The machines' panel: every saved machine, a green dot or a warning for how it's doing, and a switch. Each connects on its own, so
 /// several are on at once. The machines a bridge reaches sit indented under it, and its switch is theirs
-/// too. Tap one to edit or remove it; the panel's + adds either kind ([showMachineDialog]). With [only], just those,
-/// unindented, to sit in the search results.
+/// too. Tap one to edit or remove it; the panel's + adds either kind ([showMachineDialog]). Its ⋮ moves it up or
+/// down, and a long-press drags it; the order is the app's own. With [only], just those, unindented, to sit in the
+/// search results.
 class MachineList extends StatelessWidget {
   final HerdrClientService client;
   final List<String>? only;
@@ -23,37 +24,113 @@ class MachineList extends StatelessWidget {
         ),
       );
     }
-    return ListView(
-      shrinkWrap: only != null,
-      physics: only != null ? const NeverScrollableScrollPhysics() : null,
-      padding: only != null ? EdgeInsets.zero : const EdgeInsets.only(bottom: 16),
-      children: [
-        for (final m in only ?? client.machines)
-          GestureDetector(
-            onSecondaryTapUp: (_) => showMachineDialog(context, client, m),
-            child: ListTile(
-              contentPadding:
-                  EdgeInsets.only(left: only != null || HerdrClientService.parentOf(m) == null ? 16 : 40, right: 16),
-              onTap: () => showMachineDialog(context, client, m),
-              // A green dot while it shows its agents, a warning when it can't (the why is in its dialog).
-              leading: SizedBox(
-                width: 24,
-                child: client.errorOf(m) != null
-                    ? Icon(Icons.warning_amber_rounded, color: scheme.error)
-                    : client.isConnected(m)
-                        ? const Center(child: CircleAvatar(radius: 5, backgroundColor: Colors.green))
-                        : null,
-              ),
-              minLeadingWidth: 24,
-              title: Text(client.nameOf(m), maxLines: 1, overflow: TextOverflow.ellipsis),
-              subtitle: HerdrClientService.parentOf(m) == null && client.nameOf(m) != m
-                  ? Text(m, maxLines: 1, overflow: TextOverflow.ellipsis)
-                  : null,
-              trailing: Switch(
+    // [m]'s row; its ⋮ moves it among its siblings, and [drag] is its index to long-press and drag it by.
+    Widget row(String m, {int? drag}) {
+      final siblings = client.machines.where((x) => HerdrClientService.parentOf(x) == HerdrClientService.parentOf(m));
+      final k = siblings.toList().indexOf(m);
+      Future<void> menu(Offset at) async {
+        final picked = await showMenu<String>(
+          context: context,
+          position: RelativeRect.fromLTRB(at.dx, at.dy, at.dx, at.dy),
+          items: [
+            if (k > 0)
+              const PopupMenuItem(
+                  value: 'up', child: ListTile(leading: Icon(Icons.arrow_upward), title: Text('Move up'))),
+            if (k + 1 < siblings.length)
+              const PopupMenuItem(
+                  value: 'down', child: ListTile(leading: Icon(Icons.arrow_downward), title: Text('Move down'))),
+            const PopupMenuItem(
+                value: 'edit', child: ListTile(leading: Icon(Icons.edit_outlined), title: Text('Edit'))),
+          ],
+        );
+        if (!context.mounted) return;
+        switch (picked) {
+          case 'up':
+            client.moveMachine(m, k - 1);
+          case 'down':
+            client.moveMachine(m, k + 1);
+          case 'edit':
+            showMachineDialog(context, client, m);
+        }
+      }
+
+      final tile = GestureDetector(
+        key: ValueKey(m),
+        onSecondaryTapUp: (d) => menu(d.globalPosition),
+        child: ListTile(
+          contentPadding:
+              EdgeInsets.only(left: only != null || HerdrClientService.parentOf(m) == null ? 16 : 40, right: 4),
+          onTap: () => showMachineDialog(context, client, m),
+          // A green dot while it shows its agents, a warning when it can't (the why is in its dialog).
+          leading: SizedBox(
+            width: 24,
+            child: client.errorOf(m) != null
+                ? Icon(Icons.warning_amber_rounded, color: scheme.error)
+                : client.isConnected(m)
+                    ? const Center(child: CircleAvatar(radius: 5, backgroundColor: Colors.green))
+                    : null,
+          ),
+          minLeadingWidth: 24,
+          title: Text(client.nameOf(m), maxLines: 1, overflow: TextOverflow.ellipsis),
+          subtitle: HerdrClientService.parentOf(m) == null && client.nameOf(m) != m
+              ? Text(m, maxLines: 1, overflow: TextOverflow.ellipsis)
+              : null,
+          trailing: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Switch(
                 value: !client.isOff(m),
                 onChanged: (on) => on ? client.connect(m) : client.disconnect(m),
               ),
-            ),
+              Builder(
+                builder: (context) => IconButton(
+                  tooltip: 'More',
+                  icon: const Icon(Icons.more_vert),
+                  onPressed: () => menu((context.findRenderObject() as RenderBox).localToGlobal(Offset.zero)),
+                ),
+              ),
+            ],
+          ),
+        ),
+      );
+      return drag == null ? tile : ReorderableDelayedDragStartListener(key: tile.key, index: drag, child: tile);
+    }
+
+    if (only != null) {
+      return ListView(
+        shrinkWrap: true,
+        physics: const NeverScrollableScrollPhysics(),
+        padding: EdgeInsets.zero,
+        children: [for (final m in only!) row(m)],
+      );
+    }
+    // Long-press and drag to reorder: a bridge among the bridges, with the machines it reaches, and those
+    // among themselves, under it.
+    void reorder(List<String> siblings, int from, int to) => client.moveMachine(siblings[from], to > from ? to - 1 : to);
+    final bridges = client.machines.where((m) => HerdrClientService.parentOf(m) == null).toList();
+    return ReorderableListView(
+      padding: const EdgeInsets.only(bottom: 16),
+      buildDefaultDragHandles: false,
+      onReorder: (from, to) => reorder(bridges, from, to),
+      children: [
+        for (final (i, b) in bridges.indexed)
+          Column(
+            key: ValueKey(b),
+            children: [
+              row(b, drag: bridges.length < 2 ? null : i),
+              Builder(builder: (context) {
+                final reached = client.machines.where((m) => HerdrClientService.parentOf(m) == b).toList();
+                return ReorderableListView(
+                  shrinkWrap: true,
+                  physics: const NeverScrollableScrollPhysics(),
+                  buildDefaultDragHandles: false,
+                  onReorder: (from, to) => reorder(reached, from, to),
+                  children: [
+                    for (final (j, m) in reached.indexed) row(m, drag: reached.length < 2 ? null : j),
+                  ],
+                );
+              }),
+            ],
           ),
       ],
     );

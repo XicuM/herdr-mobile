@@ -669,8 +669,150 @@ class HerdrClientService extends ChangeNotifier {
     if (tab != null) selectTab(tab);
   }
 
+  /// Selects the previous workspace on the active machine.
+  void previousWorkspace() {
+    final workspaces = snapshot?.workspaces ?? [];
+    if (workspaces.isEmpty) return;
+    final currentWsId = selectedPane?.workspaceId;
+    final idx = workspaces.indexWhere((w) => w.id == currentWsId);
+    if (idx > 0) {
+      selectWorkspace(workspaces[idx - 1].id);
+    }
+  }
+
+  /// Selects the next workspace on the active machine.
+  void nextWorkspace() {
+    final workspaces = snapshot?.workspaces ?? [];
+    if (workspaces.isEmpty) return;
+    final currentWsId = selectedPane?.workspaceId;
+    final idx = workspaces.indexWhere((w) => w.id == currentWsId);
+    if (idx >= 0 && idx < workspaces.length - 1) {
+      selectWorkspace(workspaces[idx + 1].id);
+    } else if (idx == -1) {
+      selectWorkspace(workspaces.first.id);
+    }
+  }
+
+  /// Selects the previous tab in the active workspace.
+  void previousTab() {
+    final pane = selectedPane;
+    final s = snapshot;
+    if (pane == null || s == null) return;
+    final tabs = s.tabs.where((t) => t.workspaceId == pane.workspaceId).toList();
+    final idx = tabs.indexWhere((t) => t.id == pane.tabId);
+    if (idx > 0) selectTab(tabs[idx - 1].id);
+  }
+
+  /// Selects the next tab in the active workspace.
+  void nextTab() {
+    final pane = selectedPane;
+    final s = snapshot;
+    if (pane == null || s == null) return;
+    final tabs = s.tabs.where((t) => t.workspaceId == pane.workspaceId).toList();
+    final idx = tabs.indexWhere((t) => t.id == pane.tabId);
+    if (idx >= 0 && idx < tabs.length - 1) selectTab(tabs[idx + 1].id);
+  }
+
+  /// Selects tab at [index] (0-based) in the active workspace.
+  void selectTabAt(int index) {
+    final pane = selectedPane;
+    final s = snapshot;
+    if (pane == null || s == null) return;
+    final tabs = s.tabs.where((t) => t.workspaceId == pane.workspaceId).toList();
+    if (index >= 0 && index < tabs.length) selectTab(tabs[index].id);
+  }
+
+  /// Moves the active tab one position to the left.
+  void moveTabPrevious() {
+    final pane = selectedPane;
+    final s = snapshot;
+    if (pane == null || s == null) return;
+    final tabs = s.tabs.where((t) => t.workspaceId == pane.workspaceId).toList();
+    final idx = tabs.indexWhere((t) => t.id == pane.tabId);
+    if (idx > 0) moveTab(tabs[idx].id, tabs[idx - 1].id);
+  }
+
+  /// Moves the active tab one position to the right.
+  void moveTabNext() {
+    final pane = selectedPane;
+    final s = snapshot;
+    if (pane == null || s == null) return;
+    final tabs = s.tabs.where((t) => t.workspaceId == pane.workspaceId).toList();
+    final idx = tabs.indexWhere((t) => t.id == pane.tabId);
+    if (idx >= 0 && idx < tabs.length - 1) moveTab(tabs[idx].id, tabs[idx + 1].id);
+  }
+
+  /// The agent (machine, pane) [step] places from the one on screen, wrapping around, in the drawer's order:
+  /// the connected machines in theirs, then herdr's workspaces, tabs and panes. A stable order, unlike the
+  /// agents' list, so swiping back returns to where it came from. Null with nowhere else to go.
+  (String, String)? agentAt(int step) {
+    final all = [
+      for (final m in _machines)
+        if (!_off.contains(m) && isConnected(m) && snapshotOf(m) != null)
+          for (final w in snapshotOf(m)!.workspaces)
+            for (final t in snapshotOf(m)!.tabs.where((t) => t.workspaceId == w.id))
+              for (final p in snapshotOf(m)!.panes.where((p) => p.tabId == t.id))
+                if (snapshotOf(m)!.agents.any((a) => a.paneId == p.id)) (m, p.id)
+    ];
+    final i = all.indexOf((machine, selectedPaneId ?? ''));
+    if (all.isEmpty || (i >= 0 && all.length == 1)) return null;
+    // Off the list (a plain shell), the first step forward is the first agent, and back the last.
+    return all[(i < 0 ? (step > 0 ? 0 : -1) : i + step) % all.length];
+  }
+
+  /// Shows the agent [step] places from the one on screen ([agentAt]).
+  void stepAgent(int step) {
+    final (m, pane) = agentAt(step) ?? (machine, selectedPaneId ?? '');
+    if (m != machine) switchMachine(m);
+    if (pane.isNotEmpty) selectPane(pane);
+  }
+
+  /// Cycles to the next agent needing attention (in 'blocked' / Needs you state, or 'done' if none are blocked).
+  void jumpToAttention() {
+    final on = _machines.where((m) => !_off.contains(m) && snapshotOf(m) != null).toList();
+    final urgent = <(String, String)>[];
+    for (final m in on) {
+      final s = snapshotOf(m);
+      if (s == null) continue;
+      for (final a in s.agents) {
+        if (a.status == 'blocked') urgent.add((m, a.paneId));
+      }
+    }
+    if (urgent.isEmpty) {
+      for (final m in on) {
+        final s = snapshotOf(m);
+        if (s == null) continue;
+        for (final a in s.agents) {
+          if (a.status == 'done') urgent.add((m, a.paneId));
+        }
+      }
+    }
+    if (urgent.isNotEmpty) {
+      final currentKey = (machine, selectedPaneId ?? '');
+      final currentIdx = urgent.indexWhere((x) => x.$1 == currentKey.$1 && x.$2 == currentKey.$2);
+      final next = urgent[(currentIdx + 1) % urgent.length];
+      if (machine != next.$1) switchMachine(next.$1);
+      selectPane(next.$2);
+    }
+  }
+
   /// [m] and, for a bridge, the machines it reaches.
   List<String> _withChildren(String m) => [m, ..._machines.where((x) => parentOf(x) == m)];
+
+  /// Puts [m] at [to] among its siblings: a bridge among the bridges, taking the machines it reaches along,
+  /// or one a bridge reaches among that bridge's others, which stay right after it. The order is the app's own.
+  void moveMachine(String m, int to) {
+    final parent = parentOf(m);
+    final siblings = _machines.where((x) => parentOf(x) == parent).toList()
+      ..remove(m)
+      ..insert(to, m);
+    final rest = _machines.where((x) => parentOf(x) != parent).toList();
+    _machines = parent == null
+        ? [for (final b in siblings) ..._withChildren(b)]
+        : (rest..insertAll(rest.indexOf(parent) + 1, siblings));
+    _saveMachines();
+    notifyListeners();
+  }
 
   /// Disconnects [m] (the active machine by default), and those it reaches, and keeps them off until
   /// [connect]ed.
@@ -804,7 +946,11 @@ class HerdrClientService extends ChangeNotifier {
       if (blocked && !_alertBlocked) continue;
       if (finished && !_alertFinished) continue;
       final agentName = (agent?.name.isNotEmpty == true ? agent?.name : wasAgent?.name) ?? '';
-      final task = pane.terminalTitle.isNotEmpty ? pane.terminalTitle : agentName.isNotEmpty ? agentName : pane.id;
+      final task = pane.terminalTitle.isNotEmpty
+          ? pane.terminalTitle
+          : agentName.isNotEmpty
+              ? agentName
+              : pane.id;
       final workspace = now.workspaces.where((w) => w.id == pane.workspaceId).firstOrNull;
       final title = '${blocked ? 'Needs you' : 'Finished'}: $task';
       final text = [if (workspace != null) workspace.displayName, nameOf(m)].join(' · ');

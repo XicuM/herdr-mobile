@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../../changelog.dart';
 import '../../models/agent_status.dart';
@@ -54,7 +55,7 @@ class _AgentsHomeScreenState extends State<AgentsHomeScreen> {
   final _searchFocus = FocusNode();
 
   /// The terminal's own screen, while it's pushed over the agents (on a narrow screen).
-  Route<void>? _terminalRoute;
+  Route<dynamic>? _terminalRoute;
   bool? _wasWide;
 
   /// Wide enough for the terminal beside the agents, as Material's list-detail layout: a tablet in
@@ -66,6 +67,7 @@ class _AgentsHomeScreenState extends State<AgentsHomeScreen> {
 
   @override
   void dispose() {
+    HardwareKeyboard.instance.removeHandler(_onHardwareKey);
     _search.dispose();
     _searchFocus.dispose();
     super.dispose();
@@ -82,7 +84,116 @@ class _AgentsHomeScreenState extends State<AgentsHomeScreen> {
   @override
   void initState() {
     super.initState();
+    HardwareKeyboard.instance.addHandler(_onHardwareKey);
     WidgetsBinding.instance.addPostFrameCallback((_) => _showIntroOrChangelog());
+  }
+
+  bool _onHardwareKey(KeyEvent event) {
+    if (!mounted || ModalRoute.of(context)?.isCurrent != true) return false;
+    final isAlt = HardwareKeyboard.instance.isAltPressed;
+    final isShift = HardwareKeyboard.instance.isShiftPressed;
+    final isCtrl = HardwareKeyboard.instance.isControlPressed;
+    if (!isAlt || isCtrl) return false;
+
+    final key = event.logicalKey;
+    if (key == LogicalKeyboardKey.keyB) {
+      if (event is! KeyUpEvent) {
+        if (_scaffold.currentState?.isDrawerOpen == true) {
+          _scaffold.currentState?.closeDrawer();
+        } else {
+          _scaffold.currentState?.openDrawer();
+        }
+      }
+      return true;
+    }
+    if (key == LogicalKeyboardKey.keyM) {
+      if (event is! KeyUpEvent) {
+        if (_scaffold.currentState?.isEndDrawerOpen == true) {
+          _scaffold.currentState?.closeEndDrawer();
+        } else {
+          _scaffold.currentState?.openEndDrawer();
+        }
+      }
+      return true;
+    }
+    if (key == LogicalKeyboardKey.keyG) {
+      if (event is! KeyUpEvent) {
+        _searchFocus.requestFocus();
+        setState(() => _query = _query ?? '');
+      }
+      return true;
+    }
+    if (key == LogicalKeyboardKey.keyO) {
+      if (event is! KeyUpEvent) {
+        client.jumpToAttention();
+        if (client.selectedPaneId != null && !_isWide(context)) {
+          _openTerminal(context);
+        }
+      }
+      return true;
+    }
+    if (key == LogicalKeyboardKey.keyH) {
+      if (event is! KeyUpEvent) {
+        if (_query != null) _closeSearch();
+        if (_scaffold.currentState?.isDrawerOpen == true) _scaffold.currentState?.closeDrawer();
+        if (_scaffold.currentState?.isEndDrawerOpen == true) _scaffold.currentState?.closeEndDrawer();
+      }
+      return true;
+    }
+    if (key == LogicalKeyboardKey.arrowUp) {
+      if (event is! KeyUpEvent) client.previousWorkspace();
+      return true;
+    }
+    if (key == LogicalKeyboardKey.arrowDown) {
+      if (event is! KeyUpEvent) client.nextWorkspace();
+      return true;
+    }
+    if (key == LogicalKeyboardKey.arrowLeft) {
+      if (event is! KeyUpEvent) {
+        if (isShift) {
+          client.moveTabPrevious();
+        } else {
+          client.previousTab();
+        }
+      }
+      return true;
+    }
+    if (key == LogicalKeyboardKey.arrowRight) {
+      if (event is! KeyUpEvent) {
+        if (isShift) {
+          client.moveTabNext();
+        } else {
+          client.nextTab();
+        }
+      }
+      return true;
+    }
+    if (key == LogicalKeyboardKey.keyT) {
+      if (event is! KeyUpEvent) {
+        final wsId = client.selectedPane?.workspaceId ?? client.snapshot?.workspaces.firstOrNull?.id;
+        if (wsId != null) client.createTab(wsId);
+      }
+      return true;
+    }
+
+    final digit = switch (key) {
+      LogicalKeyboardKey.digit1 || LogicalKeyboardKey.numpad1 => 1,
+      LogicalKeyboardKey.digit2 || LogicalKeyboardKey.numpad2 => 2,
+      LogicalKeyboardKey.digit3 || LogicalKeyboardKey.numpad3 => 3,
+      LogicalKeyboardKey.digit4 || LogicalKeyboardKey.numpad4 => 4,
+      LogicalKeyboardKey.digit5 || LogicalKeyboardKey.numpad5 => 5,
+      LogicalKeyboardKey.digit6 || LogicalKeyboardKey.numpad6 => 6,
+      LogicalKeyboardKey.digit7 || LogicalKeyboardKey.numpad7 => 7,
+      LogicalKeyboardKey.digit8 || LogicalKeyboardKey.numpad8 => 8,
+      LogicalKeyboardKey.digit9 || LogicalKeyboardKey.numpad9 => 9,
+      _ => null,
+    };
+    if (digit != null && !isShift) {
+      if (event is! KeyUpEvent) client.selectTabAt(digit - 1);
+      return true;
+    }
+
+    return false;
   }
 
   /// Welcome on first launch; afterwards, the changelog entries newer than the last one seen.
@@ -238,9 +349,27 @@ class _AgentsHomeScreenState extends State<AgentsHomeScreen> {
       return;
     }
     final route = _terminalRoute = MaterialPageRoute(builder: (_) => TerminalScreen(client: client));
-    await Navigator.push(context, route);
+    final action = await Navigator.push(context, route);
     if (_terminalRoute == route) _terminalRoute = null;
-    if (mounted) setState(() {});
+    if (mounted) {
+      setState(() {});
+      if (action == 'search') {
+        _searchFocus.requestFocus();
+        setState(() => _query = _query ?? '');
+      } else if (action == 'drawer') {
+        if (_scaffold.currentState?.isDrawerOpen == true) {
+          _scaffold.currentState?.closeDrawer();
+        } else {
+          _scaffold.currentState?.openDrawer();
+        }
+      } else if (action == 'machines') {
+        if (_scaffold.currentState?.isEndDrawerOpen == true) {
+          _scaffold.currentState?.closeEndDrawer();
+        } else {
+          _scaffold.currentState?.openEndDrawer();
+        }
+      }
+    }
   }
 
   /// Turning wide (rotated, or the window resized), the terminal's own screen moves beside the agents;
@@ -570,7 +699,28 @@ class _AgentsHomeScreenState extends State<AgentsHomeScreen> {
                             // the agents' top bar as if the list had scrolled under it.
                             ? NotificationListener<Notification>(
                                 onNotification: (n) => n is ScrollNotification || n is ScrollMetricsNotification,
-                                child: TerminalScreen(client: client, embedded: true),
+                                child: TerminalScreen(
+                                  client: client,
+                                  embedded: true,
+                                  onOpenDrawer: () {
+                                    if (_scaffold.currentState?.isDrawerOpen == true) {
+                                      _scaffold.currentState?.closeDrawer();
+                                    } else {
+                                      _scaffold.currentState?.openDrawer();
+                                    }
+                                  },
+                                  onOpenMachines: () {
+                                    if (_scaffold.currentState?.isEndDrawerOpen == true) {
+                                      _scaffold.currentState?.closeEndDrawer();
+                                    } else {
+                                      _scaffold.currentState?.openEndDrawer();
+                                    }
+                                  },
+                                  onOpenSearch: () {
+                                    _searchFocus.requestFocus();
+                                    setState(() => _query = _query ?? '');
+                                  },
+                                ),
                               )
                             : _empty(context, Icons.terminal, 'No agent open', 'Pick one to see its terminal.', null),
                       ),

@@ -5,7 +5,8 @@ import '../../services/herdr_client.dart';
 
 /// The home screen's drawer, modelled on Herdr's sidebar: each connected machine's workspaces in herdr's order,
 /// with linked worktrees nested, under its name and a + for a new one. Tap one to open its terminal ([open]);
-/// long-press it for its actions; drag its handle to reorder it (with its worktrees), which the desktop follows.
+/// its ⋮ (or a right-click) has its actions and moves it up or down; long-press it and drag to reorder it (with its
+/// worktrees). herdr keeps the order, so the desktop follows.
 class WorkspaceList extends StatelessWidget {
   final HerdrClientService client;
   final VoidCallback open;
@@ -25,10 +26,13 @@ class WorkspaceList extends StatelessWidget {
       action();
     }
 
-    Widget row(String m, WorkspaceModel ws, {double indent = 0, Widget? handle}) => GestureDetector(
+    // [up] and [down] move it, when it can go that way; [drag] is its index to long-press and drag it by.
+    Widget row(String m, WorkspaceModel ws, {double indent = 0, VoidCallback? up, VoidCallback? down, int? drag}) {
+      void menu(Offset p) =>
+          at(m, () => showWorkspaceContextMenu(context, client, ws, p, onShow: open, onUp: up, onDown: down));
+      final tile = GestureDetector(
           key: ValueKey('$m/${ws.id}'),
-          onSecondaryTapUp: (d) =>
-              at(m, () => showWorkspaceContextMenu(context, client, ws, d.globalPosition, onShow: open)),
+          onSecondaryTapUp: (d) => menu(d.globalPosition),
           child: ListTile(
             key: ValueKey('$m/${ws.id}-tile'),
             contentPadding: EdgeInsets.only(left: 16 + indent, right: 8),
@@ -36,14 +40,21 @@ class WorkspaceList extends StatelessWidget {
             minLeadingWidth: 10,
             title: Text(ws.displayName, maxLines: 1, overflow: TextOverflow.ellipsis),
             subtitle: ws.isLinkedWorktree || ws.gitBranch == null ? null : Text(ws.gitBranch!, maxLines: 1),
-            trailing: handle,
+            trailing: Builder(
+              builder: (context) => IconButton(
+                tooltip: 'More',
+                icon: const Icon(Icons.more_vert),
+                onPressed: () => menu((context.findRenderObject() as RenderBox).localToGlobal(Offset.zero)),
+              ),
+            ),
             onTap: () => at(m, () {
               client.selectWorkspace(ws.id);
               open();
             }),
-            onLongPress: () => at(m, () => showWorkspaceActions(context, client, ws, onShow: open)),
           ),
         );
+      return drag == null ? tile : ReorderableDelayedDragStartListener(key: tile.key, index: drag, child: tile);
+    }
 
     return ListView(
       padding: const EdgeInsets.only(bottom: 16),
@@ -80,7 +91,8 @@ class WorkspaceList extends StatelessWidget {
   }
 
   /// One machine's workspaces, one block per top-level workspace so it is dragged with its worktrees.
-  Widget _machine(String m, Widget Function(String, WorkspaceModel, {double indent, Widget? handle}) row,
+  Widget _machine(String m,
+      Widget Function(String, WorkspaceModel, {double indent, VoidCallback? up, VoidCallback? down, int? drag}) row,
       void Function(String, VoidCallback) at) {
     final workspaces = client.snapshotOf(m)!.workspaces;
     final parentKeys = {
@@ -96,50 +108,56 @@ class WorkspaceList extends StatelessWidget {
           ...workspaces.where((c) => c.isLinkedWorktree && c.repoKey == w.repoKey),
       ]);
     }
+    // Indices as ReorderableListView gives them: [to] counts in the order before the move.
+    void moveBlock(int from, int to) {
+      if (to > from) to--;
+      if (to == from) return;
+      final rest = [...blocks];
+      final moved = rest.removeAt(from);
+      at(m, () => client.moveWorkspaces([for (final w in moved) w.id], to < rest.length ? rest[to].first.id : null));
+    }
+
     return ReorderableListView(
       shrinkWrap: true,
       physics: const NeverScrollableScrollPhysics(),
       buildDefaultDragHandles: false,
-      onReorder: (from, to) {
-        if (to > from) to--;
-        if (to == from) return;
-        final moved = blocks.removeAt(from);
-        at(
-            m,
-            () =>
-                client.moveWorkspaces([for (final w in moved) w.id], to < blocks.length ? blocks[to].first.id : null));
-      },
+      onReorder: moveBlock,
       children: [
         for (final (i, block) in blocks.indexed)
           Column(
             key: ValueKey('$m/${block.first.id}'),
             children: [
               row(m, block.first,
-                  handle: blocks.length < 2
-                      ? null
-                      : ReorderableDragStartListener(index: i, child: const Icon(Icons.drag_handle))),
+                  up: i > 0 ? () => moveBlock(i, i - 1) : null,
+                  down: i + 1 < blocks.length ? () => moveBlock(i, i + 2) : null,
+                  drag: blocks.length < 2 ? null : i),
               // The worktrees reorder among themselves, staying under their workspace.
-              ReorderableListView(
-                shrinkWrap: true,
-                physics: const NeverScrollableScrollPhysics(),
-                buildDefaultDragHandles: false,
-                onReorder: (from, to) {
-                  final trees = block.sublist(1);
+              Builder(builder: (context) {
+                final trees = block.sublist(1);
+                void moveTree(int from, int to) {
                   if (to > from) to--;
                   if (to == from) return;
-                  final moved = trees.removeAt(from);
+                  final rest = [...trees];
+                  final moved = rest.removeAt(from);
                   final after = i + 1 < blocks.length ? blocks[i + 1].first.id : null;
-                  at(m, () => client.moveWorkspaces([moved.id], to < trees.length ? trees[to].id : after));
-                },
-                children: [
-                  for (final (j, ws) in block.skip(1).indexed)
-                    row(m, ws,
-                        indent: 24,
-                        handle: block.length < 3
-                            ? null
-                            : ReorderableDragStartListener(index: j, child: const Icon(Icons.drag_handle))),
-                ],
-              ),
+                  at(m, () => client.moveWorkspaces([moved.id], to < rest.length ? rest[to].id : after));
+                }
+
+                return ReorderableListView(
+                  shrinkWrap: true,
+                  physics: const NeverScrollableScrollPhysics(),
+                  buildDefaultDragHandles: false,
+                  onReorder: moveTree,
+                  children: [
+                    for (final (j, ws) in trees.indexed)
+                      row(m, ws,
+                          indent: 24,
+                          up: j > 0 ? () => moveTree(j, j - 1) : null,
+                          down: j + 1 < trees.length ? () => moveTree(j, j + 2) : null,
+                          drag: trees.length < 2 ? null : j),
+                  ],
+                );
+              }),
             ],
           ),
       ],
@@ -147,7 +165,8 @@ class WorkspaceList extends StatelessWidget {
   }
 }
  
-/// Desktop context menu on right-click for a workspace: Rename, New worktree, Open worktree, Delete.
+/// A workspace's menu, from a right-click or the drawer's ⋮: Move up and down (given [onUp], [onDown]), Rename,
+/// New worktree, Open worktree, Delete.
 Future<void> showWorkspaceContextMenu(
   BuildContext context,
   HerdrClientService client,
@@ -155,12 +174,19 @@ Future<void> showWorkspaceContextMenu(
   Offset at, {
   VoidCallback? onShow,
   VoidCallback? onDelete,
+  VoidCallback? onUp,
+  VoidCallback? onDown,
 }) async {
   final scheme = Theme.of(context).colorScheme;
   final picked = await showMenu<String>(
     context: context,
     position: RelativeRect.fromLTRB(at.dx, at.dy, at.dx, at.dy),
     items: [
+      if (onUp != null)
+        const PopupMenuItem(value: 'up', child: ListTile(leading: Icon(Icons.arrow_upward), title: Text('Move up'))),
+      if (onDown != null)
+        const PopupMenuItem(
+            value: 'down', child: ListTile(leading: Icon(Icons.arrow_downward), title: Text('Move down'))),
       const PopupMenuItem(
         value: 'rename',
         child: ListTile(leading: Icon(Icons.edit_outlined), title: Text('Rename')),
@@ -184,6 +210,10 @@ Future<void> showWorkspaceContextMenu(
   );
   if (picked == null || !context.mounted) return;
   switch (picked) {
+    case 'up':
+      onUp?.call();
+    case 'down':
+      onDown?.call();
     case 'rename':
       final name = await prompt(context, 'Rename workspace', 'Workspace name',
           initial: ws.label.isNotEmpty ? ws.label : ws.displayName);

@@ -205,7 +205,47 @@ void main() {
       expect(client.selectedPane?.tabId, 'w1:t11');
     });
 
-    testWidgets('Dragging a tab turns the new-tab button into a bin', (tester) async {
+    testWidgets('Two fingers swiped sideways show the next agent, peeking at it first', (tester) async {
+      SharedPreferences.setMockInitialValues({'last_seen_changelog': changelog.first.$1});
+      const m = '100.1.2.3:7788';
+      final client = HerdrClientService()
+        ..setMachines([m], [])
+        ..switchMachine(m)
+        ..setSnapshotForTesting(twoWorkspaces())
+        ..setConnectedForTesting(m, true)
+        ..selectPane('w1:p1');
+      await tester.pumpWidget(MaterialApp(home: TerminalScreen(client: client)));
+      final at = tester.getCenter(find.byType(TerminalView));
+
+      // Herdr's order: coder (w1:p1), helper (w1:p2), ui (w2:p4), wrapping around.
+      Future<void> swipe(double dx, {Future<void> Function()? before}) async {
+        final a = await tester.startGesture(at - const Offset(0, 40));
+        final b = await tester.startGesture(at + const Offset(0, 40));
+        for (var i = 0; i < 10; i++) {
+          await a.moveBy(Offset(dx / 10, 0));
+          await b.moveBy(Offset(dx / 10, 0));
+          await tester.pump();
+        }
+        await before?.call();
+        await a.up();
+        await b.up();
+        await tester.pump(const Duration(milliseconds: 200));
+      }
+
+      // Short of switching, it peeks at where it leads, and springs back on release.
+      await swipe(-60, before: () async => expect(find.textContaining('helper'), findsOneWidget));
+      expect(client.selectedPaneId, 'w1:p1');
+      expect(find.textContaining('helper'), findsNothing);
+
+      await swipe(-120);
+      expect(client.selectedPaneId, 'w1:p2');
+      await swipe(120);
+      expect(client.selectedPaneId, 'w1:p1');
+      await swipe(120);
+      expect(client.selectedPaneId, 'w2:p4');
+    });
+
+    testWidgets("The current tab's ⋮ moves or closes it", (tester) async {
       SharedPreferences.setMockInitialValues({'last_seen_changelog': changelog.first.$1});
       final client = HerdrClientService()
         ..setMachines(['100.1.2.3:7788'], [])
@@ -219,20 +259,15 @@ void main() {
         await tester.pump(const Duration(seconds: 1));
       }
 
-      final tab = find.descendant(of: find.byType(AppBar), matching: find.text('db'));
-
-      // While dragged, the new-tab button turns into a bin and the dragged tab slot maintains 168dp width.
-      expect(find.byTooltip('New tab'), findsOneWidget);
-      final drag = await tester.startGesture(tester.getCenter(tab));
-      await tester.pump(const Duration(seconds: 1));
-      await drag.moveBy(const Offset(-40, 0));
-      await tester.pump();
-      expect(find.byTooltip('Close tab'), findsOneWidget);
+      // Only the current (first) tab has one, and its menu can't move it further left.
+      final dots = find.descendant(of: find.byType(LongPressDraggable<String>), matching: find.byIcon(Icons.more_vert));
+      expect(dots, findsOneWidget);
       expect(tester.getSize(find.byType(LongPressDraggable<String>).first).width, 168);
-      await drag.moveBy(const Offset(40, 0));
-      await drag.up();
+      await tester.tap(dots);
       await settle();
-      expect(find.byTooltip('New tab'), findsOneWidget);
+      expect(find.text('Move left'), findsNothing);
+      expect(find.text('Move right'), findsOneWidget);
+      expect(find.text('Close tab'), findsOneWidget);
     });
 
     testWidgets('The top bar shows the workspace and its tabs; tapping a tab shows it', (tester) async {
@@ -312,52 +347,7 @@ void main() {
       expect(WorkspaceModel.fromJson({'git_branch': 'main'}).gitBranch, 'main');
     });
 
-    testWidgets('Swiping the message bar slides to the next agent in herdr\'s order', (tester) async {
-      SharedPreferences.setMockInitialValues({'last_seen_changelog': changelog.first.$1});
-      final client = HerdrClientService()
-        ..setMachines(['100.1.2.3:7788'], [])
-        ..switchMachine('100.1.2.3:7788')
-        ..setSnapshotForTesting(twoWorkspaces())
-        ..selectPane('w1:p3'); // tab "db", the second of backend's two, with no agent
-      await tester.pumpWidget(MaterialApp(home: TerminalScreen(client: client)));
-      Future<void> swipe(Finder on, double dx) async {
-        await tester.timedDrag(on, Offset(dx, 0), const Duration(milliseconds: 200));
-        for (var i = 0; i < 10; i++) {
-          await tester.pump(const Duration(milliseconds: 50));
-        }
-      }
-
-      final bottom = find.byType(TextField);
-      // Agents go in herdr's order (coder, helper, ui), not the snapshot's; a shell is left behind.
-      await swipe(bottom, -300); // left: on to the next workspace's agent
-      expect(client.selectedPaneId, 'w2:p4');
-      await swipe(bottom, -300); // left again: past the last agent, round to the first
-      expect(client.selectedPaneId, 'w1:p1');
-      await swipe(bottom, 300); // and back round
-      expect(client.selectedPaneId, 'w2:p4');
-      await swipe(bottom, 300);
-      expect(client.selectedPaneId, 'w1:p2');
-    });
-
-    testWidgets('Swiping past a machine\'s last agent goes on to the next machine\'s', (tester) async {
-      SharedPreferences.setMockInitialValues({'last_seen_changelog': changelog.first.$1});
-      const a = '10.0.0.1:7788', b = '10.0.0.2:7788';
-      final client = HerdrClientService()
-        ..setMachines([a, b], [])
-        ..setSnapshotForTesting(twoWorkspaces(), b)
-        ..switchMachine(a)
-        ..setSnapshotForTesting(twoWorkspaces())
-        ..selectPane('w2:p4'); // a's last agent
-      await tester.pumpWidget(MaterialApp(home: TerminalScreen(client: client)));
-      await tester.timedDrag(find.byType(TextField), const Offset(-300, 0), const Duration(milliseconds: 200));
-      for (var i = 0; i < 10; i++) {
-        await tester.pump(const Duration(milliseconds: 50));
-      }
-      expect(client.machine, b);
-      expect(client.selectedPaneId, 'w1:p1');
-    });
-
-    testWidgets('The ☰ drawer lists the workspaces; tap one for its terminal, long-press for its actions',
+    testWidgets("The ☰ drawer lists the workspaces; tap one for its terminal, its ⋮ for its actions",
         (tester) async {
       SharedPreferences.setMockInitialValues({'last_seen_changelog': changelog.first.$1});
       final client = HerdrClientService()
@@ -381,11 +371,13 @@ void main() {
       expect(find.byTooltip('New workspace on 100.1.2.3:7788'), findsOneWidget);
       expect(find.byType(FloatingActionButton), findsNothing);
 
-      await tester.longPress(find.descendant(of: find.byType(WorkspaceList), matching: find.text('backend')));
+      await tester.tap(find.descendant(of: find.byType(WorkspaceList), matching: find.byTooltip('More')).first);
       await settle();
+      expect(find.text('Move up'), findsNothing); // it's the first
+      expect(find.text('Move down'), findsOneWidget);
       expect(find.text('Rename'), findsOneWidget);
       expect(find.text('New worktree'), findsOneWidget);
-      await tester.tapAt(const Offset(10, 10)); // dismiss the sheet
+      await tester.tapAt(const Offset(10, 10)); // dismiss the menu
       await settle();
 
       await tester.tap(find.descendant(of: find.byType(WorkspaceList), matching: find.text('frontend')));
@@ -602,6 +594,16 @@ void main() {
       await tester.tap(find.byTooltip('Add machine'));
       await settle();
       expect(find.text('Add & connect'), findsOneWidget);
+    });
+
+    test('Moving a machine keeps those a bridge reaches under it', () {
+      SharedPreferences.setMockInitialValues({});
+      final client = HerdrClientService()
+        ..setMachines(['a:7788', 'a:7788/m/x', 'a:7788/m/y', 'b:7788'], [], ['a:7788', 'b:7788']);
+      client.moveMachine('b:7788', 0);
+      expect(client.machines, ['b:7788', 'a:7788', 'a:7788/m/x', 'a:7788/m/y']);
+      client.moveMachine('a:7788/m/y', 0);
+      expect(client.machines, ['b:7788', 'a:7788', 'a:7788/m/y', 'a:7788/m/x']);
     });
 
     test('Removing the machine on screen shows the next one without connecting it', () {
@@ -1181,7 +1183,7 @@ void main() {
       expect(find.text('Edit machine'), findsNothing);
     });
 
-    testWidgets('AgentsHomeScreen displays branch_name (tab_name) · machine in agent subtitle', (tester) async {
+    testWidgets('AgentsHomeScreen displays workspace (tab_name) · machine in agent subtitle', (tester) async {
       SharedPreferences.setMockInitialValues({'last_seen_changelog': changelog.first.$1});
       final client = HerdrClientService()
         ..setMachines(['10.0.0.1:7788', '10.0.0.2:7788'], ['10.0.0.1:7788=MacBook', '10.0.0.2:7788=Server'])
@@ -1243,8 +1245,8 @@ void main() {
       await tester.pump();
       await tester.pump(const Duration(milliseconds: 300));
 
-      // With multiple machines and multiple tabs: branch_name (tab_name) · machine
-      expect(find.text('feat-home (feat-agents) · MacBook'), findsOneWidget);
+      // With multiple machines and multiple tabs: workspace (tab_name) · machine
+      expect(find.text('herdr-mobile (feat-agents) · MacBook'), findsOneWidget);
     });
 
     testWidgets('Hide message terminal option in settings panel hides the message terminal in TerminalScreen',
@@ -1646,7 +1648,7 @@ void main() {
       expect(find.text('10'), findsOneWidget);
     });
 
-    testWidgets('Swiping up on message bar opens recent history sheet', (tester) async {
+    testWidgets('The history button left of the message box opens recent messages', (tester) async {
       SharedPreferences.setMockInitialValues({'message_history': ['fix bug in layout', 'run tests']});
       final client = HerdrClientService();
       final snap = SessionSnapshot.fromJson({
@@ -1672,11 +1674,7 @@ void main() {
       await tester.pumpWidget(MaterialApp(home: TerminalScreen(client: client)));
       await tester.pump(const Duration(milliseconds: 300));
 
-      // Drag up on the text field / bottom container
-      final messageField = find.byType(TextField);
-      expect(messageField, findsOneWidget);
-
-      await tester.drag(messageField, const Offset(0, -100));
+      await tester.tap(find.byTooltip('History and quick replies'));
       await tester.pumpAndSettle();
 
       expect(find.text('Recent messages'), findsOneWidget);
@@ -1733,6 +1731,160 @@ void main() {
       await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
       await tester.pump();
       expect(find.text('first command'), findsNothing);
+    });
+
+    test('HerdrClientService tab and workspace navigation and jumpToAttention', () {
+      final client = HerdrClientService();
+      final snap = SessionSnapshot.fromJson({
+        'workspaces': [
+          {'workspace_id': 'w1', 'number': 1, 'label': 'ws1', 'active_tab_id': 't1', 'agent_status': 'idle'},
+          {'workspace_id': 'w2', 'number': 2, 'label': 'ws2', 'active_tab_id': 't3', 'agent_status': 'blocked'},
+        ],
+        'tabs': [
+          {'tab_id': 't1', 'workspace_id': 'w1', 'number': 1, 'label': 'Tab 1', 'agent_status': 'idle'},
+          {'tab_id': 't2', 'workspace_id': 'w1', 'number': 2, 'label': 'Tab 2', 'agent_status': 'idle'},
+          {'tab_id': 't3', 'workspace_id': 'w2', 'number': 1, 'label': 'Tab 3', 'agent_status': 'blocked'},
+        ],
+        'panes': [
+          {'pane_id': 'p1', 'workspace_id': 'w1', 'tab_id': 't1', 'focused': true, 'agent_status': 'idle', 'terminal_title': ''},
+          {'pane_id': 'p2', 'workspace_id': 'w1', 'tab_id': 't2', 'focused': false, 'agent_status': 'idle', 'terminal_title': ''},
+          {'pane_id': 'p3', 'workspace_id': 'w2', 'tab_id': 't3', 'focused': true, 'agent_status': 'blocked', 'terminal_title': ''},
+        ],
+        'agents': [
+          {'pane_id': 'p1', 'name': 'agent1', 'status': 'idle'},
+          {'pane_id': 'p3', 'name': 'agent3', 'status': 'blocked'},
+        ],
+      });
+      client.setMachines(['127.0.0.1:7788'], []);
+      client.setSnapshotForTesting(snap);
+      client.selectPane('p1');
+
+      // Tab navigation
+      expect(client.selectedPaneId, 'p1');
+      client.nextTab();
+      expect(client.selectedPaneId, 'p2');
+      client.previousTab();
+      expect(client.selectedPaneId, 'p1');
+      client.selectTabAt(1);
+      expect(client.selectedPaneId, 'p2');
+
+      // Workspace navigation
+      client.nextWorkspace();
+      expect(client.selectedPaneId, 'p3');
+      client.previousWorkspace();
+      expect(client.selectedPaneId, 'p1');
+
+      // Attention jump
+      client.jumpToAttention();
+      expect(client.selectedPaneId, 'p3');
+    });
+
+    testWidgets('TerminalScreen responds to Alt keybindings', (tester) async {
+      final client = HerdrClientService();
+      final snap = SessionSnapshot.fromJson({
+        'workspaces': [
+          {'workspace_id': 'w1', 'number': 1, 'label': 'ws1', 'active_tab_id': 't1', 'agent_status': 'idle'},
+          {'workspace_id': 'w2', 'number': 2, 'label': 'ws2', 'active_tab_id': 't3', 'agent_status': 'blocked'},
+        ],
+        'tabs': [
+          {'tab_id': 't1', 'workspace_id': 'w1', 'number': 1, 'label': 'Tab 1', 'agent_status': 'idle'},
+          {'tab_id': 't2', 'workspace_id': 'w1', 'number': 2, 'label': 'Tab 2', 'agent_status': 'idle'},
+          {'tab_id': 't3', 'workspace_id': 'w2', 'number': 1, 'label': 'Tab 3', 'agent_status': 'blocked'},
+        ],
+        'panes': [
+          {'pane_id': 'p1', 'workspace_id': 'w1', 'tab_id': 't1', 'focused': true, 'agent_status': 'idle', 'terminal_title': ''},
+          {'pane_id': 'p2', 'workspace_id': 'w1', 'tab_id': 't2', 'focused': false, 'agent_status': 'idle', 'terminal_title': ''},
+          {'pane_id': 'p3', 'workspace_id': 'w2', 'tab_id': 't3', 'focused': true, 'agent_status': 'blocked', 'terminal_title': ''},
+        ],
+        'agents': [
+          {'pane_id': 'p1', 'name': 'agent1', 'status': 'idle'},
+          {'pane_id': 'p3', 'name': 'agent3', 'status': 'blocked'},
+        ],
+      });
+      client.setMachines(['127.0.0.1:7788'], []);
+      client.setSnapshotForTesting(snap);
+      client.selectPane('p1');
+
+      var searchOpened = false;
+      var drawerOpened = false;
+      var machinesOpened = false;
+
+      await tester.pumpWidget(MaterialApp(
+        home: TerminalScreen(
+          client: client,
+          embedded: true,
+          onOpenSearch: () => searchOpened = true,
+          onOpenDrawer: () => drawerOpened = true,
+          onOpenMachines: () => machinesOpened = true,
+        ),
+      ));
+      await tester.pump(const Duration(milliseconds: 300));
+
+      // Alt + Right -> next tab
+      await tester.sendKeyDownEvent(LogicalKeyboardKey.altLeft);
+      await tester.sendKeyEvent(LogicalKeyboardKey.arrowRight);
+      await tester.sendKeyUpEvent(LogicalKeyboardKey.altLeft);
+      await tester.pump();
+      expect(client.selectedPaneId, 'p2');
+
+      // Alt + Left -> previous tab
+      await tester.sendKeyDownEvent(LogicalKeyboardKey.altLeft);
+      await tester.sendKeyEvent(LogicalKeyboardKey.arrowLeft);
+      await tester.sendKeyUpEvent(LogicalKeyboardKey.altLeft);
+      await tester.pump();
+      expect(client.selectedPaneId, 'p1');
+
+      // Alt + 2 -> tab 2
+      await tester.sendKeyDownEvent(LogicalKeyboardKey.altLeft);
+      await tester.sendKeyEvent(LogicalKeyboardKey.digit2);
+      await tester.sendKeyUpEvent(LogicalKeyboardKey.altLeft);
+      await tester.pump();
+      expect(client.selectedPaneId, 'p2');
+
+      // Alt + Down -> next workspace
+      await tester.sendKeyDownEvent(LogicalKeyboardKey.altLeft);
+      await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
+      await tester.sendKeyUpEvent(LogicalKeyboardKey.altLeft);
+      await tester.pump();
+      expect(client.selectedPaneId, 'p3');
+
+      // Alt + O -> jump to attention
+      client.selectPane('p1');
+      await tester.sendKeyDownEvent(LogicalKeyboardKey.altLeft);
+      await tester.sendKeyEvent(LogicalKeyboardKey.keyO);
+      await tester.sendKeyUpEvent(LogicalKeyboardKey.altLeft);
+      await tester.pump();
+      expect(client.selectedPaneId, 'p3');
+
+      // Alt + G -> search callback
+      await tester.sendKeyDownEvent(LogicalKeyboardKey.altLeft);
+      await tester.sendKeyEvent(LogicalKeyboardKey.keyG);
+      await tester.sendKeyUpEvent(LogicalKeyboardKey.altLeft);
+      await tester.pump();
+      expect(searchOpened, isTrue);
+
+      // Alt + B -> drawer callback
+      await tester.sendKeyDownEvent(LogicalKeyboardKey.altLeft);
+      await tester.sendKeyEvent(LogicalKeyboardKey.keyB);
+      await tester.sendKeyUpEvent(LogicalKeyboardKey.altLeft);
+      await tester.pump();
+      expect(drawerOpened, isTrue);
+
+      // Alt + M -> machines callback
+      await tester.sendKeyDownEvent(LogicalKeyboardKey.altLeft);
+      await tester.sendKeyEvent(LogicalKeyboardKey.keyM);
+      await tester.sendKeyUpEvent(LogicalKeyboardKey.altLeft);
+      await tester.pump();
+      expect(machinesOpened, isTrue);
+
+      // Alt + I -> toggle message focus
+      final textField = find.byType(TextField);
+      expect(tester.widget<TextField>(textField).focusNode?.hasFocus, isFalse);
+      await tester.sendKeyDownEvent(LogicalKeyboardKey.altLeft);
+      await tester.sendKeyEvent(LogicalKeyboardKey.keyI);
+      await tester.sendKeyUpEvent(LogicalKeyboardKey.altLeft);
+      await tester.pump();
+      expect(tester.widget<TextField>(textField).focusNode?.hasFocus, isTrue);
     });
   });
 }

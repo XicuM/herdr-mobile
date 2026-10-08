@@ -24,7 +24,18 @@ class TerminalScreen extends StatefulWidget {
   /// the home screen shows something else once its pane or machine is gone.
   final bool embedded;
 
-  const TerminalScreen({super.key, required this.client, this.embedded = false});
+  final VoidCallback? onOpenDrawer;
+  final VoidCallback? onOpenMachines;
+  final VoidCallback? onOpenSearch;
+
+  const TerminalScreen({
+    super.key,
+    required this.client,
+    this.embedded = false,
+    this.onOpenDrawer,
+    this.onOpenMachines,
+    this.onOpenSearch,
+  });
 
   // Unsent message box text per pane, by `machine/pane`; static, so it outlives the screen, which goes back
   // to the agent list.
@@ -38,7 +49,7 @@ class TerminalScreen extends StatefulWidget {
   State<TerminalScreen> createState() => _TerminalScreenState();
 }
 
-class _TerminalScreenState extends State<TerminalScreen> with SingleTickerProviderStateMixin {
+class _TerminalScreenState extends State<TerminalScreen> {
   final _terminal = Terminal();
   final _controller = TerminalController();
   final _view = GlobalKey<TerminalViewState>();
@@ -54,10 +65,16 @@ class _TerminalScreenState extends State<TerminalScreen> with SingleTickerProvid
   int _scrolledUp = 0; // scrolls back into the pane's history; 0 is live
   bool _left = false; // popped back to the agents, since the machine went off
 
-  // Pinch-to-zoom and history scrolling, tracked from raw pointers so they don't fight the
-  // terminal's own gestures.
+  // Pinch-to-zoom, two-finger swipes between agents and history scrolling, tracked from raw pointers so
+  // they don't fight the terminal's own gestures.
   final _pointers = <int, Offset>{};
-  double? _pinchDistance;
+  Offset? _twoAt; // where two fingers' midpoint started, while two are down
+  double _twoDistance = 0; // and how far apart they were
+  bool? _swiping; // what two fingers do: null until they pinch (false) or move sideways together (true)
+  bool _swiped = false; // the swipe has switched agent; once a gesture
+  double _swipeDx = 0; // how far the terminal follows a swipe, before it switches
+  Offset _padPan = Offset.zero; // a touchpad's two-finger pan so far, until it picks an axis
+  Axis? _padAxis;
   double _pinchFont = 0;
   Offset _downAt = Offset.zero;
   Duration _downTime = Duration.zero;
@@ -65,16 +82,8 @@ class _TerminalScreenState extends State<TerminalScreen> with SingleTickerProvid
   double _scrollRest = 0; // scrolled pixels not yet a whole line
   bool _pinched = false; // the rest of a gesture that pinched never scrolls
 
-  // Swiping the bottom bar between agents: the terminal's horizontal offset, in screen widths.
-  late final _slide = AnimationController.unbounded(vsync: this);
-  Offset? _swipeFrom;
-  Duration _swipeTime = Duration.zero;
-  bool _swiping = false;
-
   // The current tab in the top bar's strip, scrolled into view when it changes.
   final _currentTab = GlobalKey();
-  // The tab being dragged.
-  String? _draggedTab;
   String? _shownTabId;
 
   // The terminal's true background: the colour most of the screen's edges are painted, since full-screen agents
@@ -158,21 +167,141 @@ class _TerminalScreenState extends State<TerminalScreen> with SingleTickerProvid
     }
   }
 
-  /// Volume keys and Ctrl +/- zoom the terminal font or send ↑/↓ while this screen is on top, as set in Settings.
+  /// Alt keybindings, volume keys, and Ctrl +/- zoom handling while this screen is active.
   bool _onHardwareKey(KeyEvent event) {
+    if (!mounted || ModalRoute.of(context)?.isCurrent != true) return false;
     final key = event.logicalKey;
     final client = widget.client;
+    final isAlt = HardwareKeyboard.instance.isAltPressed;
+    final isShift = HardwareKeyboard.instance.isShiftPressed;
+    final isCtrl = HardwareKeyboard.instance.isControlPressed;
 
-    if (HardwareKeyboard.instance.isControlPressed) {
-      final isZoomIn = key == LogicalKeyboardKey.equal ||
-          key == LogicalKeyboardKey.add ||
-          key == LogicalKeyboardKey.numpadAdd;
-      final isZoomOut = key == LogicalKeyboardKey.minus ||
-          key == LogicalKeyboardKey.numpadSubtract;
+    if (isAlt && !isCtrl) {
+      if (key == LogicalKeyboardKey.arrowLeft) {
+        if (event is! KeyUpEvent) {
+          if (isShift) {
+            client.moveTabPrevious();
+          } else {
+            client.previousTab();
+          }
+        }
+        return true;
+      }
+      if (key == LogicalKeyboardKey.arrowRight) {
+        if (event is! KeyUpEvent) {
+          if (isShift) {
+            client.moveTabNext();
+          } else {
+            client.nextTab();
+          }
+        }
+        return true;
+      }
+      if (key == LogicalKeyboardKey.arrowUp) {
+        if (event is! KeyUpEvent) client.previousWorkspace();
+        return true;
+      }
+      if (key == LogicalKeyboardKey.arrowDown) {
+        if (event is! KeyUpEvent) client.nextWorkspace();
+        return true;
+      }
+      if (key == LogicalKeyboardKey.escape) {
+        if (event is! KeyUpEvent) {
+          final pane = client.selectedPane;
+          if (pane != null) {
+            if (!widget.embedded && Navigator.canPop(context)) {
+              Navigator.pop(context);
+            }
+            client.closePane(pane.id);
+          }
+        }
+        return true;
+      }
+      if (key == LogicalKeyboardKey.keyT) {
+        if (event is! KeyUpEvent) {
+          final wsId = client.selectedPane?.workspaceId ?? client.snapshot?.workspaces.firstOrNull?.id;
+          if (wsId != null) client.createTab(wsId);
+        }
+        return true;
+      }
+      if (key == LogicalKeyboardKey.keyG) {
+        if (event is! KeyUpEvent) {
+          if (widget.onOpenSearch != null) {
+            widget.onOpenSearch!();
+          } else if (!widget.embedded && Navigator.canPop(context)) {
+            Navigator.pop(context, 'search');
+          }
+        }
+        return true;
+      }
+      if (key == LogicalKeyboardKey.keyO) {
+        if (event is! KeyUpEvent) client.jumpToAttention();
+        return true;
+      }
+      if (key == LogicalKeyboardKey.keyB) {
+        if (event is! KeyUpEvent) {
+          if (widget.onOpenDrawer != null) {
+            widget.onOpenDrawer!();
+          } else if (!widget.embedded && Navigator.canPop(context)) {
+            Navigator.pop(context, 'drawer');
+          }
+        }
+        return true;
+      }
+      if (key == LogicalKeyboardKey.keyM) {
+        if (event is! KeyUpEvent) {
+          if (widget.onOpenMachines != null) {
+            widget.onOpenMachines!();
+          } else if (!widget.embedded && Navigator.canPop(context)) {
+            Navigator.pop(context, 'machines');
+          }
+        }
+        return true;
+      }
+      if (key == LogicalKeyboardKey.keyH) {
+        if (event is! KeyUpEvent) {
+          if (!widget.embedded && Navigator.canPop(context)) {
+            Navigator.pop(context);
+          }
+        }
+        return true;
+      }
+      if (key == LogicalKeyboardKey.keyI) {
+        if (event is! KeyUpEvent) {
+          if (_messageFocus.hasFocus) {
+            _messageFocus.unfocus();
+          } else {
+            _messageFocus.requestFocus();
+          }
+        }
+        return true;
+      }
+
+      final digit = switch (key) {
+        LogicalKeyboardKey.digit1 || LogicalKeyboardKey.numpad1 => 1,
+        LogicalKeyboardKey.digit2 || LogicalKeyboardKey.numpad2 => 2,
+        LogicalKeyboardKey.digit3 || LogicalKeyboardKey.numpad3 => 3,
+        LogicalKeyboardKey.digit4 || LogicalKeyboardKey.numpad4 => 4,
+        LogicalKeyboardKey.digit5 || LogicalKeyboardKey.numpad5 => 5,
+        LogicalKeyboardKey.digit6 || LogicalKeyboardKey.numpad6 => 6,
+        LogicalKeyboardKey.digit7 || LogicalKeyboardKey.numpad7 => 7,
+        LogicalKeyboardKey.digit8 || LogicalKeyboardKey.numpad8 => 8,
+        LogicalKeyboardKey.digit9 || LogicalKeyboardKey.numpad9 => 9,
+        _ => null,
+      };
+      if (digit != null && !isShift) {
+        if (event is! KeyUpEvent) client.selectTabAt(digit - 1);
+        return true;
+      }
+    }
+
+    if (isCtrl) {
+      final isZoomIn =
+          key == LogicalKeyboardKey.equal || key == LogicalKeyboardKey.add || key == LogicalKeyboardKey.numpadAdd;
+      final isZoomOut = key == LogicalKeyboardKey.minus || key == LogicalKeyboardKey.numpadSubtract;
       final isZoomReset = key == LogicalKeyboardKey.digit0 || key == LogicalKeyboardKey.numpad0;
 
       if (isZoomIn || isZoomOut || isZoomReset) {
-        if (!mounted || ModalRoute.of(context)?.isCurrent != true) return false;
         if (event is! KeyUpEvent) {
           if (isZoomIn) {
             client.setFontSize(client.fontSize + 1);
@@ -188,7 +317,6 @@ class _TerminalScreenState extends State<TerminalScreen> with SingleTickerProvid
 
     if (key != LogicalKeyboardKey.audioVolumeUp && key != LogicalKeyboardKey.audioVolumeDown) return false;
     if (client.volumeKeys == VolumeKeys.volume) return false;
-    if (!mounted || ModalRoute.of(context)?.isCurrent != true) return false;
     if (event is! KeyUpEvent) {
       final up = key == LogicalKeyboardKey.audioVolumeUp;
       if (client.volumeKeys == VolumeKeys.arrows) {
@@ -478,7 +606,8 @@ class _TerminalScreenState extends State<TerminalScreen> with SingleTickerProvid
                             children: [
                               Text(_formatTokens(tokens),
                                   style: theme.textTheme.titleMedium?.copyWith(fontWeight: FontWeight.bold)),
-                              Text('Tokens today', style: theme.textTheme.bodySmall?.copyWith(color: scheme.onSurfaceVariant)),
+                              Text('Tokens today',
+                                  style: theme.textTheme.bodySmall?.copyWith(color: scheme.onSurfaceVariant)),
                             ],
                           ),
                         if (usage?.todayPrompts case final prompts?)
@@ -486,7 +615,8 @@ class _TerminalScreenState extends State<TerminalScreen> with SingleTickerProvid
                             children: [
                               Text('$prompts',
                                   style: theme.textTheme.titleMedium?.copyWith(fontWeight: FontWeight.bold)),
-                              Text('Prompts today', style: theme.textTheme.bodySmall?.copyWith(color: scheme.onSurfaceVariant)),
+                              Text('Prompts today',
+                                  style: theme.textTheme.bodySmall?.copyWith(color: scheme.onSurfaceVariant)),
                             ],
                           ),
                       ],
@@ -540,52 +670,6 @@ class _TerminalScreenState extends State<TerminalScreen> with SingleTickerProvid
     setState(() => _scrolledUp = 0);
   }
 
-  /// Raw pointers, so the swipe works over the message box too, whose own drags would win the arena.
-  /// A drag that is mostly sideways moves the terminal with the finger.
-  void _trackSwipe(PointerEvent e) {
-    // If the message field is focused, let it handle text selection, cursor moves and copy/paste.
-    if (_messageFocus.hasFocus) {
-      _swipeFrom = null;
-      _swiping = false;
-      return;
-    }
-    // Swiping between agents is a one-finger (left-button) gesture; right/middle drags select text.
-    if (_isMouseSecondary(e)) {
-      _swipeFrom = null;
-      _swiping = false;
-      return;
-    }
-    final width = context.size!.width;
-    if (e is PointerDownEvent) {
-      _swipeFrom = e.position;
-      _swipeTime = e.timeStamp;
-      _swiping = false;
-      return;
-    }
-    final from = _swipeFrom;
-    if (from == null) return;
-    final d = e.position - from;
-    if (e is PointerMoveEvent) {
-      if (!_swiping && d.dx.abs() > kTouchSlop * 2 && d.dx.abs() > d.dy.abs() * 2) _swiping = true;
-      if (_swiping) _slide.value = d.dx / width;
-      return;
-    }
-    _swipeFrom = null;
-    if (e is PointerUpEvent && !_swiping && d.dy < -30 && d.dy.abs() > d.dx.abs() * 1.5) {
-      _showHistory();
-      return;
-    }
-    if (!_swiping) return;
-    _swiping = false;
-    final ms = (e.timeStamp - _swipeTime).inMilliseconds.clamp(1, 1 << 30);
-    final flung = d.dx.abs() > 40 && d.dx.abs() / ms > 0.5;
-    if (e is PointerUpEvent && (flung || d.dx.abs() > width / 3)) {
-      _swipe(d.dx < 0 ? 1 : -1);
-    } else {
-      _slide.animateTo(0, duration: const Duration(milliseconds: 150), curve: Curves.easeOut);
-    }
-  }
-
   /// The agent running in a tab (focused pane's first), or null if it runs none.
   AgentModel? _tabAgent(TabModel tab) {
     final snapshot = widget.client.snapshot;
@@ -617,10 +701,9 @@ class _TerminalScreenState extends State<TerminalScreen> with SingleTickerProvid
     return tab.displayName;
   }
 
-  /// Desktop right-click on a tab: select it, close it, or move it without long-press dragging.
-  Future<void> _showTabMenu(TapUpDetails details, TabModel tab, List<TabModel> tabs, int index) async {
+  /// A tab's menu, from the current tab's ⋮ or a right-click on any: select it, move it, or close it.
+  Future<void> _showTabMenu(Offset at, TabModel tab, List<TabModel> tabs, int index) async {
     final client = widget.client;
-    final at = details.globalPosition;
     final scheme = Theme.of(context).colorScheme;
     final picked = await showMenu<String>(
       context: context,
@@ -661,66 +744,6 @@ class _TerminalScreenState extends State<TerminalScreen> with SingleTickerProvid
     if (pane == null) return null;
     final tabs = snapshot!.tabs.where((t) => t.workspaceId == pane.workspaceId).toList();
     return (tabs, tabs.indexWhere((t) => t.id == pane.tabId));
-  }
-
-  /// Where a sideways swipe goes: every agent on every connected machine, each machine's in herdr's order
-  /// (workspace, tab, pane), as labels and how to show each, with the current one's index. The pane on
-  /// screen is among them even when it runs no agent, so a plain shell still has neighbours.
-  (List<(String, VoidCallback)>, int)? _stops() {
-    final client = widget.client;
-    final current = client.selectedPane;
-    if (current == null) return null;
-    final stops = <(String, VoidCallback)>[];
-    var at = -1;
-    for (final m in client.machines) {
-      final snapshot = client.snapshotOf(m);
-      if (client.isOff(m) || snapshot == null) continue;
-      final here = m == client.machine;
-      final ws = [for (final w in snapshot.workspaces) w.id];
-      final tabs = [for (final t in snapshot.tabs) t.id];
-      final names = {for (final a in snapshot.agents) a.paneId: a.name};
-      final wsName = {for (final w in snapshot.workspaces) w.id: w.displayName};
-      final order = snapshot.panes.indexOf;
-      final panes = snapshot.panes.where((p) => names.containsKey(p.id) || here && p.id == current.id).toList()
-        ..sort((a, b) => [
-              ws.indexOf(a.workspaceId).compareTo(ws.indexOf(b.workspaceId)),
-              tabs.indexOf(a.tabId).compareTo(tabs.indexOf(b.tabId)),
-              order(a).compareTo(order(b)),
-            ].firstWhere((c) => c != 0, orElse: () => 0));
-      for (final p in panes) {
-        if (here && p.id == current.id) at = stops.length;
-        final tabNumber = snapshot.tabs.where((t) => t.id == p.tabId).firstOrNull?.number ?? 1;
-        stops.add((
-          [
-            if (!here) client.nameOf(m),
-            if (!here || p.workspaceId != current.workspaceId) wsName[p.workspaceId],
-            names[p.id] ?? '${wsName[p.workspaceId]} ($tabNumber)',
-          ].whereType<String>().join(' · '),
-          () {
-            if (client.machine != m) client.switchMachine(m);
-            client.selectPane(p.id);
-          },
-        ));
-      }
-    }
-    return (stops, at);
-  }
-
-  /// Slides the terminal out, moves [step] agents (wrapping around past either end), and slides the new
-  /// one in from the other side. With nowhere else to go it just springs back.
-  Future<void> _swipe(int step) async {
-    const duration = Duration(milliseconds: 160);
-    final (stops, i) = _stops() ?? (<(String, VoidCallback)>[], -1);
-    if (i < 0 || stops.length < 2) {
-      await _slide.animateTo(0, duration: duration, curve: Curves.easeOut);
-      return;
-    }
-    final next = (i + step) % stops.length;
-    HapticFeedback.selectionClick();
-    await _slide.animateTo(-step.toDouble(), duration: duration, curve: Curves.easeIn);
-    stops[next].$2();
-    _slide.value = step.toDouble();
-    await _slide.animateTo(0, duration: duration * 1.5, curve: Curves.easeOutCubic);
   }
 
   void _copySelection() {
@@ -772,8 +795,7 @@ class _TerminalScreenState extends State<TerminalScreen> with SingleTickerProvid
   Future<void> _showTerminalMenu(TapDownDetails details) async {
     final hasSelection = _controller.selection != null;
     final clipboard = await Clipboard.getData(Clipboard.kTextPlain);
-    final canPaste =
-        (clipboard?.text?.isNotEmpty ?? false) && _ptyChannel != null && widget.client.connected;
+    final canPaste = (clipboard?.text?.isNotEmpty ?? false) && _ptyChannel != null && widget.client.connected;
     if (!mounted) return;
     final at = details.globalPosition;
     final picked = await showMenu<String>(
@@ -783,7 +805,8 @@ class _TerminalScreenState extends State<TerminalScreen> with SingleTickerProvid
         if (hasSelection)
           const PopupMenuItem(value: 'copy', child: ListTile(leading: Icon(Icons.content_copy), title: Text('Copy'))),
         if (canPaste)
-          const PopupMenuItem(value: 'paste', child: ListTile(leading: Icon(Icons.content_paste), title: Text('Paste'))),
+          const PopupMenuItem(
+              value: 'paste', child: ListTile(leading: Icon(Icons.content_paste), title: Text('Paste'))),
         const PopupMenuItem(
             value: 'selectAll', child: ListTile(leading: Icon(Icons.select_all), title: Text('Select all'))),
         if (hasSelection)
@@ -836,22 +859,55 @@ class _TerminalScreenState extends State<TerminalScreen> with SingleTickerProvid
     }
     if (e is PointerMoveEvent && _pointers.length == 1 && !_pinched) return _scroll(e);
     if (_pointers.length != 2) {
-      _pinchDistance = null;
+      _twoAt = null;
+      if (_swipeDx != 0) setState(() => _swipeDx = 0);
       return;
     }
+    _pinched = true; // the rest of the gesture never scrolls
     final p = _pointers.values.toList();
     final distance = (p[0] - p[1]).distance;
-    if (!widget.client.pinchZoom) {
-      _pinched = true;
-      return;
-    }
-    if (_pinchDistance == null) {
-      _pinched = true;
-      _pinchDistance = distance;
+    final centre = (p[0] + p[1]) / 2;
+    if (_twoAt == null) {
+      _twoAt = centre;
+      _twoDistance = distance;
       _pinchFont = widget.client.fontSize;
+      _swiping = null;
+      _swiped = false;
       return;
     }
-    widget.client.setFontSize((_pinchFont * distance / _pinchDistance!).roundToDouble());
+    // Fingers moving sideways together swipe; moving apart or together pinch, whichever shows first.
+    final dx = centre.dx - _twoAt!.dx;
+    final stretch = distance - _twoDistance;
+    _swiping ??= dx.abs() > kPanSlop && dx.abs() > stretch.abs()
+        ? true
+        : stretch.abs() > kPanSlop && widget.client.pinchZoom
+            ? false
+            : null;
+    if (_swiping == false) widget.client.setFontSize((_pinchFont * distance / _twoDistance).roundToDouble());
+    if (_swiping == true) _swipe(dx);
+  }
+
+  /// Where a swipe [step] agents along leads, named as the list does: the agent's summary, then where it is.
+  String? _peek(int step) {
+    final client = widget.client;
+    final (m, paneId) = client.agentAt(step) ?? ('', '');
+    final snapshot = client.snapshotOf(m);
+    final pane = snapshot?.panes.where((p) => p.id == paneId).firstOrNull;
+    if (pane == null) return null;
+    final agent = snapshot!.agents.where((a) => a.paneId == paneId).firstOrNull;
+    final place = [snapshot.placeOf(pane), if (m != client.machine) client.nameOf(m)].join(' · ');
+    return '${pane.terminalTitle.isNotEmpty ? pane.terminalTitle : agent?.name ?? ''}\n$place';
+  }
+
+  /// Two fingers have moved [dx] sideways together: the terminal follows them a little, and past a threshold,
+  /// once a gesture, shows the next agent (fingers going left, as a page turns) or the previous ([stepAgent]).
+  void _swipe(double dx) {
+    if (_swiped) return;
+    if (dx.abs() < 80) return setState(() => _swipeDx = dx / 2);
+    _swiped = true;
+    setState(() => _swipeDx = 0);
+    HapticFeedback.selectionClick();
+    widget.client.stepAgent(dx < 0 ? 1 : -1);
   }
 
   /// Herdr holds the pane's history (see [PtyChannel.connect]), so dragging scrolls herdr's view a line
@@ -868,10 +924,25 @@ class _TerminalScreenState extends State<TerminalScreen> with SingleTickerProvid
     _scrollBy(e.delta.dy);
   }
 
-  /// A mouse wheel, or a desktop touchpad's two-finger pan, scrolls herdr's view like a drag does.
+  /// A mouse wheel scrolls herdr's view like a drag does, and so does a desktop touchpad's two-finger pan
+  /// up or down; sideways, it swipes between agents as two fingers on a phone do. A pan keeps the axis
+  /// it first moves along.
   void _scrollSignal(PointerEvent e) {
     if (e is PointerScrollEvent) _scrollBy(-e.scrollDelta.dy);
-    if (e is PointerPanZoomUpdateEvent) _scrollBy(e.panDelta.dy);
+    if (e is PointerPanZoomStartEvent) {
+      _padPan = Offset.zero;
+      _padAxis = null;
+      _swiped = false;
+    }
+    if (e is PointerPanZoomEndEvent && _swipeDx != 0) setState(() => _swipeDx = 0);
+    if (e is! PointerPanZoomUpdateEvent) return;
+    _padPan += e.panDelta;
+    if (_padAxis == null && _padPan.distance > kTouchSlop) {
+      _padAxis = _padPan.dx.abs() > _padPan.dy.abs() ? Axis.horizontal : Axis.vertical;
+      if (_padAxis == Axis.vertical) return _scrollBy(_padPan.dy);
+    }
+    if (_padAxis == Axis.vertical) _scrollBy(e.panDelta.dy);
+    if (_padAxis == Axis.horizontal) _swipe(_padPan.dx);
   }
 
   /// Scrolls by [dy] pixels, positive toward older history.
@@ -930,8 +1001,12 @@ class _TerminalScreenState extends State<TerminalScreen> with SingleTickerProvid
     }
     final headers = client.headersOf(client.machine);
     // A new token for the machine reconnects too.
-    if (pty != null && pty.paneId == paneId && pty.machine == client.machine &&
-        pty.headers[HttpHeaders.authorizationHeader] == headers[HttpHeaders.authorizationHeader]) return;
+    if (pty != null &&
+        pty.paneId == paneId &&
+        pty.machine == client.machine &&
+        pty.headers[HttpHeaders.authorizationHeader] == headers[HttpHeaders.authorizationHeader]) {
+      return;
+    }
     pty?.dispose();
     _ptyChannel = PtyChannel(
       machine: client.machine,
@@ -950,7 +1025,6 @@ class _TerminalScreenState extends State<TerminalScreen> with SingleTickerProvid
     _onMessageChanged();
     _message.removeListener(_onMessageChanged);
     _messageFocus.dispose();
-    _slide.dispose();
     _lifecycle.dispose();
     widget.client.removeListener(_onClientUpdate);
     _controller.dispose();
@@ -1041,56 +1115,61 @@ class _TerminalScreenState extends State<TerminalScreen> with SingleTickerProvid
                 : () => showWorkspaceActions(context, client, workspace,
                     onDelete: widget.embedded ? null : () => Navigator.maybePop(context)),
             child: Padding(
-            padding: const EdgeInsets.symmetric(vertical: 4),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Text(
-                  title,
-                  style: Theme.of(context).textTheme.titleMedium,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                ),
-                if (isWorktree || branch.isNotEmpty)
-                  Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      if (isWorktree) ...[
-                        Container(
-                          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
-                          decoration: BoxDecoration(
-                            color: scheme.secondaryContainer,
-                            borderRadius: BorderRadius.circular(4),
-                          ),
-                          child: Text(
-                            'worktree',
-                            style: Theme.of(context).textTheme.labelSmall?.copyWith(
-                              color: scheme.onSecondaryContainer,
-                              fontSize: 10,
-                              fontWeight: FontWeight.w500,
+              padding: const EdgeInsets.symmetric(vertical: 4),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(
+                    title,
+                    style: Theme.of(context).textTheme.titleMedium,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                  if (isWorktree || branch.isNotEmpty)
+                    Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        if (isWorktree) ...[
+                          Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
+                            decoration: BoxDecoration(
+                              color: scheme.secondaryContainer,
+                              borderRadius: BorderRadius.circular(4),
+                            ),
+                            child: Text(
+                              'worktree',
+                              style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                                    color: scheme.onSecondaryContainer,
+                                    fontSize: 10,
+                                    fontWeight: FontWeight.w500,
+                                  ),
                             ),
                           ),
-                        ),
-                        if (branch.isNotEmpty) const SizedBox(width: 6),
-                      ],
-                      if (branch.isNotEmpty)
-                        Flexible(
-                          child: Text(
-                            branch,
-                            style: Theme.of(context).textTheme.bodySmall?.copyWith(color: scheme.onSurfaceVariant),
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
+                          if (branch.isNotEmpty) const SizedBox(width: 6),
+                        ],
+                        if (branch.isNotEmpty)
+                          Flexible(
+                            child: Text(
+                              branch,
+                              style: Theme.of(context).textTheme.bodySmall?.copyWith(color: scheme.onSurfaceVariant),
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                            ),
                           ),
-                        ),
-                    ],
-                  ),
-              ],
+                      ],
+                    ),
+                ],
+              ),
             ),
           ),
         ),
-      ),
         actions: [
+          IconButton(
+            tooltip: 'Usage and quotas',
+            icon: Icon(Icons.bolt, color: _quotaColor(scheme, currentUsage)),
+            onPressed: () => _showUsage(currentAgent, currentUsage),
+          ),
           Padding(
             padding: const EdgeInsets.only(right: 8),
             child: Tooltip(
@@ -1126,7 +1205,7 @@ class _TerminalScreenState extends State<TerminalScreen> with SingleTickerProvid
         ],
         // The workspace's tabs, like Vivaldi's: equal 168dp tabs, scrolling when they overflow.
         // The current one is rounded on top and takes the terminal's color, joined to it below.
-        // Each shows its agent icon with an online status ring and truncated tab summary. Long-press a tab to move or close it.
+        // Each shows its agent icon with an online status ring and truncated tab summary; the current one has a ⋮ menu. Long-press a tab to move it.
         bottom: PreferredSize(
           preferredSize: const Size.fromHeight(34),
           // While connecting, a thin progress bar over the strip's top edge, taking no room of its own.
@@ -1144,8 +1223,7 @@ class _TerminalScreenState extends State<TerminalScreen> with SingleTickerProvid
                               crossAxisAlignment: CrossAxisAlignment.stretch,
                               children: [
                                 for (final (j, t) in tabs.indexed)
-                                  // Long-press and drag a tab onto another to take its place, or onto
-                                  // the bin.
+                                  // Long-press and drag a tab onto another to take its place.
                                   DragTarget<String>(
                                     onWillAcceptWithDetails: (d) => d.data != t.id,
                                     onAcceptWithDetails: (d) => client.moveTab(d.data, t.id),
@@ -1166,6 +1244,20 @@ class _TerminalScreenState extends State<TerminalScreen> with SingleTickerProvid
                                                     color: j == i ? scheme.onSurface : scheme.onSurfaceVariant),
                                               ),
                                             ),
+                                            // The current tab's menu, as browsers show close on theirs.
+                                            if (j == i)
+                                              Builder(
+                                                builder: (context) => InkResponse(
+                                                  radius: 14,
+                                                  onTap: () => _showTabMenu(
+                                                      (context.findRenderObject() as RenderBox)
+                                                          .localToGlobal(Offset.zero),
+                                                      t,
+                                                      tabs,
+                                                      j),
+                                                  child: const Icon(Icons.more_vert, size: 16),
+                                                ),
+                                              ),
                                           ],
                                         ),
                                       );
@@ -1173,8 +1265,6 @@ class _TerminalScreenState extends State<TerminalScreen> with SingleTickerProvid
                                       return LongPressDraggable<String>(
                                         data: t.id,
                                         axis: Axis.horizontal,
-                                        onDragStarted: () => setState(() => _draggedTab = t.id),
-                                        onDragEnd: (_) => setState(() => _draggedTab = null),
                                         feedback: Material(
                                           color: scheme.secondaryContainer,
                                           elevation: 3,
@@ -1189,14 +1279,13 @@ class _TerminalScreenState extends State<TerminalScreen> with SingleTickerProvid
                                           opacity: 0.3,
                                           child: Container(
                                             width: 168,
-                                            decoration: j == i
-                                                ? BoxDecoration(color: background, borderRadius: top)
-                                                : null,
+                                            decoration:
+                                                j == i ? BoxDecoration(color: background, borderRadius: top) : null,
                                             child: label,
                                           ),
                                         ),
                                         child: GestureDetector(
-                                          onSecondaryTapUp: (d) => _showTabMenu(d, t, tabs, j),
+                                          onSecondaryTapUp: (d) => _showTabMenu(d.globalPosition, t, tabs, j),
                                           child: Container(
                                             key: j == i ? _currentTab : null,
                                             width: 168,
@@ -1219,19 +1308,13 @@ class _TerminalScreenState extends State<TerminalScreen> with SingleTickerProvid
                             ),
                           ),
                         ),
-                        // While a tab is dragged, a bin: drop it there to close it.
-                        DragTarget<String>(
-                          onAcceptWithDetails: (d) => client.closeTab(d.data),
-                          builder: (context, over, _) => IconButton(
-                            tooltip: _draggedTab == null ? 'New tab' : 'Close tab',
-                            padding: EdgeInsets.zero,
-                            constraints: const BoxConstraints.tightFor(width: 40, height: 34),
-                            iconSize: 18,
-                            color: _draggedTab == null ? null : scheme.error,
-                            style: over.isEmpty ? null : IconButton.styleFrom(backgroundColor: scheme.errorContainer),
-                            icon: Icon(_draggedTab == null ? Icons.add : Icons.delete_outline),
-                            onPressed: () => client.createTab(tabs[i].workspaceId),
-                          ),
+                        IconButton(
+                          tooltip: 'New tab',
+                          padding: EdgeInsets.zero,
+                          constraints: const BoxConstraints.tightFor(width: 40, height: 34),
+                          iconSize: 18,
+                          icon: const Icon(Icons.add),
+                          onPressed: () => client.createTab(tabs[i].workspaceId),
                         ),
                       ],
                     ),
@@ -1268,80 +1351,86 @@ class _TerminalScreenState extends State<TerminalScreen> with SingleTickerProvid
                     )
                   : Stack(
                       children: [
-                        // Revealed beside the terminal while it slides: where the swipe leads.
-                        if (_stops() case (final stops, final i) when i >= 0 && stops.length > 1)
-                          Positioned.fill(
-                            child: Padding(
-                              padding: const EdgeInsets.symmetric(horizontal: 24),
-                              child: Row(
-                                children: [
-                                  const Icon(Icons.chevron_left),
-                                  Text(stops[(i - 1) % stops.length].$1, style: Theme.of(context).textTheme.labelLarge),
-                                  const Spacer(),
-                                  Text(stops[(i + 1) % stops.length].$1, style: Theme.of(context).textTheme.labelLarge),
-                                  const Icon(Icons.chevron_right),
-                                ],
-                              ),
-                            ),
-                          ),
                         Positioned.fill(
-                          child: AnimatedBuilder(
-                            animation: _slide,
-                            // Clipped, so sliding out doesn't paint over the agents beside it on a wide screen.
-                            builder: (_, child) => ClipRect(
-                                child: FractionalTranslation(translation: Offset(_slide.value, 0), child: child)),
-                            child: Listener(
-                              onPointerDown: _trackPointer,
-                              onPointerMove: _trackPointer,
-                              onPointerUp: _trackPointer,
-                              onPointerCancel: _trackPointer,
-                              onPointerSignal: _scrollSignal,
-                              onPointerPanZoomUpdate: _scrollSignal,
-                              // Embedded, a little room from the agents and the screen's edge, in the pane's colour.
-                              child: Container(
-                                  color: background,
-                                  padding: EdgeInsets.symmetric(horizontal: widget.embedded ? 4 : 0),
-                                  child: TerminalView(
-                                    _terminal,
-                                    key: _view,
-                                    controller: _controller,
-                                    onSecondaryTapDown: (details, _) => _showTerminalMenu(details),
-                                    backgroundOpacity: 1.0,
-                                    // xterm's default colours, on the app's surface.
-                                    theme: TerminalTheme(
-                                      cursor: _defaultTheme.cursor,
-                                      selection: _defaultTheme.selection,
-                                      foreground: scheme.onSurface,
-                                      background: scheme.surface,
-                                      black: _defaultTheme.black,
-                                      white: _defaultTheme.white,
-                                      red: _defaultTheme.red,
-                                      green: _defaultTheme.green,
-                                      yellow: _defaultTheme.yellow,
-                                      blue: _defaultTheme.blue,
-                                      magenta: _defaultTheme.magenta,
-                                      cyan: _defaultTheme.cyan,
-                                      brightBlack: _defaultTheme.brightBlack,
-                                      brightRed: _defaultTheme.brightRed,
-                                      brightGreen: _defaultTheme.brightGreen,
-                                      brightYellow: _defaultTheme.brightYellow,
-                                      brightBlue: _defaultTheme.brightBlue,
-                                      brightMagenta: _defaultTheme.brightMagenta,
-                                      brightCyan: _defaultTheme.brightCyan,
-                                      brightWhite: _defaultTheme.brightWhite,
-                                      searchHitBackground: _defaultTheme.searchHitBackground,
-                                      searchHitBackgroundCurrent: _defaultTheme.searchHitBackgroundCurrent,
-                                      searchHitForeground: _defaultTheme.searchHitForeground,
+                          child: Listener(
+                            onPointerDown: _trackPointer,
+                            onPointerMove: _trackPointer,
+                            onPointerUp: _trackPointer,
+                            onPointerCancel: _trackPointer,
+                            onPointerSignal: _scrollSignal,
+                            onPointerPanZoomStart: _scrollSignal,
+                            onPointerPanZoomUpdate: _scrollSignal,
+                            onPointerPanZoomEnd: _scrollSignal,
+                            // Embedded, a little room from the agents and the screen's edge, in the pane's colour.
+                            child: Container(
+                                color: background,
+                                padding: EdgeInsets.symmetric(horizontal: widget.embedded ? 4 : 0),
+                                // Following a two-finger swipe until it switches agent, and springing back after;
+                                // behind it, where each way leads.
+                                child: Stack(children: [
+                                  if (_swipeDx != 0)
+                                    Positioned.fill(
+                                      child: Row(children: [
+                                        for (final step in [-1, 1])
+                                          if (_peek(step) case final label?)
+                                            Expanded(
+                                              child: Padding(
+                                                padding: const EdgeInsets.symmetric(horizontal: 12),
+                                                child: Text(step < 0 ? '‹ $label' : '$label ›',
+                                                    maxLines: 4,
+                                                    overflow: TextOverflow.ellipsis,
+                                                    textAlign: step < 0 ? TextAlign.left : TextAlign.right,
+                                                    style: Theme.of(context).textTheme.labelLarge),
+                                              ),
+                                            ),
+                                      ]),
                                     ),
-                                    textStyle: TerminalStyle(
-                                      fontSize: client.fontSize,
-                                      fontFamily: 'MesloLGS Nerd Font Mono',
-                                      height: 1.1,
-                                    ),
-                                    autofocus: true,
-                                    simulateScroll: false,
-                                  )),
-                            ),
+                                  AnimatedContainer(
+                                    duration: _swipeDx == 0 ? const Duration(milliseconds: 150) : Duration.zero,
+                                    curve: Curves.easeOut,
+                                    transform: Matrix4.translationValues(_swipeDx, 0, 0),
+                                    child: TerminalView(
+                                      _terminal,
+                                      key: _view,
+                                      controller: _controller,
+                                      onSecondaryTapDown: (details, _) => _showTerminalMenu(details),
+                                      backgroundOpacity: 1.0,
+                                      // xterm's default colours, on the app's surface.
+                                      theme: TerminalTheme(
+                                        cursor: _defaultTheme.cursor,
+                                        selection: _defaultTheme.selection,
+                                        foreground: scheme.onSurface,
+                                        background: scheme.surface,
+                                        black: _defaultTheme.black,
+                                        white: _defaultTheme.white,
+                                        red: _defaultTheme.red,
+                                        green: _defaultTheme.green,
+                                        yellow: _defaultTheme.yellow,
+                                        blue: _defaultTheme.blue,
+                                        magenta: _defaultTheme.magenta,
+                                        cyan: _defaultTheme.cyan,
+                                        brightBlack: _defaultTheme.brightBlack,
+                                        brightRed: _defaultTheme.brightRed,
+                                        brightGreen: _defaultTheme.brightGreen,
+                                        brightYellow: _defaultTheme.brightYellow,
+                                        brightBlue: _defaultTheme.brightBlue,
+                                        brightMagenta: _defaultTheme.brightMagenta,
+                                        brightCyan: _defaultTheme.brightCyan,
+                                        brightWhite: _defaultTheme.brightWhite,
+                                        searchHitBackground: _defaultTheme.searchHitBackground,
+                                        searchHitBackgroundCurrent: _defaultTheme.searchHitBackgroundCurrent,
+                                        searchHitForeground: _defaultTheme.searchHitForeground,
+                                      ),
+                                      textStyle: TerminalStyle(
+                                        fontSize: client.fontSize,
+                                        fontFamily: 'MesloLGS Nerd Font Mono',
+                                        height: 1.1,
+                                      ),
+                                      autofocus: true,
+                                      simulateScroll: false,
+                                    )),
+                                  ]),
+                                ),
                           ),
                         ),
                         if (_copyTop() case final top?)
@@ -1375,82 +1464,82 @@ class _TerminalScreenState extends State<TerminalScreen> with SingleTickerProvid
                       ],
                     ),
             ),
-            // Swipe sideways here to move between agents in herdr's order, machine by machine. The keyboard
-            // button swaps the message box for the control keys and back. It takes the terminal's background.
+            // The keyboard button swaps the message box for the control keys and back. It takes the terminal's background.
             if (!client.hideMessageTerminal)
-              Listener(
-                onPointerDown: _trackSwipe,
-                onPointerMove: _trackSwipe,
-                onPointerUp: _trackSwipe,
-                onPointerCancel: _trackSwipe,
-                child: Container(
-                  color: background,
-                  padding: const EdgeInsets.fromLTRB(4, 4, 4, 6),
-                  child: Row(
-                    children: [
-                      Theme(
-                        data: onBackground,
-                        child: IconButton(
-                          tooltip: client.keyBar ? 'Message box' : 'Control keys',
-                          isSelected: client.keyBar,
-                          icon: const Icon(Icons.keyboard_outlined),
-                          selectedIcon: const Icon(Icons.keyboard_hide_outlined),
-                          onPressed: () => client.setKeyBar(!client.keyBar),
-                        ),
+              Container(
+                color: background,
+                padding: const EdgeInsets.fromLTRB(4, 4, 4, 6),
+                child: Row(
+                  children: [
+                    Theme(
+                      data: onBackground,
+                      child: IconButton(
+                        tooltip: client.keyBar ? 'Message box' : 'Control keys',
+                        isSelected: client.keyBar,
+                        icon: const Icon(Icons.keyboard_command_key),
+                        selectedIcon: const Icon(Icons.chat_bubble_outline),
+                        onPressed: () {
+                          // A keyboard that is up stays up: it types into the terminal beside the keys, and
+                          // into the box again when it comes back. Focus moves before the swap, in one frame.
+                          if (MediaQuery.viewInsetsOf(context).bottom > 0) {
+                            client.keyBar ? _messageFocus.requestFocus() : _view.currentState?.requestKeyboard();
+                          }
+                          client.setKeyBar(!client.keyBar);
+                        },
                       ),
-                      Expanded(
-                        child: client.keyBar
-                            ? KeyboardAccessoryBar(
-                                ctrl: _ctrl,
-                                onCtrl: () => setState(() => _ctrl = !_ctrl),
-                                onKey: _key,
-                                onText: _send,
-                              )
-                            : TextField(
-                                controller: _message,
-                                focusNode: _messageFocus,
-                                minLines: 1,
-                                maxLines: 4,
-                                textCapitalization: TextCapitalization.sentences,
-                                textInputAction: TextInputAction.send,
-                                onEditingComplete: _sendMessage,
-                                // An M3 filled text field, pill-shaped like a search bar.
-                                decoration: InputDecoration(
-                                  hintText: 'Message terminal…',
-                                  filled: true,
-                                  fillColor: scheme.secondaryContainer,
-                                  isDense: true,
-                                  contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
-                                  border: OutlineInputBorder(
-                                    borderRadius: BorderRadius.circular(24),
-                                    borderSide: BorderSide.none,
-                                  ),
-                                  prefixIcon: IconButton(
-                                    tooltip: 'Usage and quotas',
-                                    icon: Icon(Icons.bolt, color: _quotaColor(scheme, currentUsage)),
-                                    onPressed: () => _showUsage(currentAgent, currentUsage),
-                                  ),
+                    ),
+                    Expanded(
+                      child: client.keyBar
+                          ? KeyboardAccessoryBar(
+                              ctrl: _ctrl,
+                              onCtrl: () => setState(() => _ctrl = !_ctrl),
+                              onKey: _key,
+                              onText: _send,
+                            )
+                          : TextField(
+                              controller: _message,
+                              focusNode: _messageFocus,
+                              minLines: 1,
+                              maxLines: 4,
+                              textCapitalization: TextCapitalization.sentences,
+                              textInputAction: TextInputAction.send,
+                              onEditingComplete: _sendMessage,
+                              // An M3 filled text field, pill-shaped like a search bar.
+                              decoration: InputDecoration(
+                                hintText: 'Message terminal…',
+                                filled: true,
+                                fillColor: scheme.secondaryContainer,
+                                isDense: true,
+                                contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+                                border: OutlineInputBorder(
+                                  borderRadius: BorderRadius.circular(24),
+                                  borderSide: BorderSide.none,
+                                ),
+                                prefixIcon: IconButton(
+                                  tooltip: 'History and quick replies',
+                                  icon: const Icon(Icons.history),
+                                  onPressed: _showHistory,
                                 ),
                               ),
-                      ),
-                      if (!client.keyBar) ...[
-                        const SizedBox(width: 6),
-                        ValueListenableBuilder<TextEditingValue>(
-                          valueListenable: _message,
-                          builder: (context, val, _) => IconButton.filled(
-                            style: IconButton.styleFrom(
-                              backgroundColor: scheme.primary,
-                              foregroundColor: scheme.onPrimary,
                             ),
-                            tooltip: val.text.isEmpty ? 'Enter' : 'Send',
-                            icon: Icon(val.text.isEmpty ? Icons.keyboard_return : Icons.send_rounded),
-                            onPressed: _sendMessage,
+                    ),
+                    if (!client.keyBar) ...[
+                      const SizedBox(width: 6),
+                      ValueListenableBuilder<TextEditingValue>(
+                        valueListenable: _message,
+                        builder: (context, val, _) => IconButton.filled(
+                          style: IconButton.styleFrom(
+                            backgroundColor: scheme.primary,
+                            foregroundColor: scheme.onPrimary,
                           ),
+                          tooltip: val.text.isEmpty ? 'Enter' : 'Send',
+                          icon: Icon(val.text.isEmpty ? Icons.keyboard_return : Icons.send_rounded),
+                          onPressed: _sendMessage,
                         ),
-                        const SizedBox(width: 4),
-                      ],
+                      ),
+                      const SizedBox(width: 4),
                     ],
-                  ),
+                  ],
                 ),
               ),
           ],
