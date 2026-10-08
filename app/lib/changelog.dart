@@ -1,6 +1,12 @@
 /// Newest first. Shown once after an update; add an entry when bumping the version in pubspec.yaml.
 const changelog = <(String, List<String>)>[
   (
+    '1.8.1',
+    [
+      'herdr-bridge\'s token is now short, like K3MF-9QXA, and can be typed in any case. A token made before still works; to get a short one, delete ~/.config/herdr-bridge/token and restart the bridge.',
+    ]
+  ),
+  (
     '1.8.0',
     [
       'herdr-bridge now asks for a token, so nobody else on your computers or your tailnet can use it. Update the bridge, run herdr-bridge --print-token there, and enter it when editing the machine (tap it in the machines panel).',
