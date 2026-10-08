@@ -449,14 +449,14 @@ class _TerminalScreenState extends State<TerminalScreen> {
     );
   }
 
-  static Color _quotaColor(ColorScheme scheme, AgentUsage? usage) {
+  static (Color bg, Color fg) _quotaColors(ColorScheme scheme, AgentUsage? usage) {
     if (usage == null || usage.limits.isEmpty) {
-      return scheme.onSurfaceVariant.withAlpha(128);
+      return (scheme.onSurfaceVariant.withAlpha(25), scheme.onSurfaceVariant.withAlpha(150));
     }
     final pct = usage.highestPercent ?? 0.0;
-    if (pct >= 0.90) return scheme.error;
-    if (pct >= 0.75) return Colors.orange;
-    return Colors.green;
+    if (pct >= 0.90) return (scheme.error.withAlpha(35), scheme.error);
+    if (pct >= 0.75) return (Colors.orange.withAlpha(35), Colors.orange);
+    return (Colors.green.withAlpha(35), Colors.green);
   }
 
   static String _formatResetTime(String raw) {
@@ -1240,10 +1240,37 @@ class _TerminalScreenState extends State<TerminalScreen> {
           ),
         ),
         actions: [
-          IconButton(
-            tooltip: 'Usage and quotas',
-            icon: Icon(Icons.bolt, color: _quotaColor(scheme, currentUsage)),
-            onPressed: () => _showUsage(currentAgent, currentUsage),
+          Builder(
+            builder: (context) {
+              final (quotaBg, quotaFg) = _quotaColors(scheme, currentUsage);
+              return Padding(
+                padding: const EdgeInsets.only(right: 6),
+                child: Tooltip(
+                  message: 'Usage and quotas',
+                  child: Material(
+                    color: quotaBg,
+                    borderRadius: BorderRadius.circular(16),
+                    clipBehavior: Clip.antiAlias,
+                    child: InkWell(
+                      onTap: () => _showUsage(currentAgent, currentUsage),
+                      child: Container(
+                        height: 32,
+                        padding: const EdgeInsets.symmetric(horizontal: 8),
+                        alignment: Alignment.center,
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            AgentIcon(name: currentAgent?.name ?? '', size: 14, color: quotaFg),
+                            const SizedBox(width: 3),
+                            Icon(Icons.bolt, size: 16, color: quotaFg),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              );
+            },
           ),
           Padding(
             padding: const EdgeInsets.only(right: 8),

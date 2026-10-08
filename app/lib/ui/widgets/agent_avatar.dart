@@ -172,3 +172,37 @@ class AgentAvatar extends StatelessWidget {
     return avatar;
   }
 }
+
+/// A compact icon widget for an agent logo, optionally tinted monochrome with [color].
+class AgentIcon extends StatelessWidget {
+  final String name;
+  final double size;
+  final Color? color;
+
+  const AgentIcon({super.key, required this.name, this.size = 16, this.color});
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final lower = name.toLowerCase();
+    final logo = _logos.where((l) => l.$1.any(lower.contains)).firstOrNull;
+    final effectiveColor = color ?? scheme.onSurface;
+
+    return switch (logo) {
+      null => Icon(Icons.terminal, size: size, color: effectiveColor),
+      (_, final file, _) when file.endsWith('.png') => Image.asset(
+          'assets/logos/$file',
+          width: size,
+          height: size,
+          color: color,
+          colorBlendMode: color != null ? BlendMode.srcIn : null,
+        ),
+      (_, final file, final tint) => SvgPicture.asset(
+          'assets/logos/$file',
+          width: size,
+          height: size,
+          colorFilter: ColorFilter.mode(color ?? tint ?? scheme.onSurface, BlendMode.srcIn),
+        ),
+    };
+  }
+}

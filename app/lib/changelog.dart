@@ -1,6 +1,12 @@
 /// Newest first. Shown once after an update; add an entry when bumping the version in pubspec.yaml.
 const changelog = <(String, List<String>)>[
   (
+    '1.10.1',
+    [
+      'The usage button on the terminal\'s top bar shows the agent\'s logo beside ⚡, on a chip tinted by how much of its quota is used.',
+    ]
+  ),
+  (
     '1.10.0',
     [
       'Swipe sideways with two fingers on the terminal (or two fingers on a laptop\'s touchpad) to go to the next or previous agent. The agents on either side peek in while you swipe; let go past the tick to switch.',
