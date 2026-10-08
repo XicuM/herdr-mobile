@@ -1227,27 +1227,26 @@ void main() {
       await tester.tap(find.text('agent-task'));
       await settle();
 
-      // Conversation screen (TerminalScreen) has Chip with machine name 'MacBook Pro'
-      final chipFinder = find.byType(Chip);
-      expect(chipFinder, findsOneWidget);
-      expect(find.descendant(of: chipFinder, matching: find.text('MacBook Pro')), findsOneWidget);
+      // Conversation screen (TerminalScreen) has pill with machine name 'MacBook Pro'
+      final machineFinder = find.text('MacBook Pro');
+      expect(machineFinder, findsOneWidget);
 
       // Connecting status shows orange dot
-      final dotContainer =
-          tester.widget<Container>(find.descendant(of: chipFinder, matching: find.byType(Container)).first);
+      final dotContainer = tester.widget<Container>(
+          find.descendant(of: find.byTooltip('MacBook Pro · Connecting…'), matching: find.byType(Container)).at(1));
       final decoration = dotContainer.decoration as BoxDecoration;
       expect(decoration.color, equals(Colors.orange));
 
       // Connected status shows green dot
       client.setConnectedForTesting('10.0.0.1:7788', true);
       await settle();
-      final dotContainerConnected =
-          tester.widget<Container>(find.descendant(of: chipFinder, matching: find.byType(Container)).first);
+      final dotContainerConnected = tester.widget<Container>(
+          find.descendant(of: find.byTooltip('MacBook Pro · Connected'), matching: find.byType(Container)).at(1));
       final decorationConnected = dotContainerConnected.decoration as BoxDecoration;
       expect(decorationConnected.color, equals(Colors.green));
 
-      // Tapping the chip does not open edit machine dialog
-      await tester.tap(chipFinder);
+      // Tapping the machine pill does not open edit machine dialog
+      await tester.tap(machineFinder);
       await settle();
       expect(find.text('Edit machine'), findsNothing);
     });
@@ -1699,12 +1698,12 @@ void main() {
       await tester.pumpWidget(MaterialApp(home: TerminalScreen(client: client)));
       await tester.pump(const Duration(milliseconds: 300));
 
-      // The bolt icon button is inside the message box
-      final boltFinder = find.byIcon(Icons.bolt);
-      expect(boltFinder, findsOneWidget);
+      // The usage chip shows the remaining quota percentage
+      final quotaFinder = find.text('15%');
+      expect(quotaFinder, findsOneWidget);
 
-      // Tap the bolt icon button to open the usage sheet
-      await tester.tap(boltFinder);
+      // Tap the quota chip to open the usage sheet
+      await tester.tap(quotaFinder);
       await tester.pumpAndSettle();
 
       expect(find.text('claude'), findsOneWidget);

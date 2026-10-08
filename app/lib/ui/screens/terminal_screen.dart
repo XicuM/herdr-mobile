@@ -1243,6 +1243,9 @@ class _TerminalScreenState extends State<TerminalScreen> {
           Builder(
             builder: (context) {
               final (quotaBg, quotaFg) = _quotaColors(scheme, currentUsage);
+              final pct = currentUsage?.highestPercent != null
+                  ? ((1.0 - currentUsage!.highestPercent!).clamp(0.0, 1.0) * 100).round()
+                  : null;
               return Padding(
                 padding: const EdgeInsets.only(right: 6),
                 child: Tooltip(
@@ -1261,8 +1264,17 @@ class _TerminalScreenState extends State<TerminalScreen> {
                           mainAxisSize: MainAxisSize.min,
                           children: [
                             AgentIcon(name: currentAgent?.name ?? '', size: 14, color: quotaFg),
-                            const SizedBox(width: 3),
-                            Icon(Icons.bolt, size: 16, color: quotaFg),
+                            if (pct != null) ...[
+                              const SizedBox(width: 4),
+                              Text(
+                                '$pct%',
+                                style: TextStyle(
+                                  fontSize: 12,
+                                  fontWeight: FontWeight.bold,
+                                  color: quotaFg,
+                                ),
+                              ),
+                            ],
                           ],
                         ),
                       ),
@@ -1276,29 +1288,44 @@ class _TerminalScreenState extends State<TerminalScreen> {
             padding: const EdgeInsets.only(right: 8),
             child: Tooltip(
               message: '${client.nameOf(client.machine)} · ${machineStatus(client, client.machine)}',
-              child: Chip(
-                backgroundColor: scheme.secondaryContainer,
-                side: BorderSide.none,
-                labelStyle: TextStyle(color: scheme.onSecondaryContainer),
-                avatar: Container(
-                  width: 8,
-                  height: 8,
-                  decoration: BoxDecoration(
-                    color: switch (client.machine) {
-                      final m when client.isOff(m) => scheme.onSurfaceVariant,
-                      final m when client.errorOf(m) != null => scheme.error,
-                      final m when client.isConnected(m) => Colors.green,
-                      _ => Colors.orange,
-                    },
-                    shape: BoxShape.circle,
-                  ),
-                ),
-                label: ConstrainedBox(
-                  constraints: const BoxConstraints(maxWidth: 120),
-                  child: Text(
-                    client.nameOf(client.machine),
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
+              child: Material(
+                color: scheme.secondaryContainer,
+                borderRadius: BorderRadius.circular(16),
+                child: Container(
+                  height: 32,
+                  padding: const EdgeInsets.symmetric(horizontal: 8),
+                  alignment: Alignment.center,
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Container(
+                        width: 8,
+                        height: 8,
+                        decoration: BoxDecoration(
+                          color: switch (client.machine) {
+                            final m when client.isOff(m) => scheme.onSurfaceVariant,
+                            final m when client.errorOf(m) != null => scheme.error,
+                            final m when client.isConnected(m) => Colors.green,
+                            _ => Colors.orange,
+                          },
+                          shape: BoxShape.circle,
+                        ),
+                      ),
+                      const SizedBox(width: 6),
+                      ConstrainedBox(
+                        constraints: const BoxConstraints(maxWidth: 120),
+                        child: Text(
+                          client.nameOf(client.machine),
+                          style: TextStyle(
+                            fontSize: 12,
+                            fontWeight: FontWeight.w500,
+                            color: scheme.onSecondaryContainer,
+                          ),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ),
+                    ],
                   ),
                 ),
               ),

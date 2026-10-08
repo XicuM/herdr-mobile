@@ -1,6 +1,13 @@
 /// Newest first. Shown once after an update; add an entry when bumping the version in pubspec.yaml.
 const changelog = <(String, List<String>)>[
   (
+    '1.10.2',
+    [
+      'The usage chip on the terminal\'s top bar now displays the remaining quota percentage (e.g. 54%) beside the agent logo instead of the lightning icon.',
+      'The machine indicator in the terminal top bar is now a matching pill for visual consistency.',
+    ]
+  ),
+  (
     '1.10.1',
     [
       'The usage button on the terminal\'s top bar shows the agent\'s logo beside ⚡, on a chip tinted by how much of its quota is used.',
