@@ -99,6 +99,7 @@ class HerdrClientService extends ChangeNotifier {
     });
     _native('ready');
     _loadSystemSeed();
+    _android.invokeMethod<int>('sdk').then((v) => _sdk = v).ignore();
     // Back from sleep, a connect attempt made while the network was down may still be pending, or the
     // retry timer frozen or backed off; try again right away instead of waiting on either.
     AppLifecycleListener(
@@ -119,6 +120,11 @@ class HerdrClientService extends ChangeNotifier {
 
   /// Fails harmlessly off Android (e.g. in tests).
   void _native(String method, [Object? args]) => _android.invokeMethod(method, args).ignore();
+
+  int? _sdk;
+
+  /// Android 13+ confirms a copy itself, so the app shouldn't too.
+  bool get systemShowsCopies => (_sdk ?? 0) >= 33;
 
   /// Reread on every resume, since the wallpaper may have changed.
   void _loadSystemSeed() => _android.invokeMethod<int>('systemColor').then((c) {

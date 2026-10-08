@@ -23,6 +23,18 @@ class PtyChannel {
   StreamSubscription? _sub;
   Timer? _reconnectTimer;
   bool _disposed = false;
+  final _held = StringBuffer();
+  bool _hold = false;
+
+  /// While set (text is selected), frames wait instead of moving the text under the selection; cleared,
+  /// they're written in order.
+  set hold(bool value) {
+    if (_hold == value) return;
+    _hold = value;
+    if (value || _held.isEmpty) return;
+    terminal.write(_held.toString());
+    _held.clear();
+  }
 
   PtyChannel({
     required this.machine,
@@ -51,7 +63,7 @@ class PtyChannel {
         .transform(const Utf8Decoder(allowMalformed: true))
         .listen(
       (data) {
-        terminal.write(reset + data);
+        _hold ? _held.write(reset + data) : terminal.write(reset + data);
         if (reset.isNotEmpty) onAttach?.call();
         reset = '';
       },

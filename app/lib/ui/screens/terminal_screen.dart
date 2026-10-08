@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
@@ -55,6 +56,9 @@ class _TerminalScreenState extends State<TerminalScreen> {
   final _view = GlobalKey<TerminalViewState>();
   final _message = TextEditingController();
   final _messageFocus = FocusNode();
+  final _termFocus = FocusNode(); // the terminal's, to open the keyboard when a tap lifts ([_gateKeyboard])
+  bool _tapSelected = false; // the press began with text selected, so lifting it only clears that
+  Timer? _keyboardTimer; // a tap's keyboard, waiting to see it isn't a double-tap
   int _historyIndex = -1;
   String _savedDraft = '';
   PtyChannel? _ptyChannel;
@@ -71,8 +75,8 @@ class _TerminalScreenState extends State<TerminalScreen> {
   Offset? _twoAt; // where two fingers' midpoint started, while two are down
   double _twoDistance = 0; // and how far apart they were
   bool? _swiping; // what two fingers do: null until they pinch (false) or move sideways together (true)
-  bool _swiped = false; // the swipe has switched agent; once a gesture
-  double _swipeDx = 0; // how far the terminal follows a swipe, before it switches
+  double _swipeDx = 0; // how far the terminal follows a swipe; past [_swipeAt] on release, it switches
+  static const _swipeAt = 80.0;
   Offset _padPan = Offset.zero; // a touchpad's two-finger pan so far, until it picks an axis
   Axis? _padAxis;
   double _pinchFont = 0;
@@ -102,7 +106,11 @@ class _TerminalScreenState extends State<TerminalScreen> {
 
     _message.addListener(_onMessageChanged);
     _messageFocus.onKeyEvent = _onMessageKeyEvent;
-    _controller.addListener(() => setState(() {})); // shows the Copy button while text is selected
+    // Shows the Copy button and handles while text is selected, and holds the pane still meanwhile.
+    _controller.addListener(() {
+      _ptyChannel?.hold = _controller.selection != null;
+      setState(() {});
+    });
     widget.client.addListener(_onClientUpdate);
     HardwareKeyboard.instance.addHandler(_onHardwareKey);
     // The app now keeps running in the background (for alerts), so the pane is attached only while shown.
@@ -662,7 +670,9 @@ class _TerminalScreenState extends State<TerminalScreen> {
   /// one scroll long enough reaches the bottom (herdr caps it at a u16); an app on the alternate screen
   /// (Claude Code) gets each scroll as one wheel tick whatever its count, so it needs as many ticks back
   /// as went up. Send twice that: going past the bottom does nothing, falling short leaves the view up.
+  /// Input goes through here, so it also lets go of a selection, whose hold would hide what the input does.
   void _toLive() {
+    if (_controller.selection != null) _controller.clearSelection();
     if (_scrolledUp == 0) return;
     for (var i = 0; i < 2 * _scrolledUp; i++) {
       _ptyChannel?.sendScroll(-65535);
@@ -770,7 +780,31 @@ class _TerminalScreenState extends State<TerminalScreen> {
     }
     Clipboard.setData(ClipboardData(text: text.toString()));
     _controller.clearSelection();
-    ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Copied')));
+    if (!widget.client.systemShowsCopies) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Copied')));
+    }
+  }
+
+  /// Where a selection handle points, in the terminal's box: under the selection's first cell, or after its
+  /// last ([begin] false).
+  Offset? _handleAt(bool begin) {
+    final selection = _controller.selection?.normalized;
+    final render = _view.currentState?.renderTerminal;
+    if (selection == null || render == null || !render.hasSize) return null;
+    final at = render.getOffset(begin ? selection.begin : selection.end);
+    return Offset(at.dx + (widget.embedded ? 4 : 0), at.dy + render.lineHeight);
+  }
+
+  /// Moves the selection's first cell, or its last, to under the finger dragging its handle at [global].
+  void _dragHandle(bool begin, Offset global) {
+    final selection = _controller.selection?.normalized;
+    final render = _view.currentState?.renderTerminal;
+    if (selection == null || render == null) return;
+    // The finger holds the handle's drop, beside and below the point it moves; that point is the line's bottom.
+    final cell = render.getCellOffset(render.globalToLocal(global) + Offset(begin ? 10 : -10, -10 - render.lineHeight / 2));
+    final buffer = _terminal.buffer;
+    _controller.setSelection(buffer.createAnchorFromOffset(begin ? selection.end : selection.begin),
+        buffer.createAnchorFromOffset(cell));
   }
 
   /// Where the Copy button sits: just above the selection, or below it when that's off the top.
@@ -857,10 +891,11 @@ class _TerminalScreenState extends State<TerminalScreen> {
       _dragging = false;
       _pinched = false;
     }
+    if (e.kind == PointerDeviceKind.touch) _gateKeyboard(e);
     if (e is PointerMoveEvent && _pointers.length == 1 && !_pinched) return _scroll(e);
     if (_pointers.length != 2) {
+      if (_twoAt != null) _endSwipe();
       _twoAt = null;
-      if (_swipeDx != 0) setState(() => _swipeDx = 0);
       return;
     }
     _pinched = true; // the rest of the gesture never scrolls
@@ -872,7 +907,6 @@ class _TerminalScreenState extends State<TerminalScreen> {
       _twoDistance = distance;
       _pinchFont = widget.client.fontSize;
       _swiping = null;
-      _swiped = false;
       return;
     }
     // Fingers moving sideways together swipe; moving apart or together pinch, whichever shows first.
@@ -899,15 +933,53 @@ class _TerminalScreenState extends State<TerminalScreen> {
     return '${pane.terminalTitle.isNotEmpty ? pane.terminalTitle : agent?.name ?? ''}\n$place';
   }
 
-  /// Two fingers have moved [dx] sideways together: the terminal follows them a little, and past a threshold,
-  /// once a gesture, shows the next agent (fingers going left, as a page turns) or the previous ([stepAgent]).
+  /// The soft keyboard opens when a tap lifts (and isn't the first of a double-tap), as a text field's does, not when a finger lands, as xterm's own
+  /// would (on tap-down, before it knows a long-press or a scroll): those never bring it up, so the pane never
+  /// shrinks, and herdr never redraws it, under a selection being made. A keyboard already up stays up.
+  void _gateKeyboard(PointerEvent e) {
+    if (e is PointerDownEvent && _pointers.length == 1) {
+      _keyboardTimer?.cancel();
+      _tapSelected = _controller.selection != null;
+      // Unless its keyboard is up already. Focused with it put away (e.g. by back), xterm would bring it back on
+      // tap-down too, so this unfocuses it.
+      if (!_termFocus.hasFocus || MediaQuery.viewInsetsOf(context).bottom == 0) _termFocus.canRequestFocus = false;
+      return;
+    }
+    if ((e is! PointerUpEvent && e is! PointerCancelEvent) || _termFocus.canRequestFocus) return;
+    // After this event: a tap quicker than xterm's tap-down timeout gets its tap-down only once the gesture
+    // arena settles, after every listener has seen the release.
+    scheduleMicrotask(() {
+      if (mounted) _termFocus.canRequestFocus = true;
+    });
+    final tap = e is PointerUpEvent &&
+        _pointers.isEmpty &&
+        !_dragging &&
+        !_pinched &&
+        !_tapSelected &&
+        e.timeStamp - _downTime < kLongPressTimeout &&
+        (e.position - _downAt).distance < kTouchSlop;
+    if (!tap) return;
+    // A tap outside the message box puts its keyboard away, as outside any text field, rather than quietly
+    // sending what's typed next to the terminal instead.
+    if (_messageFocus.hasFocus) return _messageFocus.unfocus();
+    // Once a double-tap is ruled out: its second tap selects a word, which the keyboard would shift.
+    _keyboardTimer = Timer(kDoubleTapTimeout, () {
+      if (mounted && _controller.selection == null) _view.currentState?.requestKeyboard();
+    });
+  }
+
+  /// Two fingers have moved [dx] sideways together: the terminal follows them, with a tick as they pass the
+  /// point where letting go switches agent ([_endSwipe]).
   void _swipe(double dx) {
-    if (_swiped) return;
-    if (dx.abs() < 80) return setState(() => _swipeDx = dx / 2);
-    _swiped = true;
-    setState(() => _swipeDx = 0);
-    HapticFeedback.selectionClick();
-    widget.client.stepAgent(dx < 0 ? 1 : -1);
+    if ((dx.abs() >= _swipeAt) != (_swipeDx.abs() >= _swipeAt)) HapticFeedback.selectionClick();
+    setState(() => _swipeDx = dx);
+  }
+
+  /// Fingers lifted: past [_swipeAt], the next agent (fingers gone left, as a page turns) or the previous
+  /// ([stepAgent]); either way the terminal springs back into place.
+  void _endSwipe() {
+    if (_swipeDx.abs() >= _swipeAt) widget.client.stepAgent(_swipeDx < 0 ? 1 : -1);
+    if (_swipeDx != 0) setState(() => _swipeDx = 0);
   }
 
   /// Herdr holds the pane's history (see [PtyChannel.connect]), so dragging scrolls herdr's view a line
@@ -932,9 +1004,8 @@ class _TerminalScreenState extends State<TerminalScreen> {
     if (e is PointerPanZoomStartEvent) {
       _padPan = Offset.zero;
       _padAxis = null;
-      _swiped = false;
     }
-    if (e is PointerPanZoomEndEvent && _swipeDx != 0) setState(() => _swipeDx = 0);
+    if (e is PointerPanZoomEndEvent) _endSwipe();
     if (e is! PointerPanZoomUpdateEvent) return;
     _padPan += e.panDelta;
     if (_padAxis == null && _padPan.distance > kTouchSlop) {
@@ -947,6 +1018,7 @@ class _TerminalScreenState extends State<TerminalScreen> {
 
   /// Scrolls by [dy] pixels, positive toward older history.
   void _scrollBy(double dy) {
+    if (_controller.selection != null) _controller.clearSelection(); // it would stay on rows whose text moves
     final lineHeight = widget.client.fontSize * 1.1; // TerminalStyle height is 1.1
     _scrollRest += dy;
     final lines = _scrollRest ~/ lineHeight;
@@ -1008,6 +1080,7 @@ class _TerminalScreenState extends State<TerminalScreen> {
       return;
     }
     pty?.dispose();
+    if (_controller.selection != null) _controller.clearSelection(); // the old pane's text
     _ptyChannel = PtyChannel(
       machine: client.machine,
       paneId: paneId,
@@ -1025,6 +1098,8 @@ class _TerminalScreenState extends State<TerminalScreen> {
     _onMessageChanged();
     _message.removeListener(_onMessageChanged);
     _messageFocus.dispose();
+    _termFocus.dispose();
+    _keyboardTimer?.cancel();
     _lifecycle.dispose();
     widget.client.removeListener(_onClientUpdate);
     _controller.dispose();
@@ -1426,7 +1501,9 @@ class _TerminalScreenState extends State<TerminalScreen> {
                                         fontFamily: 'MesloLGS Nerd Font Mono',
                                         height: 1.1,
                                       ),
-                                      autofocus: true,
+                                      focusNode: _termFocus,
+                                      // For a hardware keyboard; on a phone it would open the soft one with every agent.
+                                      autofocus: !Platform.isAndroid,
                                       simulateScroll: false,
                                     )),
                                   ]),
@@ -1447,6 +1524,38 @@ class _TerminalScreenState extends State<TerminalScreen> {
                               ),
                             ),
                           ),
+                        // A text field's handles, to adjust the selection once the long-press has let go.
+                        for (final begin in [true, false])
+                          if (_handleAt(begin) case final at?)
+                            Positioned(
+                              left: at.dx - (begin ? 32 : 0),
+                              top: at.dy,
+                              child: GestureDetector(
+                                behavior: HitTestBehavior.opaque,
+                                onPanUpdate: (d) => _dragHandle(begin, d.globalPosition),
+                                child: SizedBox(
+                                  width: 32,
+                                  height: 32,
+                                  child: Align(
+                                    alignment: begin ? Alignment.topRight : Alignment.topLeft,
+                                    // A drop whose point touches the text, as Android's.
+                                    child: Container(
+                                      width: 20,
+                                      height: 20,
+                                      decoration: BoxDecoration(
+                                        color: scheme.primary,
+                                        borderRadius: BorderRadius.only(
+                                          topLeft: Radius.circular(begin ? 10 : 0),
+                                          topRight: Radius.circular(begin ? 0 : 10),
+                                          bottomLeft: const Radius.circular(10),
+                                          bottomRight: const Radius.circular(10),
+                                        ),
+                                      ),
+                                    ),
+                                  ),
+                                ),
+                              ),
+                            ),
                         if (_scrolledUp > 0)
                           // Back to live: a small round arrow, centred at the bottom.
                           Positioned(

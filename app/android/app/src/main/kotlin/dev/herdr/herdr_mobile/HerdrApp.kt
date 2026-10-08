@@ -89,6 +89,7 @@ class HerdrApp : Application() {
                 "openNotificationSettings" -> openNotificationSettings()
                 "isIgnoringBatteryOptimizations" -> return@setMethodCallHandler result.success(isIgnoringBatteryOptimizations())
                 // Material You's accent, from the wallpaper (Android 12+).
+                "sdk" -> return@setMethodCallHandler result.success(Build.VERSION.SDK_INT)
                 "systemColor" -> return@setMethodCallHandler result.success(
                     if (Build.VERSION.SDK_INT >= 31) getColor(android.R.color.system_accent1_500) else null)
             }

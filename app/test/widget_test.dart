@@ -205,7 +205,7 @@ void main() {
       expect(client.selectedPane?.tabId, 'w1:t11');
     });
 
-    testWidgets('Two fingers swiped sideways show the next agent, peeking at it first', (tester) async {
+    testWidgets('Two fingers swiped sideways show the next agent on release, peeking at it first', (tester) async {
       SharedPreferences.setMockInitialValues({'last_seen_changelog': changelog.first.$1});
       const m = '100.1.2.3:7788';
       final client = HerdrClientService()
@@ -237,12 +237,81 @@ void main() {
       expect(client.selectedPaneId, 'w1:p1');
       expect(find.textContaining('helper'), findsNothing);
 
-      await swipe(-120);
+      // Past the threshold, it switches only once the fingers lift.
+      await swipe(-120, before: () async => expect(client.selectedPaneId, 'w1:p1'));
       expect(client.selectedPaneId, 'w1:p2');
       await swipe(120);
       expect(client.selectedPaneId, 'w1:p1');
       await swipe(120);
       expect(client.selectedPaneId, 'w2:p4');
+    });
+
+    testWidgets('The keyboard opens when a tap on the terminal lifts, never for a long-press', (tester) async {
+      SharedPreferences.setMockInitialValues({'last_seen_changelog': changelog.first.$1});
+      final client = HerdrClientService()
+        ..setMachines(['100.1.2.3:7788'], [])
+        ..setSnapshotForTesting(twoWorkspaces())
+        ..selectPane('w1:p1');
+      await tester.pumpWidget(MaterialApp(home: TerminalScreen(client: client)));
+      await tester.pump();
+      final terminal = find.byType(TerminalView);
+
+      // Held down past the tap-down that xterm opens it on, and on to a long-press: still no keyboard. (A test's
+      // keyboard takes no room, so it counts as put away, as by back, with the terminal still focused.)
+      final press = await tester.startGesture(tester.getCenter(terminal));
+      await tester.pump(const Duration(milliseconds: 200));
+      expect(tester.testTextInput.isVisible, isFalse);
+      await tester.pump(const Duration(milliseconds: 600));
+      await press.up(timeStamp: const Duration(milliseconds: 800)); // a test's events are otherwise all at 0
+      await tester.pump();
+      expect(tester.testTextInput.isVisible, isFalse);
+
+      // A tap opens it once it can't be a double-tap's first.
+      await tester.tap(terminal);
+      await tester.pump();
+      expect(tester.testTextInput.isVisible, isFalse);
+      await tester.pump(const Duration(milliseconds: 400));
+      expect(tester.testTextInput.isVisible, isTrue);
+
+      // With the message box typed in, a tap on the terminal puts the keyboard away, as outside any text field.
+      await tester.tap(find.byType(TextField));
+      await tester.pump();
+      expect(tester.testTextInput.isVisible, isTrue);
+      await tester.tap(terminal);
+      await tester.pump(const Duration(milliseconds: 400));
+      expect(tester.testTextInput.isVisible, isFalse);
+      expect(find.byType(TextField).evaluate().isNotEmpty, isTrue);
+      await tester.pump(const Duration(seconds: 1)); // xterm's double-tap timer
+    });
+
+    testWidgets("A selection's handles adjust it, and Copy takes what they cover", (tester) async {
+      SharedPreferences.setMockInitialValues({'last_seen_changelog': changelog.first.$1});
+      String? copied;
+      tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(SystemChannels.platform, (call) async {
+        if (call.method == 'Clipboard.setData') copied = (call.arguments as Map)['text'] as String;
+        return null;
+      });
+      final client = HerdrClientService()
+        ..setMachines(['100.1.2.3:7788'], [])
+        ..setSnapshotForTesting(twoWorkspaces())
+        ..selectPane('w1:p1');
+      await tester.pumpWidget(MaterialApp(home: TerminalScreen(client: client)));
+      tester.widget<TerminalView>(find.byType(TerminalView)).terminal.write('hello brave new world');
+      await tester.pump();
+
+      // Long-press "hello" (the first cells) to select it, then drag its end handle on past "brave".
+      final view = tester.state<TerminalViewState>(find.byType(TerminalView)).renderTerminal;
+      final cell = view.cellSize;
+      await tester.longPressAt(view.localToGlobal(Offset(cell.width * 2, cell.height / 2)));
+      await tester.pump(const Duration(milliseconds: 500));
+      final handles = find.byWidgetPredicate((w) => w is GestureDetector && w.onPanUpdate != null);
+      expect(handles, findsNWidgets(2));
+      await tester.drag(handles.last, Offset(cell.width * 6, 0));
+      await tester.pump();
+      await tester.tap(find.text('Copy'));
+      await tester.pump();
+      expect(copied, 'hello brave');
+      await tester.pump(const Duration(seconds: 1));
     });
 
     testWidgets("The current tab's ⋮ moves or closes it", (tester) async {

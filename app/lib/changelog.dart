@@ -1,6 +1,15 @@
 /// Newest first. Shown once after an update; add an entry when bumping the version in pubspec.yaml.
 const changelog = <(String, List<String>)>[
   (
+    '1.10.0',
+    [
+      'Swipe sideways with two fingers on the terminal (or two fingers on a laptop\'s touchpad) to go to the next or previous agent. The agents on either side peek in while you swipe; let go past the tick to switch.',
+      'Copying works better: holding a finger on the text no longer brings up the keyboard and moves the text away. The keyboard opens when a quick tap lifts, the selected text holds still until you copy it, and its two handles adjust it.',
+      'With the message box typed in, tapping the terminal puts the keyboard away instead of quietly typing into the terminal.',
+      'Workspaces and machines have a ⋮ menu to move them up or down, and a long-press drags them. The current tab has a ⋮ menu to move or close it.',
+    ]
+  ),
+  (
     '1.9.0',
     [
       'Alt key navigation shortcuts for hardware keyboards: Alt+Left/Right to switch tabs, Alt+1..9 to jump directly to a tab, Alt+Up/Down to switch workspaces, and Alt+O to jump to agents needing attention.',
