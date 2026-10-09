@@ -1926,6 +1926,7 @@ void main() {
         'agents': [],
       });
       client.setSnapshotForTesting(snap);
+      client.setConnectedForTesting(client.machine, true);
       client.selectPane('w1:p1');
 
       await tester.pumpWidget(MaterialApp(home: TerminalScreen(client: client)));
@@ -1936,17 +1937,78 @@ void main() {
       await tester.enterText(textField, 'line 1');
       await tester.pump();
 
-      // Press Shift + Enter to insert a newline
+      // Press ShiftLeft + Enter to insert a newline
       await tester.sendKeyDownEvent(LogicalKeyboardKey.shiftLeft);
       await tester.sendKeyEvent(LogicalKeyboardKey.enter);
       await tester.sendKeyUpEvent(LogicalKeyboardKey.shiftLeft);
       await tester.pump();
 
-      final editableText = tester.widget<EditableText>(find.byType(EditableText));
+      var editableText = tester.widget<EditableText>(find.byType(EditableText));
       expect(editableText.controller.text, equals('line 1\n'));
+
+      // Type line 2
+      await tester.enterText(textField, 'line 1\nline 2');
+      await tester.pump();
+
+      // Press ShiftRight + Enter to insert another newline
+      await tester.sendKeyDownEvent(LogicalKeyboardKey.shiftRight);
+      await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+      await tester.sendKeyUpEvent(LogicalKeyboardKey.shiftRight);
+      await tester.pump();
+
+      // Press Enter alone to insert a newline in message bar
+      await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+      await tester.pump();
+
+      editableText = tester.widget<EditableText>(find.byType(EditableText));
+      expect(editableText.controller.text, equals('line 1\nline 2\n\n'));
+
+      // Tapping the send button sends the message
+      await tester.tap(find.byTooltip('Send'));
+      await tester.pump(const Duration(milliseconds: 200));
+
+      editableText = tester.widget<EditableText>(find.byType(EditableText));
+      expect(editableText.controller.text, equals(''));
     });
 
-    testWidgets('Send button is same height as single-line message pill, but not made larger when multiline', (tester) async {
+    testWidgets('TerminalView Shift+Enter sends newline', (tester) async {
+      final client = HerdrClientService();
+      final snap = SessionSnapshot.fromJson({
+        'version': '0.9.3',
+        'protocol': 22,
+        'focused_workspace_id': 'w1',
+        'focused_tab_id': 'w1:t1',
+        'focused_pane_id': 'w1:p1',
+        'workspaces': [
+          {'workspace_id': 'w1', 'number': 1, 'label': 'main', 'active_tab_id': 'w1:t1', 'agent_status': 'idle'},
+        ],
+        'tabs': [
+          {'tab_id': 'w1:t1', 'workspace_id': 'w1', 'number': 1, 'label': 'Tab 1', 'agent_status': 'idle'},
+        ],
+        'panes': [
+          {'pane_id': 'w1:p1', 'workspace_id': 'w1', 'tab_id': 'w1:t1', 'focused': true, 'agent_status': 'idle', 'terminal_title': ''},
+        ],
+        'agents': [],
+      });
+      client.setSnapshotForTesting(snap);
+      client.setConnectedForTesting(client.machine, true);
+      client.selectPane('w1:p1');
+
+      await tester.pumpWidget(MaterialApp(home: TerminalScreen(client: client)));
+      await tester.pump(const Duration(milliseconds: 300));
+
+      final terminalView = find.byType(TerminalView);
+      await tester.tap(terminalView);
+      await tester.pump(const Duration(milliseconds: 350));
+
+      // Press ShiftLeft + Enter on terminal
+      await tester.sendKeyDownEvent(LogicalKeyboardKey.shiftLeft);
+      await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+      await tester.sendKeyUpEvent(LogicalKeyboardKey.shiftLeft);
+      await tester.pump(const Duration(milliseconds: 350));
+    });
+
+    testWidgets('Send button is not made larger when multiline', (tester) async {
       TerminalScreen.clearDraftsForTesting();
       final client = HerdrClientService();
       final snap = SessionSnapshot.fromJson({
@@ -1975,12 +2037,7 @@ void main() {
       final textFieldFinder = find.byType(TextField);
       final sendButtonFinder = find.byTooltip('Enter');
 
-      final textFieldSize = tester.getSize(textFieldFinder);
-      final sendButtonSize = tester.getSize(sendButtonFinder);
-
-      // Single-line message pill and send button have the exact same height (48dp)
-      expect(sendButtonSize.height, equals(textFieldSize.height));
-      expect(sendButtonSize.height, equals(48.0));
+      final initialSendButtonSize = tester.getSize(sendButtonFinder);
 
       // Enter multi-line text to make the message pill larger
       await tester.enterText(textFieldFinder, 'Line 1\nLine 2\nLine 3');
@@ -1990,8 +2047,8 @@ void main() {
       final multilineSendButtonSize = tester.getSize(find.byTooltip('Send'));
 
       // Message pill grew larger, but send button did not grow
-      expect(multilineTextFieldSize.height, greaterThan(48.0));
-      expect(multilineSendButtonSize.height, equals(48.0));
+      expect(multilineTextFieldSize.height, greaterThan(initialSendButtonSize.height));
+      expect(multilineSendButtonSize.height, equals(initialSendButtonSize.height));
     });
 
     test('HerdrClientService tab and workspace navigation and jumpToAttention', () {

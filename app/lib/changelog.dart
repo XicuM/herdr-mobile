@@ -1,6 +1,13 @@
 /// Newest first. Shown once after an update; add an entry when bumping the version in pubspec.yaml.
 const changelog = <(String, List<String>)>[
   (
+    '1.12.3',
+    [
+      'In the message box, Enter inserts a newline and Ctrl+Enter (or the Send button) sends the message.',
+      'Shift+Enter in the terminal sends a newline.',
+    ]
+  ),
+  (
     '1.12.2',
     [
       'The machines panel in landscape wide mode now opens as a slide-in overlay drawer, matching the mobile and workspaces drawer behavior.',

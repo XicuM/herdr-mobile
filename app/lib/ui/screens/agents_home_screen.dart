@@ -969,9 +969,9 @@ class _AgentsHomeScreenState extends State<AgentsHomeScreen> {
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.end,
           children: [
-            // Its glyphs' top level with the summary's: titleMedium's 24px line puts them ~2px lower than bodySmall's 16px.
+            // Its glyphs' top level with the summary's: titleMedium's 24px line puts them ~4px lower than bodySmall's 16px.
             Padding(
-              padding: const EdgeInsets.only(top: 2),
+              padding: const EdgeInsets.only(top: 4),
               child: Text(
                 at != null ? AgentsHomeScreen.formatWhen(context, at) : '',
                 style: theme.textTheme.bodySmall?.copyWith(color: scheme.onSurfaceVariant),

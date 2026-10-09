@@ -111,6 +111,7 @@ class _TerminalScreenState extends State<TerminalScreen> {
 
     _message.addListener(_onMessageChanged);
     _messageFocus.onKeyEvent = _onMessageKeyEvent;
+    _termFocus.onKeyEvent = _onTermKeyEvent;
     // Shows the Copy button and handles while text is selected, and holds the pane still meanwhile.
     _controller.addListener(() {
       _ptyChannel?.hold = _controller.selection != null;
@@ -125,10 +126,34 @@ class _TerminalScreenState extends State<TerminalScreen> {
     SharedPreferences.getInstance().then((p) => _history = p.getStringList('message_history') ?? []);
   }
 
-  KeyEventResult _onMessageKeyEvent(FocusNode node, KeyEvent event) {
-    if (event is! KeyDownEvent) return KeyEventResult.ignored;
+  KeyEventResult _onTermKeyEvent(FocusNode node, KeyEvent event) {
+    if (event is! KeyDownEvent && event is! KeyRepeatEvent) return KeyEventResult.ignored;
     if (event.logicalKey == LogicalKeyboardKey.enter || event.logicalKey == LogicalKeyboardKey.numpadEnter) {
-      if (HardwareKeyboard.instance.isShiftPressed) {
+      final isShift = HardwareKeyboard.instance.isShiftPressed ||
+          HardwareKeyboard.instance.isLogicalKeyPressed(LogicalKeyboardKey.shift) ||
+          HardwareKeyboard.instance.isPhysicalKeyPressed(PhysicalKeyboardKey.shiftLeft) ||
+          HardwareKeyboard.instance.isPhysicalKeyPressed(PhysicalKeyboardKey.shiftRight);
+      if (isShift) {
+        if (event is KeyDownEvent) {
+          _send('\n');
+        }
+        return KeyEventResult.handled;
+      }
+    }
+    return KeyEventResult.ignored;
+  }
+
+  KeyEventResult _onMessageKeyEvent(FocusNode node, KeyEvent event) {
+    if (event is! KeyDownEvent && event is! KeyRepeatEvent) return KeyEventResult.ignored;
+    if (event.logicalKey == LogicalKeyboardKey.enter || event.logicalKey == LogicalKeyboardKey.numpadEnter) {
+      final isCtrl = HardwareKeyboard.instance.isControlPressed || HardwareKeyboard.instance.isMetaPressed;
+      if (isCtrl) {
+        if (event is KeyDownEvent) {
+          _sendMessage();
+        }
+        return KeyEventResult.handled;
+      }
+      if (event is KeyDownEvent) {
         final text = _message.text;
         final sel = _message.selection;
         final start = sel.start >= 0 ? sel.start : text.length;
@@ -138,11 +163,10 @@ class _TerminalScreenState extends State<TerminalScreen> {
           text: newText,
           selection: TextSelection.collapsed(offset: start + 1),
         );
-        return KeyEventResult.handled;
       }
-      _sendMessage();
       return KeyEventResult.handled;
     }
+    if (event is! KeyDownEvent) return KeyEventResult.ignored;
     if (event.logicalKey == LogicalKeyboardKey.arrowUp) {
       if (_history.isNotEmpty) {
         if (_historyIndex == -1) _savedDraft = _message.text;
@@ -1695,8 +1719,7 @@ class _TerminalScreenState extends State<TerminalScreen> {
                               minLines: 1,
                               maxLines: 4,
                               textCapitalization: TextCapitalization.sentences,
-                              textInputAction: TextInputAction.send,
-                              onEditingComplete: _sendMessage,
+                              textInputAction: TextInputAction.newline,
                               // An M3 filled text field, pill-shaped like a search bar.
                               decoration: InputDecoration(
                                 hintText: 'Message terminal…',
@@ -1722,7 +1745,6 @@ class _TerminalScreenState extends State<TerminalScreen> {
                         valueListenable: _message,
                         builder: (context, val, _) => IconButton.filled(
                           style: IconButton.styleFrom(
-                            fixedSize: const Size(48, 48),
                             backgroundColor: scheme.primary,
                             foregroundColor: scheme.onPrimary,
                           ),
