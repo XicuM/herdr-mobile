@@ -38,6 +38,15 @@ class AgentsHomeScreen extends StatefulWidget {
   State<AgentsHomeScreen> createState() => _AgentsHomeScreenState();
 }
 
+sealed class _Detail {}
+
+class _SettingsDetail extends _Detail {}
+
+class _MachineDetail extends _Detail {
+  final String? machine;
+  _MachineDetail([this.machine]);
+}
+
 class _AgentsHomeScreenState extends State<AgentsHomeScreen> {
   HerdrClientService get client => widget.client;
 
@@ -46,13 +55,16 @@ class _AgentsHomeScreenState extends State<AgentsHomeScreen> {
 
   final _scaffold = GlobalKey<ScaffoldState>();
 
-  /// Agents closed but still undoable: hidden from the list until their SnackBar goes.
-  final _closing = <(String, String)>{};
-
   /// What's searched for; null while the search is closed.
   String? _query;
   final _search = TextEditingController();
   final _searchFocus = FocusNode();
+
+  /// The detail view shown on the right side in landscape wide mode instead of the terminal.
+  _Detail? _detail;
+
+  /// Whether the machines panel is open beside the agents list in landscape wide mode.
+  bool _showMachines = false;
 
   /// The terminal's own screen, while it's pushed over the agents (on a narrow screen).
   Route<dynamic>? _terminalRoute;
@@ -60,10 +72,12 @@ class _AgentsHomeScreenState extends State<AgentsHomeScreen> {
 
   /// Wide enough for the terminal beside the agents, as Material's list-detail layout: a tablet in
   /// landscape, though not a phone in landscape, whose terminal would be left too narrow.
-  static bool _isWide(BuildContext context) {
+  static bool isWide(BuildContext context) {
     final size = MediaQuery.sizeOf(context);
     return size.width >= 840 && size.shortestSide >= 600;
   }
+
+  static bool _isWide(BuildContext context) => isWide(context);
 
   @override
   void dispose() {
@@ -108,11 +122,7 @@ class _AgentsHomeScreenState extends State<AgentsHomeScreen> {
     }
     if (key == LogicalKeyboardKey.keyM) {
       if (event is! KeyUpEvent) {
-        if (_scaffold.currentState?.isEndDrawerOpen == true) {
-          _scaffold.currentState?.closeEndDrawer();
-        } else {
-          _scaffold.currentState?.openEndDrawer();
-        }
+        _openMachines();
       }
       return true;
     }
@@ -135,6 +145,8 @@ class _AgentsHomeScreenState extends State<AgentsHomeScreen> {
     if (key == LogicalKeyboardKey.keyH) {
       if (event is! KeyUpEvent) {
         if (_query != null) _closeSearch();
+        if (_showMachines) setState(() => _showMachines = false);
+        if (_detail != null) setState(() => _detail = null);
         if (_scaffold.currentState?.isDrawerOpen == true) _scaffold.currentState?.closeDrawer();
         if (_scaffold.currentState?.isEndDrawerOpen == true) _scaffold.currentState?.closeEndDrawer();
       }
@@ -221,8 +233,8 @@ class _AgentsHomeScreenState extends State<AgentsHomeScreen> {
                   'Every agent on every machine is listed here, the ones that need you first. Tap one for its '
                   'terminal, swipe it right to mute it or left to close it, and long-press to pick several. '
                   'In a terminal, tap the top bar for the workspace\'s actions; the tabs sit under it. Type in '
-                  'the box at the bottom, with autocorrect and voice, and swipe it sideways to go from agent to '
-                  'agent. Pinch or use the volume keys to change the font size.',
+                  'the box at the bottom, with autocorrect and voice. Swipe the terminal sideways with two '
+                  'fingers to go from agent to agent, and pinch it to change the font size.',
                 )
               : Column(
                   mainAxisSize: MainAxisSize.min,
@@ -270,8 +282,13 @@ class _AgentsHomeScreenState extends State<AgentsHomeScreen> {
             child: ListTile(
                 leading: Icon(_selected.contains(key) ? Icons.check_box_outline_blank : Icons.check_box_outlined),
                 title: Text(_selected.contains(key) ? 'Deselect' : 'Select'))),
-        const PopupMenuItem(
-            value: 'close', child: ListTile(leading: Icon(Icons.delete_outline), title: Text('Close'))),
+        PopupMenuItem(
+          value: 'close',
+          child: ListTile(
+            leading: Icon(Icons.close, color: Theme.of(context).colorScheme.error),
+            title: Text('Close', style: TextStyle(color: Theme.of(context).colorScheme.error)),
+          ),
+        ),
       ],
     );
     if (!mounted) return;
@@ -301,37 +318,35 @@ class _AgentsHomeScreenState extends State<AgentsHomeScreen> {
     setState(_selected.clear);
   }
 
-  /// Hides [agents] at once and closes them once the SnackBar goes without Undo, or another replaces it.
-  /// One at a time, so each close sees the snapshot after the last and keeps their workspace alive.
+  /// Closes [agents] unless undone. One at a time, so each close sees the snapshot after the last and keeps
+  /// their workspace alive.
   void _close(List<(String, String)> agents) {
-    setState(() {
-      _selected.clear();
-      _closing.addAll(agents);
-    });
-    final messenger = ScaffoldMessenger.of(context)..hideCurrentSnackBar();
-    messenger
-        .showSnackBar(SnackBar(
-          content: Text(agents.length == 1 ? 'Agent closed' : '${agents.length} agents closed'),
-          action: SnackBarAction(label: 'Undo', onPressed: () {}),
-        ))
-        .closed
-        .then((reason) async {
-      if (reason != SnackBarClosedReason.action) {
-        for (final (m, id) in agents) {
-          await client.closePane(id, m);
-        }
+    setState(_selected.clear);
+    closeWithUndo(context, client, agents.length == 1 ? 'Agent closed' : '${agents.length} agents closed',
+        [for (final (m, id) in agents) '$m/$id'], () async {
+      for (final (m, id) in agents) {
+        await client.closePane(id, m);
       }
-      if (mounted) setState(() => _closing.removeAll(agents));
     });
   }
 
   /// To the machines' panel, adding one.
   void _addMachine() {
+    if (_isWide(context)) {
+      setState(() => _detail = _MachineDetail());
+      return;
+    }
     _openMachines();
-    showMachineDialog(context, client);
+    showMachinePage(context, client);
   }
 
-  void _openMachines() => _scaffold.currentState?.openEndDrawer();
+  void _openMachines() {
+    if (_isWide(context)) {
+      setState(() => _showMachines = !_showMachines);
+    } else {
+      _scaffold.currentState?.openEndDrawer();
+    }
+  }
 
   /// Closes the drawer, then goes on to [to].
   void _fromDrawer(void Function(BuildContext) to) {
@@ -339,13 +354,21 @@ class _AgentsHomeScreenState extends State<AgentsHomeScreen> {
     to(context);
   }
 
-  void _openSettings(BuildContext context) =>
-      Navigator.push(context, MaterialPageRoute(builder: (_) => SettingsScreen(client: client)));
+  void _openSettings(BuildContext context) {
+    if (_isWide(context)) {
+      setState(() => _detail = _SettingsDetail());
+      return;
+    }
+    Navigator.push(context, MaterialPageRoute(builder: (_) => SettingsScreen(client: client)));
+  }
 
   /// Pushes the selected pane's terminal; on a wide screen it's already beside the agents.
   Future<void> _openTerminal(BuildContext context) async {
     if (_isWide(context)) {
-      setState(() {});
+      setState(() {
+        _detail = null;
+        _showMachines = false;
+      });
       return;
     }
     final route = _terminalRoute = MaterialPageRoute(builder: (_) => TerminalScreen(client: client));
@@ -384,8 +407,24 @@ class _AgentsHomeScreenState extends State<AgentsHomeScreen> {
       if (wide && route != null && route.isActive) {
         Navigator.popUntil(context, (r) => r == route);
         Navigator.pop(context);
-      } else if (!wide && showing && ModalRoute.of(context)?.isCurrent == true) {
-        _openTerminal(context);
+      } else if (!wide) {
+        if (_detail != null) {
+          final d = _detail;
+          _detail = null;
+          if (d is _SettingsDetail) {
+            Navigator.push(context, MaterialPageRoute(builder: (_) => SettingsScreen(client: client)));
+          } else if (d is _MachineDetail) {
+            Navigator.push(
+              context,
+              MaterialPageRoute(
+                fullscreenDialog: true,
+                builder: (_) => MachineScreen(client: client, machine: d.machine),
+              ),
+            );
+          }
+        } else if (showing && ModalRoute.of(context)?.isCurrent == true) {
+          _openTerminal(context);
+        }
       }
     });
   }
@@ -410,7 +449,7 @@ class _AgentsHomeScreenState extends State<AgentsHomeScreen> {
           if (s == null) continue;
           final pane = {for (final p in s.panes) p.id: p};
           for (final a in s.agents) {
-            if (!_closing.contains((m, a.paneId))) rows.add((m, s, a, pane[a.paneId]));
+            rows.add((m, s, a, pane[a.paneId]));
           }
         }
         int rank(AgentModel a) => switch (_urgency.indexOf(a.status)) { -1 => _urgency.length, final i => i };
@@ -494,7 +533,6 @@ class _AgentsHomeScreenState extends State<AgentsHomeScreen> {
         final showing = paneId != null &&
             !client.isDisconnected &&
             machines.contains(client.machine) &&
-            !_closing.contains((client.machine, paneId)) &&
             (client.snapshot == null || client.selectedPane != null);
         _onWidthChange(wide, showing);
 
@@ -502,7 +540,7 @@ class _AgentsHomeScreenState extends State<AgentsHomeScreen> {
             ? AppBar(
                 leading: IconButton(
                   tooltip: 'Clear selection',
-                  icon: const Icon(Icons.close),
+                  icon: const Icon(Icons.arrow_back),
                   onPressed: () => setState(_selected.clear),
                 ),
                 title: Text('${_selected.length}'),
@@ -519,7 +557,7 @@ class _AgentsHomeScreenState extends State<AgentsHomeScreen> {
                   ),
                   IconButton(
                     tooltip: 'Close',
-                    icon: const Icon(Icons.delete_outline),
+                    icon: const Icon(Icons.close),
                     onPressed: () => _close(_selected.toList()),
                   ),
                 ],
@@ -631,104 +669,155 @@ class _AgentsHomeScreenState extends State<AgentsHomeScreen> {
                                 itemBuilder: (context, i) => _tile(context, rows[i], machines.length > 1),
                               );
 
-        return PopScope(
-          // Back leaves the selection first, then the search.
-          canPop: !selecting && !searching,
+        final Widget scaffold = PopScope(
+          // Back leaves the selection first, then the search, then the detail view or machines panel.
+          canPop: !selecting && !searching && _detail == null && !_showMachines,
           onPopInvokedWithResult: (didPop, _) {
             if (didPop) return;
             if (selecting) return setState(_selected.clear);
-            _closeSearch();
+            if (searching) return _closeSearch();
+            if (_showMachines) return setState(() => _showMachines = false);
+            if (_detail != null) return setState(() => _detail = null);
           },
           child: Scaffold(
-            key: _scaffold,
-            // Only the ☰ opens it: an edge swipe would fight the rows' swipe to mute and Android's back.
-            drawerEnableOpenDragGesture: false,
-            drawer: Drawer(
-              child: SafeArea(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Padding(
-                      padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
-                      child: Text('Workspaces', style: Theme.of(context).textTheme.titleLarge),
-                    ),
-                    Expanded(child: WorkspaceList(client: client, open: () => _fromDrawer(_openTerminal))),
-                    const Divider(height: 1),
-                    ListTile(
-                      leading: const Icon(Icons.settings_outlined),
-                      title: const Text('Settings'),
-                      onTap: () => _fromDrawer(_openSettings),
-                    ),
-                  ],
-                ),
-              ),
-            ),
-            // The machines, on the side their icon is: each with how it's doing and a switch; its + adds one.
-            endDrawerEnableOpenDragGesture: false,
-            endDrawer: Drawer(
-              child: SafeArea(
-                child: Column(
-                  children: [
-                    Padding(
-                      padding: const EdgeInsets.fromLTRB(16, 8, 4, 0),
-                      child: Row(
-                        children: [
-                          Expanded(child: Text('Machines', style: Theme.of(context).textTheme.titleLarge)),
-                          IconButton(
-                            tooltip: 'Add machine',
-                            icon: const Icon(Icons.add),
-                            onPressed: () => showMachineDialog(context, client),
-                          ),
-                        ],
-                      ),
-                    ),
-                    Expanded(child: MachineList(client: client)),
-                  ],
-                ),
-              ),
-            ),
-            appBar: wide ? null : bar,
-            body: wide
-                ? Row(
+              key: _scaffold,
+              // Only the ☰ opens it: an edge swipe would fight the rows' swipe to mute and Android's back.
+              drawerEnableOpenDragGesture: false,
+              drawer: Drawer(
+                child: SafeArea(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      SizedBox(width: 360, child: Column(children: [bar, Expanded(child: list)])),
-                      const VerticalDivider(width: 1),
-                      Expanded(
-                        child: showing
-                            // Its scrolling (the terminal's output, the tab strip) stops here, or it would tint
-                            // the agents' top bar as if the list had scrolled under it.
-                            ? NotificationListener<Notification>(
-                                onNotification: (n) => n is ScrollNotification || n is ScrollMetricsNotification,
-                                child: TerminalScreen(
-                                  client: client,
-                                  embedded: true,
-                                  onOpenDrawer: () {
-                                    if (_scaffold.currentState?.isDrawerOpen == true) {
-                                      _scaffold.currentState?.closeDrawer();
-                                    } else {
-                                      _scaffold.currentState?.openDrawer();
-                                    }
-                                  },
-                                  onOpenMachines: () {
-                                    if (_scaffold.currentState?.isEndDrawerOpen == true) {
-                                      _scaffold.currentState?.closeEndDrawer();
-                                    } else {
-                                      _scaffold.currentState?.openEndDrawer();
-                                    }
-                                  },
-                                  onOpenSearch: () {
-                                    _searchFocus.requestFocus();
-                                    setState(() => _query = _query ?? '');
-                                  },
-                                ),
-                              )
-                            : _empty(context, Icons.terminal, 'No agent open', 'Pick one to see its terminal.', null),
+                      Padding(
+                        padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
+                        child: Text('Workspaces', style: Theme.of(context).textTheme.titleLarge),
+                      ),
+                      Expanded(child: WorkspaceList(client: client, open: () => _fromDrawer(_openTerminal))),
+                      const Divider(height: 1),
+                      ListTile(
+                        leading: const Icon(Icons.settings_outlined),
+                        title: const Text('Settings'),
+                        onTap: () => _fromDrawer(_openSettings),
                       ),
                     ],
-                  )
-                : list,
-          ),
-        );
+                  ),
+                ),
+              ),
+              // The machines, on the side their icon is: each with how it's doing and a switch; its + adds one.
+              endDrawerEnableOpenDragGesture: false,
+              endDrawer: Drawer(
+                child: SafeArea(
+                  child: Column(
+                    children: [
+                      Padding(
+                        padding: const EdgeInsets.fromLTRB(16, 8, 4, 0),
+                        child: Row(
+                          children: [
+                            Expanded(child: Text('Machines', style: Theme.of(context).textTheme.titleLarge)),
+                            IconButton(
+                              tooltip: 'Add machine',
+                              icon: const Icon(Icons.add),
+                              onPressed: () => showMachinePage(context, client),
+                            ),
+                          ],
+                        ),
+                      ),
+                      Expanded(child: MachineList(client: client)),
+                    ],
+                  ),
+                ),
+              ),
+              appBar: wide ? null : bar,
+              body: wide
+                  ? Row(
+                      children: [
+                        SizedBox(width: 360, child: Column(children: [bar, Expanded(child: list)])),
+                        const VerticalDivider(width: 1),
+                        if (_showMachines) ...[
+                          SizedBox(
+                            width: 304,
+                            child: Material(
+                              color: Theme.of(context).colorScheme.surface,
+                              child: Column(
+                                children: [
+                                  AppBar(
+                                    leading: IconButton(
+                                      icon: const Icon(Icons.close),
+                                      tooltip: 'Close',
+                                      onPressed: () => setState(() => _showMachines = false),
+                                    ),
+                                    title: const Text('Machines'),
+                                    actions: [
+                                      IconButton(
+                                        tooltip: 'Add machine',
+                                        icon: const Icon(Icons.add),
+                                        onPressed: () => showMachinePage(context, client),
+                                      ),
+                                      const SizedBox(width: 4),
+                                    ],
+                                  ),
+                                  Expanded(child: MachineList(client: client)),
+                                ],
+                              ),
+                            ),
+                          ),
+                          const VerticalDivider(width: 1),
+                        ],
+                        Expanded(
+                          child: switch (_detail) {
+                            _SettingsDetail() => SettingsScreen(
+                                client: client,
+                                onClose: () => setState(() => _detail = null),
+                              ),
+                            _MachineDetail(:final machine) => MachineScreen(
+                                // Its fields are filled in once: another machine (or + after one) needs its own.
+                                key: ValueKey(machine),
+                                client: client,
+                                machine: machine,
+                                onClose: () => setState(() => _detail = null),
+                              ),
+                            null => showing
+                                // Its scrolling (the terminal's output, the tab strip) stops here, or it would tint
+                                // the agents' top bar as if the list had scrolled under it.
+                                ? NotificationListener<Notification>(
+                                    onNotification: (n) => n is ScrollNotification || n is ScrollMetricsNotification,
+                                    child: TerminalScreen(
+                                      client: client,
+                                      embedded: true,
+                                      onOpenDrawer: () {
+                                        if (_scaffold.currentState?.isDrawerOpen == true) {
+                                          _scaffold.currentState?.closeDrawer();
+                                        } else {
+                                          _scaffold.currentState?.openDrawer();
+                                        }
+                                      },
+                                      onOpenMachines: _openMachines,
+                                      onOpenSearch: () {
+                                        _searchFocus.requestFocus();
+                                        setState(() => _query = _query ?? '');
+                                      },
+                                    ),
+                                  )
+                                : _empty(
+                                    context, Icons.terminal, 'No agent open', 'Pick one to see its terminal.', null),
+                          },
+                        ),
+                      ],
+                    )
+                  : list,
+            ),
+          );
+
+        return wide
+            ? MachineDetailScope(
+                onOpenDetail: (m) {
+                  _scaffold.currentState?.closeEndDrawer();
+                  _scaffold.currentState?.closeDrawer();
+                  setState(() => _detail = _MachineDetail(m));
+                },
+                child: scaffold,
+              )
+            : scaffold;
       },
     );
   }
@@ -771,34 +860,37 @@ class _AgentsHomeScreenState extends State<AgentsHomeScreen> {
         if (workspaces.isNotEmpty) ...[
           header('Workspaces'),
           for (final (m, s, ws) in workspaces)
-            ListTile(
-              leading: StatusDot(ws.agentStatus, size: 10),
-              minLeadingWidth: 10,
-              title: Text(
-                ws.isLinkedWorktree
-                    ? (s.workspaces
-                            .where((w) => !w.isLinkedWorktree && w.repoKey == ws.repoKey)
-                            .firstOrNull
-                            ?.displayName ??
-                        ws.displayName)
-                    : ws.displayName,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-              ),
-              subtitle: Text(
-                sub(m, [
-                  ws.isLinkedWorktree
-                      ? (ws.gitBranch?.replaceFirst('worktree/', '') ?? ws.displayName)
-                      : ws.gitBranch
-                ]),
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-              ),
-              onTap: () => open(m, () => client.selectWorkspace(ws.id)),
-              onLongPress: () {
+            // Held and lifted (or right-clicked), its menu, as in the drawer.
+            HoldMenu(
+              onMenu: (at) {
                 if (client.machine != m) client.switchMachine(m);
-                showWorkspaceActions(context, client, ws, onShow: () => _openTerminal(context));
+                showWorkspaceContextMenu(context, client, ws, at, onShow: () => _openTerminal(context));
               },
+              child: ListTile(
+                leading: StatusDot(ws.agentStatus, size: 10),
+                minLeadingWidth: 10,
+                title: Text(
+                  ws.isLinkedWorktree
+                      ? (s.workspaces
+                              .where((w) => !w.isLinkedWorktree && w.repoKey == ws.repoKey)
+                              .firstOrNull
+                              ?.displayName ??
+                          ws.displayName)
+                      : ws.displayName,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
+                subtitle: Text(
+                  sub(m, [
+                    ws.isLinkedWorktree
+                        ? (ws.gitBranch?.replaceFirst('worktree/', '') ?? ws.displayName)
+                        : ws.gitBranch
+                  ]),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
+                onTap: () => open(m, () => client.selectWorkspace(ws.id)),
+              ),
             ),
         ],
         if (tabs.isNotEmpty) ...[
@@ -863,7 +955,7 @@ class _AgentsHomeScreenState extends State<AgentsHomeScreen> {
       direction: _selected.isEmpty ? DismissDirection.horizontal : DismissDirection.none,
       background: behind(scheme.secondaryContainer, scheme.onSecondaryContainer,
           muted ? Icons.notifications_outlined : Icons.notifications_off_outlined, muted ? 'Unmute' : 'Mute', true),
-      secondaryBackground: behind(scheme.errorContainer, scheme.onErrorContainer, Icons.delete_outline, 'Close', false),
+      secondaryBackground: behind(scheme.errorContainer, scheme.onErrorContainer, Icons.close, 'Close', false),
       confirmDismiss: (direction) async {
         if (direction == DismissDirection.startToEnd) {
           client.setMuted(agent.paneId, !muted, machine);
@@ -883,11 +975,17 @@ class _AgentsHomeScreenState extends State<AgentsHomeScreen> {
                 : null,
         leading: GestureDetector(
           onTap: () => _toggle(key),
+          // Selected, the check sits in the status ring's place, so the row keeps its size.
           child: selected
-              ? CircleAvatar(
-                  radius: 20,
-                  backgroundColor: scheme.primary,
-                  child: Icon(Icons.check, color: scheme.onPrimary),
+              ? Container(
+                  padding: const EdgeInsets.all(1.5),
+                  decoration:
+                      BoxDecoration(shape: BoxShape.circle, border: Border.all(color: scheme.primary, width: 3)),
+                  child: CircleAvatar(
+                    radius: 20,
+                    backgroundColor: scheme.primary,
+                    child: Icon(Icons.check, color: scheme.onPrimary),
+                  ),
                 )
               : AgentAvatar(name: agent.name, status: agent.status),
         ),

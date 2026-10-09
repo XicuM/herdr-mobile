@@ -139,7 +139,6 @@ class AgentAvatar extends StatelessWidget {
     final logo = _logos.where((l) => l.$1.any(lower.contains)).firstOrNull;
     final size = radius * 1.2;
     final agentStatus = status != null ? AgentStatus.fromString(status) : null;
-    final hasRing = agentStatus != null && agentStatus != AgentStatus.unknown;
 
     Widget avatar = CircleAvatar(
       radius: radius,
@@ -157,14 +156,16 @@ class AgentAvatar extends StatelessWidget {
       },
     );
 
-    if (hasRing) {
+    // With a status, the ring's room is kept even with no agent (left clear), so every row's avatar is one size.
+    if (agentStatus != null) {
       final ringWidth = radius <= 12 ? 2.5 : 3.0;
       final ringPadding = radius <= 12 ? 1.0 : 1.5;
       return Container(
         padding: EdgeInsets.all(ringPadding),
         decoration: BoxDecoration(
           shape: BoxShape.circle,
-          border: Border.all(color: agentStatus.color, width: ringWidth),
+          border: Border.all(
+              color: agentStatus == AgentStatus.unknown ? Colors.transparent : agentStatus.color, width: ringWidth),
         ),
         child: avatar,
       );

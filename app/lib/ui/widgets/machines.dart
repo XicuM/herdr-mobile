@@ -1,10 +1,12 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import '../../services/herdr_client.dart';
+import 'workspaces.dart';
 
 /// The machines' panel: every saved machine, a green dot or a warning for how it's doing, and a switch. Each connects on its own, so
 /// several are on at once. The machines a bridge reaches sit indented under it, and its switch is theirs
-/// too. Tap one to edit or remove it; the panel's + adds either kind ([showMachineDialog]). Its ⋮ moves it up or
-/// down, and a long-press drags it; the order is the app's own. With [only], just those, unindented, to sit in the
+/// too. Tap one to edit or remove it; the panel's + adds either kind ([showMachinePage]). Hold one and lift to
+/// move it up or down (or right-click), hold and drag to reorder it; the order is the app's own. With [only], just those, unindented, to sit in the
 /// search results.
 class MachineList extends StatelessWidget {
   final HerdrClientService client;
@@ -24,7 +26,7 @@ class MachineList extends StatelessWidget {
         ),
       );
     }
-    // [m]'s row; its ⋮ moves it among its siblings, and [drag] is its index to long-press and drag it by.
+    // [m]'s row; its menu moves it among its siblings, and [drag] is its index to hold and drag it by.
     Widget row(String m, {int? drag}) {
       final siblings = client.machines.where((x) => HerdrClientService.parentOf(x) == HerdrClientService.parentOf(m));
       final k = siblings.toList().indexOf(m);
@@ -50,46 +52,26 @@ class MachineList extends StatelessWidget {
           case 'down':
             client.moveMachine(m, k + 1);
           case 'edit':
-            showMachineDialog(context, client, m);
+            showMachinePage(context, client, m);
         }
       }
 
-      final tile = GestureDetector(
+      final tile = HoldMenu(
         key: ValueKey(m),
-        onSecondaryTapUp: (d) => menu(d.globalPosition),
+        onMenu: menu,
         child: ListTile(
           contentPadding:
-              EdgeInsets.only(left: only != null || HerdrClientService.parentOf(m) == null ? 16 : 40, right: 4),
-          onTap: () => showMachineDialog(context, client, m),
-          // A green dot while it shows its agents, a warning when it can't (the why is in its dialog).
-          leading: SizedBox(
-            width: 24,
-            child: client.errorOf(m) != null
-                ? Icon(Icons.warning_amber_rounded, color: scheme.error)
-                : client.isConnected(m)
-                    ? const Center(child: CircleAvatar(radius: 5, backgroundColor: Colors.green))
-                    : null,
-          ),
+              EdgeInsets.only(left: only != null || HerdrClientService.parentOf(m) == null ? 16 : 40, right: 16),
+          onTap: () => showMachinePage(context, client, m),
+          leading: SizedBox(width: 24, child: machineStatusIcon(client, m, scheme)),
           minLeadingWidth: 24,
           title: Text(client.nameOf(m), maxLines: 1, overflow: TextOverflow.ellipsis),
           subtitle: HerdrClientService.parentOf(m) == null && client.nameOf(m) != m
               ? Text(m, maxLines: 1, overflow: TextOverflow.ellipsis)
               : null,
-          trailing: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Switch(
-                value: !client.isOff(m),
-                onChanged: (on) => on ? client.connect(m) : client.disconnect(m),
-              ),
-              Builder(
-                builder: (context) => IconButton(
-                  tooltip: 'More',
-                  icon: const Icon(Icons.more_vert),
-                  onPressed: () => menu((context.findRenderObject() as RenderBox).localToGlobal(Offset.zero)),
-                ),
-              ),
-            ],
+          trailing: Switch(
+            value: !client.isOff(m),
+            onChanged: (on) => on ? client.connect(m) : client.disconnect(m),
           ),
         ),
       );
@@ -157,48 +139,210 @@ String machineStatus(HerdrClientService client, String m) {
   return (address.substring(0, i), int.tryParse(address.substring(i + 1)) ?? 7788);
 }
 
-/// Adds a machine when [m] is null, else edits or removes it. A new one is either a bridge, at its
-/// address, or an SSH machine saved in a bridge's herdr (`herdr machine add`), which that bridge then
-/// reaches. One a bridge reaches is edited and removed in that herdr, where it comes from: its name and
-/// its SSH target.
-void showMachineDialog(BuildContext context, HerdrClientService client, [String? m]) {
-  final reached = m != null && HerdrClientService.parentOf(m) != null;
-  final bridges = client.machines.where((x) => HerdrClientService.parentOf(x) == null).toList();
-  var via = bridges.where(client.isConnected).firstOrNull ?? bridges.firstOrNull;
+/// A green dot while [m] shows its agents, a warning when it can't (the why is [machineStatus]), a hollow
+/// dot while it connects, and none while it's off. The one way a machine's state is drawn, everywhere.
+Widget? machineStatusIcon(HerdrClientService client, String m, ColorScheme scheme) => client.isOff(m)
+    ? null
+    : client.errorOf(m) != null
+        ? Icon(Icons.warning_amber_rounded, color: scheme.error)
+        : Center(
+            child: Container(
+              width: 10,
+              height: 10,
+              decoration: client.isConnected(m)
+                  ? const BoxDecoration(shape: BoxShape.circle, color: Colors.green)
+                  : BoxDecoration(shape: BoxShape.circle, border: Border.all(color: scheme.onSurfaceVariant, width: 1.5)),
+            ),
+          );
+
+/// How [m] is doing (the whole reason when it fails) beside its switch, on a card: the top of its sheet and
+/// its page.
+Widget machineStatusCard(HerdrClientService client, String m, ThemeData theme) => Card.filled(
+      margin: EdgeInsets.zero,
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(16, 12, 12, 12),
+        child: Row(
+          children: [
+            SizedBox(width: 24, height: 20, child: machineStatusIcon(client, m, theme.colorScheme)),
+            const SizedBox(width: 12),
+            Expanded(
+              child: SelectableText(machineStatus(client, m),
+                  style: theme.textTheme.bodyMedium
+                      ?.copyWith(color: client.errorOf(m) != null ? theme.colorScheme.error : null)),
+            ),
+            const SizedBox(width: 8),
+            Switch(
+              value: !client.isOff(m),
+              onChanged: (on) => on ? client.connect(m) : client.disconnect(m),
+            ),
+          ],
+        ),
+      ),
+    );
+
+/// [m] at a glance, from the terminal's machine chip: its name and address, Edit ([showMachinePage]), and
+/// its status card.
+void showMachineSheet(BuildContext context, HerdrClientService client, String m) {
+  showModalBottomSheet(
+    context: context,
+    showDragHandle: true,
+    builder: (sheetContext) => ListenableBuilder(
+      listenable: client,
+      builder: (sheetContext, _) {
+        if (!client.machines.contains(m)) return const SizedBox();
+        final theme = Theme.of(sheetContext);
+        final scheme = theme.colorScheme;
+        final address = HerdrClientService.parentOf(m) == null ? m : client.targetOf(m);
+        return SafeArea(
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                ListTile(
+                  contentPadding: const EdgeInsets.only(left: 4),
+                  leading: CircleAvatar(
+                    backgroundColor: scheme.secondaryContainer,
+                    foregroundColor: scheme.onSecondaryContainer,
+                    child: Icon(HerdrClientService.parentOf(m) == null ? Icons.lan_outlined : Icons.terminal),
+                  ),
+                  title: Text(client.nameOf(m),
+                      style: theme.textTheme.titleMedium?.copyWith(fontWeight: FontWeight.bold)),
+                  subtitle: address != null && address != client.nameOf(m) ? Text(address) : null,
+                  trailing: IconButton.filledTonal(
+                    icon: const Icon(Icons.edit_outlined),
+                    tooltip: 'Edit',
+                    onPressed: () {
+                      Navigator.pop(sheetContext);
+                      showMachinePage(context, client, m);
+                    },
+                  ),
+                ),
+                const SizedBox(height: 12),
+                machineStatusCard(client, m, theme),
+              ],
+            ),
+          ),
+        );
+      },
+    ),
+  );
+}
+
+typedef MachineDetailCallback = void Function(String? m);
+
+class MachineDetailScope extends InheritedWidget {
+  final MachineDetailCallback onOpenDetail;
+
+  const MachineDetailScope({super.key, required this.onOpenDetail, required super.child});
+
+  static MachineDetailCallback? of(BuildContext context) =>
+      context.dependOnInheritedWidgetOfExactType<MachineDetailScope>()?.onOpenDetail;
+
+  @override
+  bool updateShouldNotify(MachineDetailScope oldWidget) => onOpenDetail != oldWidget.onOpenDetail;
+}
+
+/// Adds a machine when [m] is null, else shows it to edit or remove: how it's doing, its switch, its
+/// settings, and for a bridge the machines it reaches. A new one is either a bridge, at its address, or an
+/// SSH machine saved in a bridge's herdr (`herdr machine add`), which that bridge then reaches. One a
+/// bridge reaches is edited and removed in that herdr, where it comes from: its name and its SSH target.
+void showMachinePage(BuildContext context, HerdrClientService client, [String? m]) {
+  final openDetail = MachineDetailScope.of(context);
+  if (openDetail != null) {
+    openDetail(m);
+    return;
+  }
+  Navigator.push(
+    context,
+    MaterialPageRoute(
+      fullscreenDialog: true,
+      builder: (_) => MachineScreen(client: client, machine: m),
+    ),
+  );
+}
+
+class MachineScreen extends StatefulWidget {
+  final HerdrClientService client;
+  final String? machine;
+  final VoidCallback? onClose;
+
+  const MachineScreen({super.key, required this.client, this.machine, this.onClose});
+
+  @override
+  State<MachineScreen> createState() => _MachineScreenState();
+}
+
+class _MachineScreenState extends State<MachineScreen> {
+  HerdrClientService get client => widget.client;
+  String? get m => widget.machine;
+
+  late bool reached;
+  late List<String> bridges;
+  String? via;
   var ssh = false;
   var busy = false;
-  final name = TextEditingController(text: m == null || client.nameOf(m) == m ? '' : client.nameOf(m));
-  final address = TextEditingController(text: m ?? '');
-  final target = TextEditingController(text: reached ? client.targetOf(m) ?? '' : '');
-  final token = TextEditingController(text: m == null || reached ? '' : client.tokenOf(m) ?? '');
+  late final TextEditingController name;
+  late final TextEditingController address;
+  late final TextEditingController target;
+  late final TextEditingController token;
 
-  Future<void> save(BuildContext dialogContext, StateSetter setState) async {
+  @override
+  void initState() {
+    super.initState();
+    reached = m != null && HerdrClientService.parentOf(m!) != null;
+    bridges = client.machines.where((x) => HerdrClientService.parentOf(x) == null).toList();
+    via = bridges.where(client.isConnected).firstOrNull ?? bridges.firstOrNull;
+    name = TextEditingController(text: m == null || client.nameOf(m!) == m ? '' : client.nameOf(m!));
+    address = TextEditingController(text: m ?? '');
+    target = TextEditingController(text: reached ? client.targetOf(m!) ?? '' : '');
+    token = TextEditingController(text: _dashed(_tokenChars(m == null || reached ? '' : client.tokenOf(m!) ?? '')));
+  }
+
+  @override
+  void dispose() {
+    name.dispose();
+    address.dispose();
+    target.dispose();
+    token.dispose();
+    super.dispose();
+  }
+
+  void _close() {
+    if (widget.onClose != null) {
+      widget.onClose!();
+    } else {
+      Navigator.maybePop(context);
+    }
+  }
+
+  Future<void> _save() async {
     if (ssh || reached) {
       if (target.text.trim().isEmpty || (!reached && via == null)) return;
       setState(() => busy = true);
       final done = reached
-          ? await client.editSshMachine(m, target.text.trim(), name.text.trim())
+          ? await client.editSshMachine(m!, target.text.trim(), name.text.trim())
           : await client.addSshMachine(via!, target.text.trim(), name.text.trim());
-      if (!dialogContext.mounted) return;
-      if (done) return Navigator.pop(dialogContext);
+      if (!mounted) return;
+      if (done) return _close();
       return setState(() => busy = false);
     }
     if (address.text.trim().isEmpty) return;
     final (host, port) = _parseAddress(address.text);
-    final to = reached ? m : '$host:$port';
-    final key = token.text.replaceAll(RegExp(r'\s'), '');
-    Navigator.pop(dialogContext);
-    if (m != null) return client.updateMachine(m, to: to, name: name.text.trim(), token: key);
+    final to = reached ? m! : '$host:$port';
+    final key = _tokenChars(token.text);
+    _close();
+    if (m != null) return client.updateMachine(m!, to: to, name: name.text.trim(), token: key);
     client.configure(to, name: name.text.trim(), token: key);
   }
 
-  Future<void> remove(BuildContext dialogContext) async {
+  Future<void> _remove() async {
     final ok = await showDialog<bool>(
-      context: dialogContext,
+      context: context,
       builder: (confirmContext) => AlertDialog(
         title: const Text('Remove machine?'),
         content: Text(reached
-            ? '"${client.nameOf(m)}" will be removed from herdr on ${client.nameOf(HerdrClientService.parentOf(m)!)}.'
+            ? '"${client.nameOf(m!)}" will be removed from herdr on ${client.nameOf(HerdrClientService.parentOf(m!)!)}.'
             : '"${client.nameOf(m!)}" ($m) will be forgotten.'),
         actions: [
           TextButton(onPressed: () => Navigator.pop(confirmContext, false), child: const Text('Cancel')),
@@ -210,57 +354,86 @@ void showMachineDialog(BuildContext context, HerdrClientService client, [String?
         ],
       ),
     );
-    if (ok != true || !dialogContext.mounted) return;
-    Navigator.pop(dialogContext);
-    reached ? client.removeSshMachine(m) : client.removeMachine(m!);
+    if (ok != true || !mounted) return;
+    _close();
+    reached ? client.removeSshMachine(m!) : client.removeMachine(m!);
   }
 
-  showDialog(
-    context: context,
-    builder: (dialogContext) => StatefulBuilder(
-      builder: (dialogContext, setState) {
-        final theme = Theme.of(dialogContext);
-        return AlertDialog(
-          title: Text(m == null ? 'Add machine' : 'Edit machine'),
-          content: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.stretch,
+  @override
+  Widget build(BuildContext context) {
+    return ListenableBuilder(
+      listenable: client,
+      builder: (context, _) {
+        final theme = Theme.of(context);
+        final scheme = theme.colorScheme;
+        // Gone meanwhile (e.g. its bridge was removed): nothing left to edit.
+        if (m != null && !client.machines.contains(m)) return const Scaffold();
+        Widget section(String title) => Padding(
+              padding: const EdgeInsets.fromLTRB(4, 24, 4, 12),
+              child: Text(title, style: theme.textTheme.titleSmall?.copyWith(color: scheme.primary)),
+            );
+        final children = m == null || reached
+            ? const <String>[]
+            : client.machines.where((x) => HerdrClientService.parentOf(x) == m).toList();
+        return Scaffold(
+          appBar: AppBar(
+            automaticallyImplyLeading: widget.onClose == null,
+            leading: widget.onClose != null
+                ? IconButton(
+                    icon: const Icon(Icons.close),
+                    tooltip: 'Close',
+                    onPressed: _close,
+                  )
+                : null,
+            title: Text(m == null ? 'Add machine' : client.nameOf(m!)),
+            actions: [
+              TextButton(
+                onPressed: busy ? null : _save,
+                child: Text(m == null ? 'Add' : 'Save'),
+              ),
+              const SizedBox(width: 8),
+            ],
+            bottom: busy
+                ? const PreferredSize(preferredSize: Size.fromHeight(4), child: LinearProgressIndicator())
+                : null,
+          ),
+          body: ListView(
+            padding: const EdgeInsets.fromLTRB(16, 16, 16, 32),
             children: [
-              if (m == null && bridges.isNotEmpty) ...[
+              if (m != null) machineStatusCard(client, m!, theme),
+              if (m == null && bridges.isNotEmpty)
                 SegmentedButton<bool>(
                   segments: const [
-                    ButtonSegment(value: false, label: Text('Bridge')),
-                    ButtonSegment(value: true, label: Text('SSH')),
+                    ButtonSegment(value: false, icon: Icon(Icons.lan_outlined), label: Text('Bridge')),
+                    ButtonSegment(value: true, icon: Icon(Icons.terminal), label: Text('SSH')),
                   ],
                   selected: {ssh},
                   onSelectionChanged: busy ? null : (v) => setState(() => ssh = v.first),
                 ),
-                const SizedBox(height: 16),
-              ],
-              if (reached) ...[
-                if (client.errorOf(m) case final error?) ...[
-                  SelectableText(error, style: theme.textTheme.bodySmall?.copyWith(color: theme.colorScheme.error)),
-                  const SizedBox(height: 16),
-                ],
+              section('Connection'),
+              if (reached)
                 TextField(
                   controller: target,
                   enabled: !busy,
                   keyboardType: TextInputType.url,
-                  decoration: const InputDecoration(
+                  decoration: InputDecoration(
                     labelText: 'SSH target',
-                    helperText: 'Changing it sets the machine up there again',
-                    border: OutlineInputBorder(),
+                    prefixIcon: const Icon(Icons.terminal),
+                    helperText:
+                        'Saved in herdr on ${client.nameOf(HerdrClientService.parentOf(m!)!)}; changing it sets the machine up there again',
+                    helperMaxLines: 2,
+                    border: const OutlineInputBorder(),
                   ),
-                ),
-                const SizedBox(height: 16),
-              ] else if (ssh) ...[
+                )
+              else if (ssh) ...[
                 if (bridges.length > 1) ...[
                   DropdownMenu<String>(
                     initialSelection: via,
                     expandedInsets: EdgeInsets.zero,
                     label: const Text('Via'),
+                    leadingIcon: const Icon(Icons.lan_outlined),
                     enabled: !busy,
-                    onSelected: (b) => via = b,
+                    onSelected: (b) => setState(() => via = b),
                     dropdownMenuEntries: [
                       for (final b in bridges) DropdownMenuEntry(value: b, label: client.nameOf(b))
                     ],
@@ -274,11 +447,11 @@ void showMachineDialog(BuildContext context, HerdrClientService client, [String?
                   keyboardType: TextInputType.url,
                   decoration: InputDecoration(
                     labelText: 'SSH target',
+                    prefixIcon: const Icon(Icons.terminal),
                     helperText: 'user@host, saved in herdr on ${client.nameOf(via ?? '')}',
                     border: const OutlineInputBorder(),
                   ),
                 ),
-                const SizedBox(height: 16),
               ] else ...[
                 TextField(
                   controller: address,
@@ -286,52 +459,114 @@ void showMachineDialog(BuildContext context, HerdrClientService client, [String?
                   keyboardType: TextInputType.url,
                   decoration: const InputDecoration(
                     labelText: 'Address',
+                    prefixIcon: Icon(Icons.lan_outlined),
                     helperText: 'Tailscale IP or name; add :port if not 7788',
                     border: OutlineInputBorder(),
                   ),
                 ),
                 const SizedBox(height: 16),
-                TextField(
-                  controller: token,
-                  autocorrect: false,
-                  enableSuggestions: false,
-                  keyboardType: TextInputType.visiblePassword,
-                  decoration: const InputDecoration(
-                    labelText: 'Token',
-                    helperText: 'herdr-bridge --print-token on that computer',
-                    border: OutlineInputBorder(),
-                  ),
-                ),
-                const SizedBox(height: 16),
+                _TokenField(controller: token),
               ],
+              section('Display'),
               TextField(
                 controller: name,
-                autofocus: m != null,
                 enabled: !busy,
-                decoration: const InputDecoration(labelText: 'Name (optional)', border: OutlineInputBorder()),
-                onSubmitted: (_) => save(dialogContext, setState),
+                decoration: InputDecoration(
+                  labelText: 'Name',
+                  prefixIcon: const Icon(Icons.label_outline),
+                  hintText: reached || ssh ? target.text : address.text,
+                  helperText: 'Optional; the address is shown without one',
+                  border: const OutlineInputBorder(),
+                ),
+                onSubmitted: (_) => _save(),
               ),
-              if (busy) ...[
-                const SizedBox(height: 16),
-                const LinearProgressIndicator(),
+              if (children.isNotEmpty) ...[
+                section('Reached over SSH'),
+                MachineList(client: client, only: children),
+              ],
+              if (m != null) ...[
+                const SizedBox(height: 24),
+                const Divider(),
+                const SizedBox(height: 8),
+                ListTile(
+                  contentPadding: EdgeInsets.zero,
+                  enabled: !busy,
+                  iconColor: scheme.error,
+                  textColor: scheme.error,
+                  leading: const Icon(Icons.delete_outline),
+                  title: Text(reached ? 'Remove from herdr' : 'Remove machine'),
+                  subtitle: Text(reached
+                      ? 'Deletes it from herdr on ${client.nameOf(HerdrClientService.parentOf(m!)!)}'
+                      : 'Forgets it on this phone'),
+                  onTap: _remove,
+                ),
               ],
             ],
           ),
-          actions: [
-            if (m != null)
-              TextButton(
-                style: TextButton.styleFrom(foregroundColor: theme.colorScheme.error),
-                onPressed: () => remove(dialogContext),
-                child: const Text('Remove'),
-              ),
-            TextButton(onPressed: busy ? null : () => Navigator.pop(dialogContext), child: const Text('Cancel')),
-            TextButton(
-              onPressed: busy ? null : () => save(dialogContext, setState),
-              child: Text(m == null ? (ssh ? 'Add' : 'Add & connect') : 'Save'),
-            ),
-          ],
         );
       },
-    ),
-  );
+    );
+  }
+}
+
+/// A token as the bridge compares it: without the spaces and dashes it ignores, in capitals as it prints
+/// them (it ignores case too).
+String _tokenChars(String s) => s.replaceAll(RegExp(r'[\s-]'), '').toUpperCase();
+
+/// [raw] in groups of four, `K3MF-9QXA` as `herdr-bridge --print-token` prints it.
+String _dashed(String raw) =>
+    [for (var i = 0; i < raw.length; i += 4) raw.substring(i, i + 4 > raw.length ? raw.length : i + 4)].join('-');
+
+/// The bridge's token, one field that groups what is typed or pasted in fours and hides a saved one until
+/// asked.
+class _TokenField extends StatefulWidget {
+  final TextEditingController controller;
+
+  const _TokenField({required this.controller});
+
+  @override
+  State<_TokenField> createState() => _TokenFieldState();
+}
+
+class _TokenFieldState extends State<_TokenField> {
+  late var _hidden = widget.controller.text.isNotEmpty;
+
+  @override
+  Widget build(BuildContext context) {
+    return TextField(
+      controller: widget.controller,
+      obscureText: _hidden,
+      autocorrect: false,
+      enableSuggestions: false,
+      keyboardType: TextInputType.visiblePassword,
+      textCapitalization: TextCapitalization.characters,
+      style: const TextStyle(fontFamily: 'monospace', letterSpacing: 2),
+      decoration: InputDecoration(
+        labelText: 'Token',
+        hintText: 'XXXX-XXXX',
+        prefixIcon: const Icon(Icons.key_outlined),
+        suffixIcon: IconButton(
+          icon: Icon(_hidden ? Icons.visibility_outlined : Icons.visibility_off_outlined),
+          tooltip: _hidden ? 'Show token' : 'Hide token',
+          onPressed: () => setState(() => _hidden = !_hidden),
+        ),
+        helperText: 'Run herdr-bridge --print-token on that computer',
+        border: const OutlineInputBorder(),
+      ),
+      inputFormatters: [
+        TextInputFormatter.withFunction((old, v) {
+          var raw = _tokenChars(v.text);
+          // Raw characters before the cursor, so it stays put as dashes come and go.
+          var at = _tokenChars(v.text.substring(0, v.selection.end.clamp(0, v.text.length))).length;
+          // Backspace over a dash deletes the character before it.
+          if (v.text.length < old.text.length && raw == _tokenChars(old.text) && at > 0) {
+            raw = raw.substring(0, at - 1) + raw.substring(at);
+            at--;
+          }
+          return TextEditingValue(
+              text: _dashed(raw), selection: TextSelection.collapsed(offset: at + (at > 0 ? (at - 1) ~/ 4 : 0)));
+        }),
+      ],
+    );
+  }
 }

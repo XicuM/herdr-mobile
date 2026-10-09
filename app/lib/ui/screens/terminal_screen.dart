@@ -7,6 +7,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:xterm/xterm.dart';
 // ignore: implementation_imports
 import 'package:xterm/src/ui/palette_builder.dart'; // the palette xterm paints with, to resolve a cell's colour
+import '../../models/agent_status.dart';
 import '../../models/session.dart';
 import '../../services/herdr_client.dart';
 import '../../services/pty_channel.dart';
@@ -67,6 +68,8 @@ class _TerminalScreenState extends State<TerminalScreen> {
   List<String> _history = []; // sent messages, newest first, shared by every pane
   String? _draftKey; // the pane whose draft is in the message box
   int _scrolledUp = 0; // scrolls back into the pane's history; 0 is live
+  int _scrolledLines = 0; // the lines those scrolls carried, to scroll back there after a reattach
+  String? _scrolledPane; // the pane (machine/pane) they were in
   bool _left = false; // popped back to the agents, since the machine went off
 
   // Pinch-to-zoom, two-finger swipes between agents and history scrolling, tracked from raw pointers so
@@ -122,6 +125,22 @@ class _TerminalScreenState extends State<TerminalScreen> {
 
   KeyEventResult _onMessageKeyEvent(FocusNode node, KeyEvent event) {
     if (event is! KeyDownEvent) return KeyEventResult.ignored;
+    if (event.logicalKey == LogicalKeyboardKey.enter || event.logicalKey == LogicalKeyboardKey.numpadEnter) {
+      if (HardwareKeyboard.instance.isShiftPressed) {
+        final text = _message.text;
+        final sel = _message.selection;
+        final start = sel.start >= 0 ? sel.start : text.length;
+        final end = sel.end >= 0 ? sel.end : text.length;
+        final newText = text.replaceRange(start, end, '\n');
+        _message.value = TextEditingValue(
+          text: newText,
+          selection: TextSelection.collapsed(offset: start + 1),
+        );
+        return KeyEventResult.handled;
+      }
+      _sendMessage();
+      return KeyEventResult.handled;
+    }
     if (event.logicalKey == LogicalKeyboardKey.arrowUp) {
       if (_history.isNotEmpty) {
         if (_historyIndex == -1) _savedDraft = _message.text;
@@ -217,10 +236,12 @@ class _TerminalScreenState extends State<TerminalScreen> {
         if (event is! KeyUpEvent) {
           final pane = client.selectedPane;
           if (pane != null) {
+            final m = client.machine;
+            closeWithUndo(context, client, client.snapshot?.agentOf(pane.id) != null ? 'Agent closed' : 'Pane closed',
+                ['$m/${pane.id}'], () => client.closePane(pane.id, m));
             if (!widget.embedded && Navigator.canPop(context)) {
               Navigator.pop(context);
             }
-            client.closePane(pane.id);
           }
         }
         return true;
@@ -316,7 +337,7 @@ class _TerminalScreenState extends State<TerminalScreen> {
           } else if (isZoomOut) {
             client.setFontSize(client.fontSize - 1);
           } else if (isZoomReset) {
-            client.setFontSize(14);
+            client.setFontSize(HerdrClientService.defaultFontSize);
           }
         }
         return true;
@@ -324,7 +345,7 @@ class _TerminalScreenState extends State<TerminalScreen> {
     }
 
     if (key != LogicalKeyboardKey.audioVolumeUp && key != LogicalKeyboardKey.audioVolumeDown) return false;
-    if (client.volumeKeys == VolumeKeys.volume) return false;
+    if (client.volumeKeys == VolumeKeys.volume || !Platform.isAndroid) return false;
     if (event is! KeyUpEvent) {
       final up = key == LogicalKeyboardKey.audioVolumeUp;
       if (client.volumeKeys == VolumeKeys.arrows) {
@@ -334,11 +355,6 @@ class _TerminalScreenState extends State<TerminalScreen> {
       }
     }
     return true;
-  }
-
-  void _showError(String message) {
-    if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(message)));
   }
 
   /// Everything typed or tapped reaches the pane here, with an armed CTRL applied once. Typing while
@@ -365,10 +381,7 @@ class _TerminalScreenState extends State<TerminalScreen> {
   /// An empty box just sends Enter. A [quickReply] is sent in its place, leaving the box and history be.
   void _sendMessage([String? quickReply]) {
     final text = quickReply ?? _message.text;
-    if (_ptyChannel == null || !widget.client.connected) {
-      _showError('Not connected to terminal');
-      return;
-    }
+    if (_ptyChannel == null || !widget.client.connected) return;
     _toLive();
     final channel = _ptyChannel;
     if (text.isEmpty) {
@@ -415,7 +428,7 @@ class _TerminalScreenState extends State<TerminalScreen> {
                         style: Theme.of(context)
                             .textTheme
                             .titleSmall
-                            ?.copyWith(color: Theme.of(context).colorScheme.onSurfaceVariant)),
+                            ?.copyWith(color: Theme.of(context).colorScheme.primary)),
                   ),
                   for (final h in _history)
                     ListTile(
@@ -449,28 +462,28 @@ class _TerminalScreenState extends State<TerminalScreen> {
     );
   }
 
-  static (Color bg, Color fg) _quotaColors(ColorScheme scheme, AgentUsage? usage) {
-    if (usage == null || usage.limits.isEmpty) {
-      return (scheme.onSurfaceVariant.withAlpha(25), scheme.onSurfaceVariant.withAlpha(150));
-    }
-    final pct = usage.highestPercent ?? 0.0;
-    if (pct >= 0.90) return (scheme.error.withAlpha(35), scheme.error);
-    if (pct >= 0.75) return (Colors.orange.withAlpha(35), Colors.orange);
-    return (Colors.green.withAlpha(35), Colors.green);
-  }
+  /// How much of a quota is [used], as a colour from the status palette: done's green while there's plenty,
+  /// draft peach from 75%, needs-you red from 90%; grey when nothing is recorded, so that never looks fine.
+  static Color _quotaColor(ColorScheme scheme, double? used) => switch (used) {
+        null => scheme.onSurfaceVariant,
+        >= 0.90 => AgentStatus.blocked.color,
+        >= 0.75 => AgentStatus.draftColor,
+        _ => AgentStatus.done.color,
+      };
 
   static String _formatResetTime(String raw) {
     try {
       final parsed = DateTime.parse(raw).toLocal();
       final diff = parsed.difference(DateTime.now());
       if (diff.isNegative) return 'shortly';
-      if (diff.inHours > 24) {
-        final days = (diff.inHours / 24).ceil();
-        return 'in $days ${days == 1 ? 'day' : 'days'}';
+      if (diff.inHours >= 24) {
+        final days = diff.inDays;
+        final h = diff.inHours % 24;
+        return h > 0 ? 'in ${days}d ${h}h' : 'in ${days}d';
       }
       if (diff.inHours > 0) {
         final m = diff.inMinutes % 60;
-        return 'in ${diff.inHours}h ${m}m';
+        return m > 0 ? 'in ${diff.inHours}h ${m}m' : 'in ${diff.inHours}h';
       }
       if (diff.inMinutes > 0) {
         return 'in ${diff.inMinutes}m';
@@ -493,6 +506,10 @@ class _TerminalScreenState extends State<TerminalScreen> {
     FocusScope.of(context).unfocus();
     showModalBottomSheet(
       context: context,
+      // Sized to its content: the default caps a sheet at 9/16 of the screen, which cuts an agent with several
+      // limits (Antigravity's four) off at its edge, its last card flush against it with no hint there's more.
+      isScrollControlled: true,
+      useSafeArea: true,
       builder: (context) {
         final theme = Theme.of(context);
         final scheme = theme.colorScheme;
@@ -501,7 +518,7 @@ class _TerminalScreenState extends State<TerminalScreen> {
         final limits = usage?.limits ?? [];
 
         return SafeArea(
-          child: Padding(
+          child: SingleChildScrollView(
             padding: const EdgeInsets.fromLTRB(20, 16, 20, 24),
             child: Column(
               mainAxisSize: MainAxisSize.min,
@@ -529,11 +546,7 @@ class _TerminalScreenState extends State<TerminalScreen> {
                     Builder(builder: (context) {
                       final leftPct = ((1.0 - limit.percent).clamp(0.0, 1.0) * 100).round();
                       final usedPct = (limit.percent.clamp(0.0, 1.0) * 100).round();
-                      final statusColor = limit.percent >= 0.90
-                          ? scheme.error
-                          : limit.percent >= 0.75
-                              ? Colors.orange
-                              : Colors.green;
+                      final statusColor = _quotaColor(scheme, limit.percent);
                       return Container(
                         margin: const EdgeInsets.symmetric(vertical: 4),
                         padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
@@ -677,7 +690,7 @@ class _TerminalScreenState extends State<TerminalScreen> {
     for (var i = 0; i < 2 * _scrolledUp; i++) {
       _ptyChannel?.sendScroll(-65535);
     }
-    setState(() => _scrolledUp = 0);
+    setState(() => _scrolledUp = _scrolledLines = 0);
   }
 
   /// The agent running in a tab (focused pane's first), or null if it runs none.
@@ -711,7 +724,7 @@ class _TerminalScreenState extends State<TerminalScreen> {
     return tab.displayName;
   }
 
-  /// A tab's menu, from the current tab's ⋮ or a right-click on any: select it, move it, or close it.
+  /// A tab's menu, from a hold or a right-click ([HoldMenu]): open it (when it isn't), move it, or close it.
   Future<void> _showTabMenu(Offset at, TabModel tab, List<TabModel> tabs, int index) async {
     final client = widget.client;
     final scheme = Theme.of(context).colorScheme;
@@ -719,7 +732,8 @@ class _TerminalScreenState extends State<TerminalScreen> {
       context: context,
       position: RelativeRect.fromLTRB(at.dx, at.dy, at.dx, at.dy),
       items: [
-        const PopupMenuItem(value: 'open', child: ListTile(leading: Icon(Icons.tab), title: Text('Open tab'))),
+        if (tab.id != client.selectedPane?.tabId)
+          const PopupMenuItem(value: 'open', child: ListTile(leading: Icon(Icons.tab), title: Text('Open tab'))),
         if (index > 0)
           const PopupMenuItem(
               value: 'left', child: ListTile(leading: Icon(Icons.arrow_back), title: Text('Move left'))),
@@ -735,6 +749,7 @@ class _TerminalScreenState extends State<TerminalScreen> {
         ),
       ],
     );
+    if (!mounted) return;
     switch (picked) {
       case 'open':
         client.selectTab(tab.id);
@@ -743,7 +758,8 @@ class _TerminalScreenState extends State<TerminalScreen> {
       case 'right':
         if (index < tabs.length - 1) client.moveTab(tab.id, tabs[index + 1].id);
       case 'close':
-        client.closeTab(tab.id);
+        final m = client.machine;
+        closeWithUndo(context, client, 'Tab closed', ['$m/${tab.id}'], () => client.closeTab(tab.id, m));
     }
   }
 
@@ -780,9 +796,6 @@ class _TerminalScreenState extends State<TerminalScreen> {
     }
     Clipboard.setData(ClipboardData(text: text.toString()));
     _controller.clearSelection();
-    if (!widget.client.systemShowsCopies) {
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Copied')));
-    }
   }
 
   /// Where a selection handle points, in the terminal's box: under the selection's first cell, or after its
@@ -1029,7 +1042,10 @@ class _TerminalScreenState extends State<TerminalScreen> {
     // many lines it carries (see [_toLive]). Herdr stops at the bottom, so the count does too; it may
     // overshoot the top, which only means the way back scrolls further than needed. Capped, since the
     // way back sends a scroll per count.
-    setState(() => _scrolledUp = (_scrolledUp + lines.sign).clamp(0, 1000));
+    setState(() {
+      _scrolledUp = (_scrolledUp + lines.sign).clamp(0, 1000);
+      _scrolledLines = _scrolledUp == 0 ? 0 : (_scrolledLines + lines).clamp(_scrolledUp, 65535);
+    });
   }
 
   /// Parks the box's text as the current pane's draft and brings back [key]'s.
@@ -1047,10 +1063,13 @@ class _TerminalScreenState extends State<TerminalScreen> {
     final paneId = widget.client.selectedPaneId;
     final key = paneId == null ? null : '${widget.client.machine}/$paneId';
     if (key != _draftKey) _swapDraft(key);
-    // Switched off (e.g. from the notification) or removed: nothing to show, so back to the agents, once.
+    // Switched off (e.g. from the notification, or its sheet) or removed: nothing to show, so back to the
+    // agents, once, along with whatever is open over it.
     final client = widget.client;
     if ((client.isDisconnected || !client.machines.contains(client.machine)) && !_left && !widget.embedded) {
       _left = true;
+      final route = ModalRoute.of(context);
+      Navigator.popUntil(context, (r) => r == route);
       Navigator.maybePop(context);
     }
     setState(() {});
@@ -1081,14 +1100,24 @@ class _TerminalScreenState extends State<TerminalScreen> {
     }
     pty?.dispose();
     if (_controller.selection != null) _controller.clearSelection(); // the old pane's text
+    // Another pane starts live; the same one, reattached, keeps its place in history.
+    final pane = '${client.machine}/$paneId';
+    if (pane != _scrolledPane) {
+      _scrolledPane = pane;
+      _scrolledUp = _scrolledLines = 0;
+    }
     _ptyChannel = PtyChannel(
       machine: client.machine,
       paneId: paneId,
       terminal: _terminal,
       headers: headers,
-      // Herdr shows a freshly attached pane live, also after the channel reconnects on its own.
+      // Herdr shows a freshly attached pane live, also after a lost connection, so scroll back to where
+      // it was: as many scrolls as went up (an app on the alternate screen counts each as one wheel tick,
+      // see [_toLive]), sharing the lines they carried (herdr's own scrollback counts those).
       onAttach: () {
-        if (_scrolledUp > 0) setState(() => _scrolledUp = 0);
+        for (var i = 0; i < _scrolledUp; i++) {
+          _ptyChannel?.sendScroll((_scrolledLines / _scrolledUp).ceil());
+        }
       },
     )..connect();
   }
@@ -1240,101 +1269,81 @@ class _TerminalScreenState extends State<TerminalScreen> {
           ),
         ),
         actions: [
-          Builder(
-            builder: (context) {
-              final (quotaBg, quotaFg) = _quotaColors(scheme, currentUsage);
-              final pct = currentUsage?.highestPercent != null
-                  ? ((1.0 - currentUsage!.highestPercent!).clamp(0.0, 1.0) * 100).round()
-                  : null;
-              return Padding(
-                padding: const EdgeInsets.only(right: 6),
-                child: Tooltip(
-                  message: 'Usage and quotas',
-                  child: Material(
-                    color: quotaBg,
-                    borderRadius: BorderRadius.circular(16),
-                    clipBehavior: Clip.antiAlias,
-                    child: InkWell(
-                      onTap: () => _showUsage(currentAgent, currentUsage),
-                      child: Container(
-                        height: 32,
-                        padding: const EdgeInsets.symmetric(horizontal: 8),
-                        alignment: Alignment.center,
-                        child: Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            AgentIcon(name: currentAgent?.name ?? '', size: 14, color: quotaFg),
-                            if (pct != null) ...[
-                              const SizedBox(width: 4),
-                              Text(
-                                '$pct%',
-                                style: TextStyle(
-                                  fontSize: 12,
-                                  fontWeight: FontWeight.bold,
-                                  color: quotaFg,
+          // The agent's usage; a plain shell has none.
+          if (currentAgent != null)
+            Builder(
+              builder: (context) {
+                final quotaFg = _quotaColor(scheme, currentUsage?.highestPercent);
+                final quotaBg = quotaFg.withAlpha(35);
+                final pct = currentUsage?.highestPercent != null
+                    ? ((1.0 - currentUsage!.highestPercent!).clamp(0.0, 1.0) * 100).round()
+                    : null;
+                return Padding(
+                  padding: const EdgeInsets.only(right: 6),
+                  child: Tooltip(
+                    message: 'Usage and quotas',
+                    child: Material(
+                      color: quotaBg,
+                      borderRadius: BorderRadius.circular(16),
+                      clipBehavior: Clip.antiAlias,
+                      child: InkWell(
+                        onTap: () => _showUsage(currentAgent, currentUsage),
+                        child: Container(
+                          height: 32,
+                          padding: const EdgeInsets.symmetric(horizontal: 8),
+                          alignment: Alignment.center,
+                          child: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              AgentIcon(name: currentAgent.name, size: 14, color: quotaFg),
+                              if (pct != null) ...[
+                                const SizedBox(width: 4),
+                                Text(
+                                  '$pct%',
+                                  style: TextStyle(
+                                    fontSize: 12,
+                                    fontWeight: FontWeight.bold,
+                                    color: quotaFg,
+                                  ),
                                 ),
-                              ),
+                              ],
                             ],
-                          ],
+                          ),
                         ),
                       ),
                     ),
                   ),
-                ),
-              );
-            },
-          ),
+                );
+              },
+            ),
           Padding(
             padding: const EdgeInsets.only(right: 8),
             child: Tooltip(
               message: '${client.nameOf(client.machine)} · ${machineStatus(client, client.machine)}',
-              child: Material(
-                color: scheme.secondaryContainer,
-                borderRadius: BorderRadius.circular(16),
-                child: Container(
-                  height: 32,
-                  padding: const EdgeInsets.symmetric(horizontal: 8),
-                  alignment: Alignment.center,
-                  child: Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Container(
-                        width: 8,
-                        height: 8,
-                        decoration: BoxDecoration(
-                          color: switch (client.machine) {
-                            final m when client.isOff(m) => scheme.onSurfaceVariant,
-                            final m when client.errorOf(m) != null => scheme.error,
-                            final m when client.isConnected(m) => Colors.green,
-                            _ => Colors.orange,
-                          },
-                          shape: BoxShape.circle,
-                        ),
-                      ),
-                      const SizedBox(width: 6),
-                      ConstrainedBox(
-                        constraints: const BoxConstraints(maxWidth: 120),
-                        child: Text(
-                          client.nameOf(client.machine),
-                          style: TextStyle(
-                            fontSize: 12,
-                            fontWeight: FontWeight.w500,
-                            color: scheme.onSecondaryContainer,
-                          ),
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                        ),
-                      ),
-                    ],
-                  ),
+              child: ActionChip(
+                backgroundColor: scheme.secondaryContainer,
+                side: BorderSide.none,
+                labelStyle: TextStyle(color: scheme.onSecondaryContainer),
+                avatar: switch (machineStatusIcon(client, client.machine, scheme)) {
+                  final icon? => FittedBox(child: SizedBox.square(dimension: 24, child: icon)),
+                  null => null,
+                },
+                label: ConstrainedBox(
+                  constraints: const BoxConstraints(maxWidth: 120),
+                  child: Text(client.nameOf(client.machine), maxLines: 1, overflow: TextOverflow.ellipsis),
                 ),
+                onPressed: () {
+                  FocusScope.of(context).unfocus();
+                  showMachineSheet(context, client, client.machine);
+                },
               ),
             ),
           ),
         ],
         // The workspace's tabs, like Vivaldi's: equal 168dp tabs, scrolling when they overflow.
         // The current one is rounded on top and takes the terminal's color, joined to it below.
-        // Each shows its agent icon with an online status ring and truncated tab summary; the current one has a ⋮ menu. Long-press a tab to move it.
+        // Each shows its agent icon with an online status ring and truncated tab summary. Hold a tab and lift for its
+        // menu (or right-click), hold and drag to move it.
         bottom: PreferredSize(
           preferredSize: const Size.fromHeight(34),
           // While connecting, a thin progress bar over the strip's top edge, taking no room of its own.
@@ -1373,62 +1382,49 @@ class _TerminalScreenState extends State<TerminalScreen> {
                                                     color: j == i ? scheme.onSurface : scheme.onSurfaceVariant),
                                               ),
                                             ),
-                                            // The current tab's menu, as browsers show close on theirs.
-                                            if (j == i)
-                                              Builder(
-                                                builder: (context) => InkResponse(
-                                                  radius: 14,
-                                                  onTap: () => _showTabMenu(
-                                                      (context.findRenderObject() as RenderBox)
-                                                          .localToGlobal(Offset.zero),
-                                                      t,
-                                                      tabs,
-                                                      j),
-                                                  child: const Icon(Icons.more_vert, size: 16),
-                                                ),
-                                              ),
                                           ],
                                         ),
                                       );
                                       const top = BorderRadius.vertical(top: Radius.circular(10));
-                                      return LongPressDraggable<String>(
-                                        data: t.id,
-                                        axis: Axis.horizontal,
-                                        feedback: Material(
-                                          color: scheme.secondaryContainer,
-                                          elevation: 3,
-                                          borderRadius: top,
-                                          child: SizedBox(
-                                            height: 34,
-                                            width: 168,
-                                            child: label,
-                                          ),
-                                        ),
-                                        childWhenDragging: Opacity(
-                                          opacity: 0.3,
-                                          child: Container(
-                                            width: 168,
-                                            decoration:
-                                                j == i ? BoxDecoration(color: background, borderRadius: top) : null,
-                                            child: label,
-                                          ),
-                                        ),
-                                        child: GestureDetector(
-                                          onSecondaryTapUp: (d) => _showTabMenu(d.globalPosition, t, tabs, j),
-                                          child: Container(
-                                            key: j == i ? _currentTab : null,
-                                            width: 168,
-                                            decoration: over.isNotEmpty
-                                                ? BoxDecoration(color: scheme.secondaryContainer, borderRadius: top)
-                                                : j == i
-                                                    ? BoxDecoration(color: background, borderRadius: top)
-                                                    : null,
-                                            child: InkWell(
-                                              customBorder: const RoundedRectangleBorder(borderRadius: top),
-                                              onTap: () => client.selectTab(t.id),
+                                      // Held and lifted, its menu; held and dragged, onto another tab to take its place.
+                                      return HoldMenu(
+                                        onMenu: (at) => _showTabMenu(at, t, tabs, j),
+                                        child: LongPressDraggable<String>(
+                                          data: t.id,
+                                          axis: Axis.horizontal,
+                                          feedback: Material(
+                                            color: scheme.secondaryContainer,
+                                            elevation: 3,
+                                            borderRadius: top,
+                                            child: SizedBox(
+                                              height: 34,
+                                              width: 168,
                                               child: label,
                                             ),
                                           ),
+                                          childWhenDragging: Opacity(
+                                            opacity: 0.3,
+                                            child: Container(
+                                              width: 168,
+                                              decoration:
+                                                  j == i ? BoxDecoration(color: background, borderRadius: top) : null,
+                                              child: label,
+                                            ),
+                                          ),
+                                          child: Container(
+                                              key: j == i ? _currentTab : null,
+                                              width: 168,
+                                              decoration: over.isNotEmpty
+                                                  ? BoxDecoration(color: scheme.secondaryContainer, borderRadius: top)
+                                                  : j == i
+                                                      ? BoxDecoration(color: background, borderRadius: top)
+                                                      : null,
+                                              child: InkWell(
+                                                customBorder: const RoundedRectangleBorder(borderRadius: top),
+                                                onTap: () => client.selectTab(t.id),
+                                                child: label,
+                                              ),
+                                            ),
                                         ),
                                       );
                                     },
@@ -1671,7 +1667,7 @@ class _TerminalScreenState extends State<TerminalScreen> {
                               decoration: InputDecoration(
                                 hintText: 'Message terminal…',
                                 filled: true,
-                                fillColor: scheme.secondaryContainer,
+                                fillColor: scheme.surfaceContainerHigh,
                                 isDense: true,
                                 contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
                                 border: OutlineInputBorder(

@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
@@ -176,6 +177,32 @@ void main() {
       });
     }
 
+    test('What is closed hides at once, comes back on Undo, and is closed otherwise', () async {
+      SharedPreferences.setMockInitialValues({});
+      const m = '100.1.2.3:7788';
+      final client = HerdrClientService()
+        ..setMachines([m], [])
+        ..switchMachine(m)
+        ..setSnapshotForTesting(twoWorkspaces())
+        ..selectPane('w1:p1');
+
+      // A tab: its panes and agents go with it, and the selection moves to the next tab.
+      final undo = Completer<bool>();
+      var closed = false;
+      final done = client.closeUnlessUndone(['$m/w1:t1'], undo.future, () async => closed = true);
+      expect(client.snapshot!.tabs.map((t) => t.id), isNot(contains('w1:t1')));
+      expect(client.snapshot!.agents.map((a) => a.paneId), ['w2:p4']);
+      expect(client.selectedPane?.tabId, 'w1:t2');
+      undo.complete(true);
+      await done;
+      expect(closed, isFalse);
+      expect(client.snapshot!.tabs.map((t) => t.id), contains('w1:t1'));
+
+      // A workspace, not undone: closed, then shown as herdr has it.
+      await client.closeUnlessUndone(['$m/w2'], Future.value(false), () async => closed = true);
+      expect(closed, isTrue);
+    });
+
     testWidgets('Tabs that overflow the top bar are reached by sliding the strip', (tester) async {
       SharedPreferences.setMockInitialValues({'last_seen_changelog': changelog.first.$1});
       final client = HerdrClientService()
@@ -314,7 +341,7 @@ void main() {
       await tester.pump(const Duration(seconds: 1));
     });
 
-    testWidgets("The current tab's ⋮ moves or closes it", (tester) async {
+    testWidgets('A tab held and lifted shows its menu; held and dragged, none', (tester) async {
       SharedPreferences.setMockInitialValues({'last_seen_changelog': changelog.first.$1});
       final client = HerdrClientService()
         ..setMachines(['100.1.2.3:7788'], [])
@@ -328,13 +355,24 @@ void main() {
         await tester.pump(const Duration(seconds: 1));
       }
 
-      // Only the current (first) tab has one, and its menu can't move it further left.
-      final dots = find.descendant(of: find.byType(LongPressDraggable<String>), matching: find.byIcon(Icons.more_vert));
-      expect(dots, findsOneWidget);
-      expect(tester.getSize(find.byType(LongPressDraggable<String>).first).width, 168);
-      await tester.tap(dots);
+      final first = find.byType(LongPressDraggable<String>).first;
+      expect(find.byIcon(Icons.more_vert), findsNothing);
+      expect(tester.getSize(first).width, 168);
+
+      // Held and moved: a drag, no menu.
+      final drag = await tester.startGesture(tester.getCenter(first));
+      await tester.pump(kLongPressTimeout + const Duration(milliseconds: 50));
+      await drag.moveBy(const Offset(60, 0));
+      await tester.pump();
+      await drag.up();
+      await settle();
+      expect(find.text('Close tab'), findsNothing);
+
+      // Held still and lifted: the current (first) tab's menu, which can't move it further left nor open it again.
+      await tester.longPress(first);
       await settle();
       expect(find.text('Move left'), findsNothing);
+      expect(find.text('Open tab'), findsNothing);
       expect(find.text('Move right'), findsOneWidget);
       expect(find.text('Close tab'), findsOneWidget);
     });
@@ -416,7 +454,7 @@ void main() {
       expect(WorkspaceModel.fromJson({'git_branch': 'main'}).gitBranch, 'main');
     });
 
-    testWidgets("The ☰ drawer lists the workspaces; tap one for its terminal, its ⋮ for its actions",
+    testWidgets("The ☰ drawer lists the workspaces; tap one for its terminal, hold one for its actions",
         (tester) async {
       SharedPreferences.setMockInitialValues({'last_seen_changelog': changelog.first.$1});
       final client = HerdrClientService()
@@ -440,8 +478,10 @@ void main() {
       expect(find.byTooltip('New workspace on 100.1.2.3:7788'), findsOneWidget);
       expect(find.byType(FloatingActionButton), findsNothing);
 
-      await tester.tap(find.descendant(of: find.byType(WorkspaceList), matching: find.byTooltip('More')).first);
+      expect(find.descendant(of: find.byType(WorkspaceList), matching: find.byIcon(Icons.more_vert)), findsNothing);
+      await tester.longPress(find.descendant(of: find.byType(WorkspaceList), matching: find.text('backend')));
       await settle();
+      expect(find.byType(TerminalScreen), findsNothing); // the hold isn't a tap
       expect(find.text('Move up'), findsNothing); // it's the first
       expect(find.text('Move down'), findsOneWidget);
       expect(find.text('Rename'), findsOneWidget);
@@ -496,6 +536,57 @@ void main() {
       await resize(const Size(1280, 800));
       expect(find.byType(TerminalScreen), findsOneWidget);
       expect(find.byType(BackButton), findsNothing);
+
+      // Opening the machines panel in landscape displays the 304dp Machines panel beside the list.
+      await tester.tap(find.byTooltip('Machines'));
+      await tester.pump();
+      await tester.pump(const Duration(seconds: 1));
+      expect(find.byType(MachineList), findsOneWidget);
+      expect(find.byType(TerminalScreen), findsOneWidget);
+
+      // Closing it via its close button hides it.
+      await tester.tap(find.descendant(of: find.byType(Column), matching: find.byTooltip('Close')).first);
+      await tester.pump();
+      await tester.pump(const Duration(seconds: 1));
+      expect(find.byType(MachineList), findsNothing);
+      expect(find.byType(TerminalScreen), findsOneWidget);
+
+      // Open it again to test machine detail navigation.
+      await tester.tap(find.byTooltip('Machines'));
+      await tester.pump();
+      await tester.pump(const Duration(seconds: 1));
+      expect(find.byType(MachineList), findsOneWidget);
+
+      // In landscape, tapping a machine opens MachineScreen on the right side instead of full screen.
+      await tester.tap(find.descendant(of: find.byType(MachineList), matching: find.text(m)));
+      await tester.pump();
+      await tester.pump(const Duration(seconds: 1));
+      expect(find.byType(MachineScreen), findsOneWidget);
+      expect(find.byType(TerminalScreen), findsNothing);
+
+      // Closing the machine detail restores the terminal on the right.
+      await tester.tap(find.descendant(of: find.byType(MachineScreen), matching: find.byTooltip('Close')));
+      await tester.pump();
+      await tester.pump(const Duration(seconds: 1));
+      expect(find.byType(MachineScreen), findsNothing);
+      expect(find.byType(TerminalScreen), findsOneWidget);
+
+      // In landscape, opening Settings from the drawer opens SettingsScreen on the right side.
+      await tester.tap(find.byTooltip('Workspaces'));
+      await tester.pump();
+      await tester.pump(const Duration(seconds: 1));
+      await tester.tap(find.text('Settings'));
+      await tester.pump();
+      await tester.pump(const Duration(seconds: 1));
+      expect(find.byType(SettingsScreen), findsOneWidget);
+      expect(find.byType(TerminalScreen), findsNothing);
+
+      // Closing Settings restores the terminal on the right.
+      await tester.tap(find.descendant(of: find.byType(SettingsScreen), matching: find.byTooltip('Close')));
+      await tester.pump();
+      await tester.pump(const Duration(seconds: 1));
+      expect(find.byType(SettingsScreen), findsNothing);
+      expect(find.byType(TerminalScreen), findsOneWidget);
     });
 
     testWidgets('Search finds agents, workspaces, tabs and machines, a section each', (tester) async {
@@ -655,14 +746,14 @@ void main() {
 
       await tester.tap(find.descendant(of: find.byType(MachineList), matching: find.text('laptop')));
       await settle();
-      expect(find.text('Edit machine'), findsOneWidget);
-      expect(find.text('Remove'), findsOneWidget);
-      await tester.tap(find.text('Cancel'));
+      expect(find.text('Save'), findsOneWidget); // its page
+      expect(find.text('Remove machine'), findsOneWidget);
+      await tester.tap(find.byType(CloseButton));
       await settle();
 
       await tester.tap(find.byTooltip('Add machine'));
       await settle();
-      expect(find.text('Add & connect'), findsOneWidget);
+      expect(find.text('Add'), findsOneWidget);
     });
 
     test('Moving a machine keeps those a bridge reaches under it', () {
@@ -699,10 +790,18 @@ void main() {
       client.setSnapshotForTesting(SessionSnapshot.fromJson({'panes': []}), laptop);
       expect(client.isMuted('w1:p1'), isTrue);
 
+      // Disconnecting the bridge leaves other bridges unaffected
       client.disconnect(laptop);
-      expect(client.isOff(sert), isTrue);
+      expect(client.isOff(laptop), isTrue);
       expect(client.isOff(other), isFalse);
+
+      // A machine reached through a bridge remembers its own on/off switch state
+      client.disconnect(sert);
+      expect(client.isOff(sert), isTrue);
       client.connect(laptop);
+      expect(client.isOff(laptop), isFalse);
+      expect(client.isOff(sert), isTrue); // sert stays off when laptop connects because sert was individually turned off
+      client.connect(sert);
       expect(client.isOff(sert), isFalse);
 
       // The machine on screen is remembered with its path.
@@ -830,7 +929,7 @@ void main() {
         ],
       }));
       expect(alerts, hasLength(1));
-      expect(alerts.first['title'], contains('Finished'));
+      expect(alerts.first['title'], contains('finished'));
       expect(alerts.first['icon'], isNotNull);
       expect((alerts.first['icon'] as Uint8List).lengthInBytes, greaterThan(0));
     });
@@ -1227,26 +1326,25 @@ void main() {
       await tester.tap(find.text('agent-task'));
       await settle();
 
-      // Conversation screen (TerminalScreen) has pill with machine name 'MacBook Pro'
-      final machineFinder = find.text('MacBook Pro');
-      expect(machineFinder, findsOneWidget);
+      // Conversation screen (TerminalScreen) has a chip with machine name 'MacBook Pro'
+      final chipFinder = find.byType(ActionChip);
+      expect(chipFinder, findsOneWidget);
+      expect(find.descendant(of: chipFinder, matching: find.text('MacBook Pro')), findsOneWidget);
+      BoxDecoration dot() => tester
+          .widget<Container>(find.descendant(of: chipFinder, matching: find.byType(Container)).first)
+          .decoration as BoxDecoration;
 
-      // Connecting status shows orange dot
-      final dotContainer = tester.widget<Container>(
-          find.descendant(of: find.byTooltip('MacBook Pro · Connecting…'), matching: find.byType(Container)).at(1));
-      final decoration = dotContainer.decoration as BoxDecoration;
-      expect(decoration.color, equals(Colors.orange));
+      // Connecting shows a hollow dot
+      expect(dot().color, isNull);
+      expect(dot().border, isNotNull);
 
       // Connected status shows green dot
       client.setConnectedForTesting('10.0.0.1:7788', true);
       await settle();
-      final dotContainerConnected = tester.widget<Container>(
-          find.descendant(of: find.byTooltip('MacBook Pro · Connected'), matching: find.byType(Container)).at(1));
-      final decorationConnected = dotContainerConnected.decoration as BoxDecoration;
-      expect(decorationConnected.color, equals(Colors.green));
+      expect(dot().color, equals(Colors.green));
 
-      // Tapping the machine pill does not open edit machine dialog
-      await tester.tap(machineFinder);
+      // Tapping the chip opens the machine's sheet, not its edit page
+      await tester.tap(chipFinder);
       await settle();
       expect(find.text('Edit machine'), findsNothing);
     });
@@ -1317,7 +1415,7 @@ void main() {
       expect(find.text('herdr-mobile (feat-agents) · MacBook'), findsOneWidget);
     });
 
-    testWidgets('Hide message terminal option in settings panel hides the message terminal in TerminalScreen',
+    testWidgets('Hide message bar option in settings hides the message bar in TerminalScreen',
         (tester) async {
       SharedPreferences.setMockInitialValues({'last_seen_changelog': changelog.first.$1});
       final client = HerdrClientService()
@@ -1350,11 +1448,11 @@ void main() {
       });
       client.setSnapshotForTesting(snap);
 
-      // Verify SettingsScreen has "Hide message terminal" switch
+      // Verify SettingsScreen has "Hide message bar" switch
       await tester.pumpWidget(MaterialApp(home: SettingsScreen(client: client)));
       await tester.pumpAndSettle();
 
-      final switchTile = find.widgetWithText(SwitchListTile, 'Hide message terminal');
+      final switchTile = find.widgetWithText(SwitchListTile, 'Hide message bar');
       await tester.drag(find.byType(ListView), const Offset(0, -300));
       await tester.pumpAndSettle();
       expect(switchTile, findsOneWidget);
@@ -1685,6 +1783,11 @@ void main() {
               'tier_label': 'Team Plan',
               'limits': [
                 {'label': 'Session (5-hour)', 'percent': 0.85, 'resets_at': '2026-10-07T18:00:00Z'},
+                {
+                  'label': 'Weekly (7-day)',
+                  'percent': 0.47,
+                  'resets_at': DateTime.now().add(const Duration(days: 3, hours: 23, minutes: 15)).toIso8601String(),
+                },
               ],
               'today_tokens': 50000,
               'today_prompts': 10,
@@ -1710,6 +1813,8 @@ void main() {
       expect(find.text('Team Plan'), findsOneWidget);
       expect(find.byType(AgentAvatar), findsWidgets);
       expect(find.text('Session (5-hour)'), findsOneWidget);
+      expect(find.text('Weekly (7-day)'), findsOneWidget);
+      expect(find.text('Resets in 3d 23h'), findsOneWidget);
       expect(find.text('15% left'), findsOneWidget);
       expect(find.text('85% used'), findsOneWidget);
       expect(find.text('50.0k'), findsOneWidget);
@@ -1799,6 +1904,46 @@ void main() {
       await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
       await tester.pump();
       expect(find.text('first command'), findsNothing);
+    });
+
+    testWidgets('Shift+Enter in message TextField inserts newline, Enter sends message', (tester) async {
+      final client = HerdrClientService();
+      final snap = SessionSnapshot.fromJson({
+        'version': '0.9.3',
+        'protocol': 22,
+        'focused_workspace_id': 'w1',
+        'focused_tab_id': 'w1:t1',
+        'focused_pane_id': 'w1:p1',
+        'workspaces': [
+          {'workspace_id': 'w1', 'number': 1, 'label': 'main', 'active_tab_id': 'w1:t1', 'agent_status': 'idle'},
+        ],
+        'tabs': [
+          {'tab_id': 'w1:t1', 'workspace_id': 'w1', 'number': 1, 'label': 'Tab 1', 'agent_status': 'idle'},
+        ],
+        'panes': [
+          {'pane_id': 'w1:p1', 'workspace_id': 'w1', 'tab_id': 'w1:t1', 'focused': true, 'agent_status': 'idle', 'terminal_title': ''},
+        ],
+        'agents': [],
+      });
+      client.setSnapshotForTesting(snap);
+      client.selectPane('w1:p1');
+
+      await tester.pumpWidget(MaterialApp(home: TerminalScreen(client: client)));
+      await tester.pump(const Duration(milliseconds: 300));
+
+      final textField = find.byType(TextField);
+      await tester.tap(textField);
+      await tester.enterText(textField, 'line 1');
+      await tester.pump();
+
+      // Press Shift + Enter to insert a newline
+      await tester.sendKeyDownEvent(LogicalKeyboardKey.shiftLeft);
+      await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+      await tester.sendKeyUpEvent(LogicalKeyboardKey.shiftLeft);
+      await tester.pump();
+
+      final editableText = tester.widget<EditableText>(find.byType(EditableText));
+      expect(editableText.controller.text, equals('line 1\n'));
     });
 
     test('HerdrClientService tab and workspace navigation and jumpToAttention', () {

@@ -1,11 +1,14 @@
+import 'dart:async';
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import '../../models/session.dart';
 import '../../models/agent_status.dart';
 import '../../services/herdr_client.dart';
 
 /// The home screen's drawer, modelled on Herdr's sidebar: each connected machine's workspaces in herdr's order,
 /// with linked worktrees nested, under its name and a + for a new one. Tap one to open its terminal ([open]);
-/// its ⋮ (or a right-click) has its actions and moves it up or down; long-press it and drag to reorder it (with its
+/// hold it and lift for its actions and Move up/down (or right-click), hold it and drag to reorder it (with its
 /// worktrees). herdr keeps the order, so the desktop follows.
 class WorkspaceList extends StatelessWidget {
   final HerdrClientService client;
@@ -30,9 +33,9 @@ class WorkspaceList extends StatelessWidget {
     Widget row(String m, WorkspaceModel ws, {double indent = 0, VoidCallback? up, VoidCallback? down, int? drag}) {
       void menu(Offset p) =>
           at(m, () => showWorkspaceContextMenu(context, client, ws, p, onShow: open, onUp: up, onDown: down));
-      final tile = GestureDetector(
+      final tile = HoldMenu(
           key: ValueKey('$m/${ws.id}'),
-          onSecondaryTapUp: (d) => menu(d.globalPosition),
+          onMenu: menu,
           child: ListTile(
             key: ValueKey('$m/${ws.id}-tile'),
             contentPadding: EdgeInsets.only(left: 16 + indent, right: 8),
@@ -40,13 +43,6 @@ class WorkspaceList extends StatelessWidget {
             minLeadingWidth: 10,
             title: Text(ws.displayName, maxLines: 1, overflow: TextOverflow.ellipsis),
             subtitle: ws.isLinkedWorktree || ws.gitBranch == null ? null : Text(ws.gitBranch!, maxLines: 1),
-            trailing: Builder(
-              builder: (context) => IconButton(
-                tooltip: 'More',
-                icon: const Icon(Icons.more_vert),
-                onPressed: () => menu((context.findRenderObject() as RenderBox).localToGlobal(Offset.zero)),
-              ),
-            ),
             onTap: () => at(m, () {
               client.selectWorkspace(ws.id);
               open();
@@ -165,7 +161,7 @@ class WorkspaceList extends StatelessWidget {
   }
 }
  
-/// A workspace's menu, from a right-click or the drawer's ⋮: Move up and down (given [onUp], [onDown]), Rename,
+/// A workspace's menu, from a right-click or a hold in the drawer or search ([HoldMenu]): Move up and down (given [onUp], [onDown]), Rename,
 /// New worktree, Open worktree, Delete.
 Future<void> showWorkspaceContextMenu(
   BuildContext context,
@@ -226,13 +222,13 @@ Future<void> showWorkspaceContextMenu(
     case 'open_worktree':
       _openWorktree(context, client, ws, onShow);
     case 'delete':
-      client.deleteWorkspace(ws.id, removeWorktree: ws.isLinkedWorktree);
+      _delete(context, client, ws);
       onDelete?.call();
   }
 }
 
 /// The workspace's actions, on the active machine: from the terminal's top bar, as a chat's header opens
-/// its info, or a long-press in the drawer or search. [onShow] runs once a new or opened worktree is selected,
+/// its info. [onShow] runs once a new or opened worktree is selected,
 /// to show it; [onDelete] once the workspace is deleted, to leave its terminal.
 void showWorkspaceActions(BuildContext context, HerdrClientService client, WorkspaceModel ws,
     {VoidCallback? onShow, VoidCallback? onDelete}) {
@@ -308,9 +304,8 @@ void showWorkspaceActions(BuildContext context, HerdrClientService client, Works
               textColor: error,
               leading: const Icon(Icons.delete_outline),
               title: const Text('Delete'),
-              // Straight away, like closing a tab. A linked worktree's checkout goes too.
               onTap: () => run(() {
-                client.deleteWorkspace(ws.id, removeWorktree: ws.isLinkedWorktree);
+                _delete(context, client, ws);
                 onDelete?.call();
               }),
             ),
@@ -319,6 +314,148 @@ void showWorkspaceActions(BuildContext context, HerdrClientService client, Works
       );
     },
   );
+}
+
+/// Deletes [ws], on the active machine, unless undone; a linked worktree's checkout goes too.
+void _delete(BuildContext context, HerdrClientService client, WorkspaceModel ws) {
+  final m = client.machine;
+  closeWithUndo(context, client, 'Workspace deleted', ['$m/${ws.id}'],
+      () => client.deleteWorkspace(ws.id, removeWorktree: ws.isLinkedWorktree, on: m));
+}
+
+OverlayEntry? _activeUndoEntry;
+Completer<bool>? _activeUndoCompleter;
+
+/// Shows a floating stadium pill at the top of the screen with [message] and an Undo action.
+Future<bool> _showTopUndoPill(BuildContext context, String message) {
+  _activeUndoCompleter?.complete(false);
+  _activeUndoEntry?.remove();
+  _activeUndoEntry = null;
+
+  final overlay = Overlay.maybeOf(context, rootOverlay: true);
+  if (overlay == null) return Future.value(false);
+
+  final completer = Completer<bool>();
+  _activeUndoCompleter = completer;
+
+  late OverlayEntry entry;
+  Timer? timer;
+
+  void dismiss([bool undo = false]) {
+    timer?.cancel();
+    if (_activeUndoCompleter == completer && !completer.isCompleted) {
+      completer.complete(undo);
+    }
+    if (_activeUndoEntry == entry) {
+      entry.remove();
+      _activeUndoEntry = null;
+      _activeUndoCompleter = null;
+    }
+  }
+
+  entry = OverlayEntry(
+    builder: (ctx) {
+      final scheme = Theme.of(ctx).colorScheme;
+      return SafeArea(
+        child: Align(
+          alignment: Alignment.topCenter,
+          child: Padding(
+            padding: const EdgeInsets.only(top: 10, left: 16, right: 16),
+            child: Material(
+              color: scheme.surfaceContainerHighest,
+              elevation: 4,
+              shape: const StadiumBorder(),
+              child: Padding(
+                padding: const EdgeInsets.only(left: 18, right: 8, top: 4, bottom: 4),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text(
+                      message,
+                      style: TextStyle(color: scheme.onSurface, fontSize: 14, fontWeight: FontWeight.w500),
+                    ),
+                    const SizedBox(width: 8),
+                    TextButton(
+                      style: TextButton.styleFrom(
+                        visualDensity: VisualDensity.compact,
+                        foregroundColor: scheme.primary,
+                        padding: const EdgeInsets.symmetric(horizontal: 12),
+                      ),
+                      onPressed: () => dismiss(true),
+                      child: const Text('Undo', style: TextStyle(fontWeight: FontWeight.bold)),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        ),
+      );
+    },
+  );
+
+  _activeUndoEntry = entry;
+  overlay.insert(entry);
+  timer = Timer(const Duration(seconds: 4), () => dismiss(false));
+
+  return completer.future;
+}
+
+/// Hides what [keys] name (`machine/id` of panes, tabs or workspaces) at once and runs [close] once the
+/// top pill saying [message] goes without Undo, or another replaces it.
+void closeWithUndo(
+    BuildContext context, HerdrClientService client, String message, List<String> keys, Future<void> Function() close) {
+  final undone = _showTopUndoPill(context, message);
+  client.closeUnlessUndone(keys, undone, close);
+}
+
+/// Calls [onMenu] at a right-click, and where a press held still past a long-press lifts: as with a launcher's
+/// icons, held and lifted is the item's menu, held and moved drags it ([ReorderableDelayedDragStartListener],
+/// [LongPressDraggable]), which both start on the same hold. A tick marks the hold.
+class HoldMenu extends StatefulWidget {
+  final void Function(Offset at) onMenu;
+  final Widget child;
+
+  const HoldMenu({super.key, required this.onMenu, required this.child});
+
+  @override
+  State<HoldMenu> createState() => _HoldMenuState();
+}
+
+class _HoldMenuState extends State<HoldMenu> {
+  Offset? _down; // where the press began, until it moves away or ends
+  bool _held = false;
+  Timer? _hold;
+
+  void _reset() {
+    _hold?.cancel();
+    _down = null;
+    _held = false;
+  }
+
+  // Once a drag lifts the row, a reorderable list builds a placeholder in its place, disposing this; the
+  // release still reaches the listener it pressed, so the timer is left to run rather than cancelled then.
+  @override
+  Widget build(BuildContext context) => Listener(
+        onPointerDown: (e) {
+          if (e.buttons != kPrimaryButton) return;
+          _reset();
+          _down = e.position;
+          _hold = Timer(kLongPressTimeout, () {
+            _held = true;
+            HapticFeedback.selectionClick();
+          });
+        },
+        onPointerMove: (e) {
+          if (_down != null && (e.position - _down!).distance > kTouchSlop) _reset();
+        },
+        onPointerUp: (e) {
+          if (_held) widget.onMenu(e.position);
+          _reset();
+        },
+        onPointerCancel: (_) => _reset(),
+        child: GestureDetector(onSecondaryTapUp: (d) => widget.onMenu(d.globalPosition), child: widget.child),
+      );
 }
 
 /// The trimmed text entered, or null when cancelled or empty.

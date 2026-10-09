@@ -1,6 +1,16 @@
 /// Newest first. Shown once after an update; add an entry when bumping the version in pubspec.yaml.
 const changelog = <(String, List<String>)>[
   (
+    '1.11.0',
+    [
+      'Multi-provider live quota and token tracking for Claude, Codex, Antigravity, Grok, OpenCode, Copilot, Cursor, OpenRouter, and DeepSeek.',
+      'A floating top pill with Undo when closing agents, tabs, or workspaces.',
+      'Held-and-lifted context menus with haptic feedback, and smooth reordering for machines and workspaces.',
+      'Detailed machine connection diagnostics and clearer socket error messages.',
+      'Improved background notifications with workspace context in headers and expandable multi-machine status.',
+    ]
+  ),
+  (
     '1.10.2',
     [
       'The usage chip on the terminal\'s top bar now displays the remaining quota percentage (e.g. 54%) beside the agent logo instead of the lightning icon.',

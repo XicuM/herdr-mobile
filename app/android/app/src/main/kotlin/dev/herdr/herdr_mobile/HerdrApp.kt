@@ -7,14 +7,12 @@ import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
-import android.app.Person
 import android.app.Service
 import android.content.ContentResolver
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.content.pm.ServiceInfo
 import android.graphics.BitmapFactory
-import android.graphics.drawable.Icon
 import android.media.AudioAttributes
 import android.net.Uri
 import android.os.Build
@@ -80,8 +78,8 @@ class HerdrApp : Application() {
                 "status" -> setStatus(call.argument<String>("title")?.let { it to call.argument<String>("text")!! })
                 "alert" -> alert(
                     call.argument<String>("key")!!, call.argument<String>("title")!!, call.argument<String>("text")!!,
-                    call.argument<String>("machine")!!, call.argument<String>("pane")!!, call.argument<Boolean>("urgent")!!,
-                    call.argument<ByteArray>("icon"),
+                    call.argument<String>("place")!!, call.argument<String>("machine")!!, call.argument<String>("pane")!!,
+                    call.argument<Boolean>("urgent")!!, call.argument<ByteArray>("icon"),
                 )
                 "cancel" -> nm.cancel(call.argument<String>("key").hashCode())
                 "askPermissions" -> askPermissions()
@@ -123,6 +121,8 @@ class HerdrApp : Application() {
     fun statusNotification(): Notification = builder(STATUS)
         .setContentTitle(status?.first ?: "Herdr Mobile")
         .setContentText(status?.second)
+        // A line per machine, shown when expanded.
+        .setStyle(Notification.BigTextStyle().bigText(status?.second))
         .setOngoing(true)
         .setContentIntent(openIntent(STATUS_ID, null, null))
         .addAction(Notification.Action.Builder(0, "Disconnect", PendingIntent.getService(this, 0,
@@ -130,34 +130,21 @@ class HerdrApp : Application() {
             if (Build.VERSION.SDK_INT >= 23) PendingIntent.FLAG_IMMUTABLE else 0)).build())
         .build()
 
-    /** One alert per [key] (machine/pane): a newer one replaces it. Tapping opens that pane. */
-    private fun alert(key: String, title: String, text: String, machine: String, pane: String, urgent: Boolean, iconBytes: ByteArray? = null) {
+    /**
+     * One alert per [key] (machine/pane): a newer one replaces it. Tapping opens that pane. [place] goes in
+     * the header, and the agent's logo is the large icon, the only one shown on the collapsed row.
+     */
+    private fun alert(key: String, title: String, text: String, place: String, machine: String, pane: String,
+                      urgent: Boolean, iconBytes: ByteArray?) {
         val id = key.hashCode()
         val b = builder(if (urgent) BLOCKED else FINISHED)
             .setContentTitle(title)
-            .setContentText(text)
+            .setContentText(text.ifEmpty { null })
+            .setSubText(place)
+            .setLargeIcon(iconBytes?.let { BitmapFactory.decodeByteArray(it, 0, it.size) })
             .setAutoCancel(true)
+            .setCategory(Notification.CATEGORY_MESSAGE)
             .setContentIntent(openIntent(id, machine, pane))
-        if (Build.VERSION.SDK_INT >= 21) {
-            b.setCategory(Notification.CATEGORY_MESSAGE)
-        }
-        if (iconBytes != null) {
-            val bitmap = BitmapFactory.decodeByteArray(iconBytes, 0, iconBytes.size)
-            if (bitmap != null) {
-                b.setLargeIcon(bitmap)
-                if (Build.VERSION.SDK_INT >= 28) {
-                    val user = Person.Builder().setName("User").build()
-                    val sender = Person.Builder()
-                        .setName(title)
-                        .setIcon(Icon.createWithBitmap(bitmap))
-                        .build()
-                    val messagingStyle = Notification.MessagingStyle(user)
-                        .setGroupConversation(false)
-                        .addMessage(Notification.MessagingStyle.Message(text, System.currentTimeMillis(), sender))
-                    b.setStyle(messagingStyle)
-                }
-            }
-        }
         nm.notify(id, b.build())
     }
 

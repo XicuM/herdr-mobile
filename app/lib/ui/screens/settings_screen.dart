@@ -4,8 +4,9 @@ import '../../services/herdr_client.dart';
 
 class SettingsScreen extends StatefulWidget {
   final HerdrClientService client;
+  final VoidCallback? onClose;
 
-  const SettingsScreen({super.key, required this.client});
+  const SettingsScreen({super.key, required this.client, this.onClose});
 
   @override
   State<SettingsScreen> createState() => _SettingsScreenState();
@@ -100,12 +101,12 @@ class _SettingsScreenState extends State<SettingsScreen> {
                       final subtitle = [if (ws != null) ws.displayName, client.nameOf(m)].join(' · ');
 
                       return ListTile(
-                        leading: const Icon(Icons.volume_off_outlined),
+                        leading: const Icon(Icons.notifications_off_outlined),
                         title: Text(title, maxLines: 1, overflow: TextOverflow.ellipsis),
                         subtitle: subtitle.isNotEmpty ? Text(subtitle, maxLines: 1, overflow: TextOverflow.ellipsis) : null,
                         trailing: IconButton(
                           tooltip: 'Unmute',
-                          icon: const Icon(Icons.volume_up_outlined),
+                          icon: const Icon(Icons.notifications_outlined),
                           onPressed: () {
                             client.setMuted(paneId, false, m);
                             if (client.muted.isEmpty) Navigator.pop(context);
@@ -129,13 +130,23 @@ class _SettingsScreenState extends State<SettingsScreen> {
     final scheme = Theme.of(context).colorScheme;
     Widget section(String title) => Padding(
           padding: const EdgeInsets.fromLTRB(16, 24, 16, 8),
-          child: Text(title, style: Theme.of(context).textTheme.titleSmall?.copyWith(color: scheme.onSurfaceVariant)),
+          child: Text(title, style: Theme.of(context).textTheme.titleSmall?.copyWith(color: scheme.primary)),
         );
 
     return ListenableBuilder(
       listenable: client,
       builder: (context, _) => Scaffold(
-        appBar: AppBar(title: const Text('Settings')),
+        appBar: AppBar(
+          automaticallyImplyLeading: widget.onClose == null,
+          leading: widget.onClose != null
+              ? IconButton(
+                  icon: const Icon(Icons.close),
+                  tooltip: 'Close',
+                  onPressed: widget.onClose,
+                )
+              : null,
+          title: const Text('Settings'),
+        ),
         body: ListView(
           children: [
             section('Appearance'),
@@ -255,17 +266,19 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   onChanged: (v) => setState(() => client.setAlertDesktop(v)),
                 ),
               ],
-              ListTile(
-                leading: const Icon(Icons.volume_off_outlined),
-                title: const Text('Muted agents'),
-                subtitle: Text(client.muted.isEmpty ? 'None' : '${client.muted.length} muted'),
-                trailing: client.muted.isNotEmpty ? const Icon(Icons.chevron_right) : null,
-                onTap: client.muted.isNotEmpty ? () => _showMutedAgents(context, client) : null,
-              ),
             ],
+            // Muting shows in the agents' list too, so it's here with alerts off as well.
+            ListTile(
+              leading: const Icon(Icons.notifications_off_outlined),
+              title: const Text('Muted agents'),
+              subtitle: Text(client.muted.isEmpty ? 'None' : '${client.muted.length} muted'),
+              trailing: client.muted.isNotEmpty ? const Icon(Icons.chevron_right) : null,
+              onTap: client.muted.isNotEmpty ? () => _showMutedAgents(context, client) : null,
+            ),
             const Divider(),
             section('Terminal'),
             ListTile(
+              leading: const Icon(Icons.format_size),
               title: const Text('Font size'),
               subtitle: client.pinchZoom || (Platform.isAndroid && client.volumeKeys == VolumeKeys.fontSize) || Platform.isLinux
                   ? Text('Or ${[
@@ -294,33 +307,39 @@ class _SettingsScreenState extends State<SettingsScreen> {
               ),
             ),
             SwitchListTile(
+              secondary: const Icon(Icons.pinch_outlined),
               title: const Text('Pinch to zoom'),
               subtitle: const Text('Pinch the terminal with two fingers to change the font size'),
               value: client.pinchZoom,
               onChanged: (v) => setState(() => client.setPinchZoom(v)),
             ),
             SwitchListTile(
-              title: const Text('Hide message terminal'),
-              subtitle: const Text('Hide the message input and control keys bar at the bottom of the terminal'),
+              secondary: const Icon(Icons.chat_bubble_outline),
+              title: const Text('Hide message bar'),
+              subtitle: const Text('Hide the message box and control keys under the terminal'),
               value: client.hideMessageTerminal,
               onChanged: (v) => setState(() => client.setHideMessageTerminal(v)),
             ),
-            const ListTile(
-              title: Text('Volume keys'),
-              subtitle: Text('What the volume keys do while the terminal is on screen'),
-            ),
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 16),
-              child: SegmentedButton<VolumeKeys>(
-                segments: const [
-                  ButtonSegment(value: VolumeKeys.fontSize, label: Text('Font size'), icon: Icon(Icons.text_fields)),
-                  ButtonSegment(value: VolumeKeys.arrows, label: Text('↑ / ↓'), icon: Icon(Icons.unfold_more)),
-                  ButtonSegment(value: VolumeKeys.volume, label: Text('Volume'), icon: Icon(Icons.volume_up_outlined)),
-                ],
-                selected: {client.volumeKeys},
-                onSelectionChanged: (s) => setState(() => client.setVolumeKeys(s.first)),
+            // Only on Android, where the terminal screen takes them ([VolumeKeys]).
+            if (Platform.isAndroid) ...[
+              const ListTile(
+                leading: Icon(Icons.volume_up_outlined),
+                title: Text('Volume keys'),
+                subtitle: Text('What the volume keys do while the terminal is on screen'),
               ),
-            ),
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 16),
+                child: SegmentedButton<VolumeKeys>(
+                  segments: const [
+                    ButtonSegment(value: VolumeKeys.fontSize, label: Text('Font size'), icon: Icon(Icons.text_fields)),
+                    ButtonSegment(value: VolumeKeys.arrows, label: Text('↑ / ↓'), icon: Icon(Icons.unfold_more)),
+                    ButtonSegment(value: VolumeKeys.volume, label: Text('Volume'), icon: Icon(Icons.volume_up_outlined)),
+                  ],
+                  selected: {client.volumeKeys},
+                  onSelectionChanged: (s) => setState(() => client.setVolumeKeys(s.first)),
+                ),
+              ),
+            ],
             const SizedBox(height: 16),
           ],
         ),

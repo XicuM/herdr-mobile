@@ -15,10 +15,7 @@ void main() async {
 class HerdrMobileApp extends StatelessWidget {
   final HerdrClientService client;
 
-  HerdrMobileApp({super.key, required this.client}) {
-    // A failed request shows on whatever screen is up.
-    client.onError = (message) => _messenger.currentState?.showSnackBar(SnackBar(content: Text(message)));
-  }
+  HerdrMobileApp({super.key, required this.client});
 
   final _messenger = GlobalKey<ScaffoldMessengerState>();
 
@@ -29,10 +26,18 @@ class HerdrMobileApp extends StatelessWidget {
   Widget build(BuildContext context) {
     // Material 3 throughout: colors come from the scheme's roles and text from its type scale. Only the
     // terminal uses the mono font.
-    ThemeData theme(Brightness brightness) => ThemeData(
-          colorScheme: ColorScheme.fromSeed(seedColor: client.seed, brightness: brightness),
-          bottomSheetTheme: const BottomSheetThemeData(showDragHandle: true),
-        );
+    ThemeData theme(Brightness brightness) {
+      final scheme = ColorScheme.fromSeed(seedColor: client.seed, brightness: brightness);
+      return ThemeData(
+        colorScheme: scheme,
+        bottomSheetTheme: const BottomSheetThemeData(showDragHandle: true),
+        snackBarTheme: SnackBarThemeData(
+          backgroundColor: scheme.surfaceContainerHighest,
+          contentTextStyle: TextStyle(color: scheme.onSurface),
+          actionTextColor: scheme.primary,
+        ),
+      );
+    }
     return ListenableBuilder(
       listenable: client,
       builder: (_, home) {

@@ -24,14 +24,17 @@ class _Conn {
   /// Failed attempts in a row, which space the retries out.
   int fails = 0;
   bool connected = false;
+
+  /// What herdr last sent, and what's shown of it: the same, less anything closed but still undoable.
+  SessionSnapshot? raw;
   SessionSnapshot? snapshot;
   String? selectedPaneId;
 
   /// Why the bridge has no snapshot (herdr not running, or the machine unreachable from it), until it has.
   String? error;
 
-  /// The bridge refused the token ([HerdrClientService.tokenOf]), until a connection is let in.
-  bool unauthorized = false;
+  /// Why the last attempt to connect failed, in words the user can act on, until one succeeds.
+  String? failure;
 
   /// The highest `completion_seq` seen per pane: a snapshot fetched over HTTP can land after a newer
   /// pushed one, and going back and forth must not alert twice.
@@ -48,7 +51,7 @@ class _Conn {
 /// [selectedPaneId] and the bridge requests below are its.
 class HerdrClientService extends ChangeNotifier {
   String _machine = '127.0.0.1:7788';
-  double _fontSize = 14;
+  double _fontSize = defaultFontSize;
   Color? _seed;
   Color? _systemSeed;
   Brightness? _brightness;
@@ -106,7 +109,7 @@ class HerdrClientService extends ChangeNotifier {
       onResume: () {
         _loadSystemSeed();
         for (final m in _machines) {
-          if (!_off.contains(m) && !isConnected(m)) _close(m);
+          if (!_off.contains(m) && (parentOf(m) == null || !_off.contains(parentOf(m)!)) && !isConnected(m)) _close(m);
         }
         notifyListeners();
       },
@@ -160,12 +163,9 @@ class HerdrClientService extends ChangeNotifier {
 
   bool isConnected(String m) => _conns[m]?.connected ?? false;
 
-  /// Why [m]'s bridge can't show it, e.g. "ssh: Could not resolve hostname …"; null once it can.
-  String? errorOf(String m) => (_conns[m]?.unauthorized ?? false)
-      ? 'Wrong or missing token: run herdr-bridge --print-token on ${nameOf(parentOf(m) ?? m)} and edit the machine'
-      : isConnected(m)
-          ? _conns[m]?.error
-          : null;
+  /// Why [m] can't be shown: why its connection failed (e.g. nothing answers at its address), or, once
+  /// connected, why its bridge has no snapshot (e.g. "ssh: Could not resolve hostname …"); null once it can.
+  String? errorOf(String m) => isConnected(m) ? _conns[m]?.error : _conns[m]?.failure;
 
   /// The token sent to [m]'s bridge, if one was given.
   String? tokenOf(String m) => _tokens[parentOf(m) ?? m];
@@ -203,15 +203,17 @@ class HerdrClientService extends ChangeNotifier {
   /// What [m]'s agents are doing, e.g. "1 needs you · 2 working", in the alerts' words.
   String summaryOf(String m) {
     final counts = <String, int>{};
-    for (final p in snapshotOf(m)?.panes ?? <PaneModel>[]) {
-      counts[p.agentStatus] = (counts[p.agentStatus] ?? 0) + 1;
+    for (final a in snapshotOf(m)?.agents ?? <AgentModel>[]) {
+      // `done` lasts only until the pane is viewed: it is idle all the same.
+      final status = a.status == 'done' ? 'idle' : a.status;
+      counts[status] = (counts[status] ?? 0) + 1;
     }
     final text = [
       if (counts['blocked'] case final n?) '$n ${n == 1 ? 'needs' : 'need'} you',
       if (counts['working'] case final n?) '$n working',
-      if (counts['done'] case final n?) '$n done',
+      if (counts['idle'] case final n?) '$n idle',
     ].join(' · ');
-    return text.isEmpty ? 'No agents running' : text;
+    return text.isEmpty ? 'No agents' : text;
   }
 
   /// Background alerts: a foreground service keeps the connections open, with an ongoing notification
@@ -374,22 +376,35 @@ class HerdrClientService extends ChangeNotifier {
   void notifyListeners() {
     super.notifyListeners();
     _sync();
-    final on = _machines.where((m) => !_off.contains(m)).toList();
+    final on = _machines.where((m) => !_off.contains(m) && (parentOf(m) == null || !_off.contains(parentOf(m)!))).toList();
     if (!_alerts || on.isEmpty) return _native('status');
-    final up = on.where(isConnected).toList();
-    if (up.isEmpty) return _native('status', {'title': 'Reconnecting…', 'text': 'Alerts resume once connected'});
-    final title = up.length == 1 ? 'Connected to ${nameOf(up.first)}' : 'Connected to ${up.length} machines';
-    final waiting = on.length - up.length;
+    // The title says what matters most across every machine; the text, a line per machine.
+    final agents = [for (final m in on.where(isConnected)) ...?snapshotOf(m)?.agents];
+    final blocked = agents.where((a) => a.status == 'blocked').length;
+    final working = agents.where((a) => a.status == 'working').length;
     _native('status', {
-      'title': waiting == 0 ? title : '$title · $waiting reconnecting',
-      'text': up.length == 1 ? summaryOf(up.first) : [for (final m in up) '${nameOf(m)}: ${summaryOf(m)}'].join('\n'),
+      'title': !on.any(isConnected)
+          ? 'Reconnecting…'
+          : blocked > 0
+              ? '$blocked ${blocked == 1 ? 'agent needs' : 'agents need'} you'
+              : working > 0
+                  ? '$working ${working == 1 ? 'agent' : 'agents'} working'
+                  : agents.isEmpty
+                      ? 'No agents running'
+                      : 'All agents idle',
+      'text': [
+        for (final m in on) '${nameOf(m)}: ${isConnected(m) ? summaryOf(m) : errorOf(m) ?? 'reconnecting…'}'
+      ].join('\n'),
     });
   }
 
-  /// Opens a connection for every saved machine that isn't off and doesn't have one (or a retry pending).
+  /// Opens a connection for every saved machine that isn't off (and whose bridge isn't off) and doesn't
+  /// have one (or a retry pending).
   void _sync() {
     if (!_started || _disposed) return;
     for (final m in _machines) {
+      final parent = parentOf(m);
+      if (parent != null && _off.contains(parent)) continue;
       final c = _conns.putIfAbsent(m, _Conn.new);
       if (!_off.contains(m) && c.channel == null && c.retry == null) _open(m, c);
     }
@@ -416,15 +431,15 @@ class HerdrClientService extends ChangeNotifier {
           if (c.channel != channel) return;
           if (!c.connected) {
             c.connected = true;
-            c.unauthorized = false;
+            c.failure = null;
             c.fails = 0;
             if (parentOf(m) == null) _discover(m);
             notifyListeners();
           }
           _handleMessage(m, message);
         },
-        onError: (_) {
-          if (!c.connected && c.channel == channel) _checkToken(m, c);
+        onError: (e) {
+          if (!c.connected && c.channel == channel) _diagnose(m, c, e);
           _dropped(c, channel);
         },
         onDone: () => _dropped(c, channel),
@@ -434,15 +449,49 @@ class HerdrClientService extends ChangeNotifier {
     }
   }
 
-  /// After a failed connection: whether it was the token (a refused upgrade doesn't say why), so the app
-  /// can say so instead of retrying quietly. Asked of the bridge itself, which answers before any machine.
-  Future<void> _checkToken(String m, _Conn c) async {
+  /// After a failed connection, finds out why, so the app can say so instead of retrying quietly: a
+  /// refused upgrade doesn't say why, so it asks again over HTTP, whose answer does (the token is checked
+  /// first, then a reached machine's id), and a bridge that can't be reached is told apart by the error.
+  Future<void> _diagnose(String m, _Conn c, Object wsError) async {
+    final bridge = parentOf(m) ?? m;
+    String failure;
     try {
-      final res = await http.get(Uri.parse('http://${parentOf(m) ?? m}/api/auth'), headers: headersOf(m));
-      if (c.unauthorized == (res.statusCode == 401)) return;
-      c.unauthorized = res.statusCode == 401;
-      notifyListeners();
-    } catch (_) {}
+      final res = await http
+          .get(Uri.parse('http://$m/api/auth'), headers: headersOf(m))
+          .timeout(const Duration(seconds: 5));
+      failure = switch (res.statusCode) {
+        401 => 'Wrong or missing token: run herdr-bridge --print-token on ${nameOf(bridge)} and edit the machine',
+        // The bridge refuses a dotted name other than *.ts.net (DNS rebinding).
+        403 => '${res.body.trim()}: add ${nameOf(bridge)} by its Tailscale IP or name',
+        200 => 'The bridge answered but refused the session: ${_parseError(wsError)}',
+        _ => 'The bridge answered ${res.statusCode}: ${res.body.trim()}',
+      };
+    } catch (e) {
+      failure = _networkError(bridge, e);
+    }
+    debugPrint('Could not connect to $m: $failure ($wsError)');
+    if (c.failure == failure) return;
+    c.failure = failure;
+    notifyListeners();
+  }
+
+  /// [e], a failed request to [bridge], in words the user can act on.
+  static String _networkError(String bridge, Object e) {
+    final host = bridge.split(':').first;
+    if (e is TimeoutException) {
+      return 'No answer from $host: is it on, and are this device and it both on Tailscale?';
+    }
+    if (e is SocketException) {
+      final os = '${e.message} ${e.osError?.message}'.toLowerCase();
+      if (os.contains('refused')) return 'Nothing answers at $bridge: is herdr-bridge running there, on that port?';
+      if (os.contains('lookup') || os.contains('resol') || os.contains('no address')) {
+        return "Can't find $host: check the address, or that Tailscale is on";
+      }
+      if (os.contains('unreachable')) return 'No route to $host: check this device\'s network and Tailscale';
+      if (os.contains('timed out')) return 'No answer from $host: is it on, and are this device and it both on Tailscale?';
+      return "Can't reach $bridge: ${e.osError?.message ?? e.message}";
+    }
+    return "Can't reach $bridge: $e";
   }
 
   /// Retries in 3 s, doubling with each failure in a row up to about 3 min, so a machine that's asleep or
@@ -475,6 +524,7 @@ class HerdrClientService extends ChangeNotifier {
   /// Reports failed bridge requests; set by the app, which shows them as a SnackBar on any screen.
   void Function(String message)? onError;
 
+  static const double defaultFontSize = 14;
   static const double minFontSize = 6;
   static const double maxFontSize = 32;
 
@@ -612,7 +662,7 @@ class HerdrClientService extends ChangeNotifier {
     // A new token reconnects it, and the machines it reaches, with it.
     if (to == m && newToken != oldToken) {
       for (final x in [m, ..._machines.where((x) => parentOf(x) == m)]) {
-        _conns[x]?.unauthorized = false;
+        _conns[x]?.failure = null;
         _close(x);
       }
     }
@@ -775,7 +825,9 @@ class HerdrClientService extends ChangeNotifier {
 
   /// Cycles to the next agent needing attention (in 'blocked' / Needs you state, or 'done' if none are blocked).
   void jumpToAttention() {
-    final on = _machines.where((m) => !_off.contains(m) && snapshotOf(m) != null).toList();
+    final on = _machines
+        .where((m) => !_off.contains(m) && (parentOf(m) == null || !_off.contains(parentOf(m)!)) && snapshotOf(m) != null)
+        .toList();
     final urgent = <(String, String)>[];
     for (final m in on) {
       final s = snapshotOf(m);
@@ -820,18 +872,18 @@ class HerdrClientService extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// Disconnects [m] (the active machine by default), and those it reaches, and keeps them off until
-  /// [connect]ed.
+  /// Disconnects [m] (the active machine by default), closing its connection (and those it reaches),
+  /// and keeps it off until [connect]ed.
   void disconnect([String? m]) {
-    final all = _withChildren(m ?? machine);
-    _off = {..._off, ...all};
-    all.forEach(_close);
+    final target = m ?? machine;
+    _off = {..._off, target};
+    _withChildren(target).forEach(_close);
     _saveMachines();
     notifyListeners();
   }
 
   void connect([String? m]) {
-    _off = _off.difference(_withChildren(m ?? machine).toSet());
+    _off = {..._off}..remove(m ?? machine);
     _saveMachines();
     notifyListeners();
   }
@@ -856,11 +908,9 @@ class HerdrClientService extends ChangeNotifier {
 
   void _apply(String m, SessionSnapshot snapshot) {
     final c = _conns.putIfAbsent(m, _Conn.new);
-    final before = c.snapshot;
-    c.snapshot = snapshot;
-    if (!snapshot.panes.any((p) => p.id == c.selectedPaneId)) {
-      c.selectedPaneId = _fallbackPane(m, c.selectedPaneId, before, snapshot);
-    }
+    final before = c.raw;
+    c.raw = snapshot;
+    _show(m);
     // After a dropout [before] is the last snapshot seen, so what changed meanwhile still alerts.
     if (before != null && _alerts) _alertChanges(m, before, snapshot);
     // herdr reuses a closed pane's id: a new pane mustn't come up muted, nor inherit the old one's
@@ -884,6 +934,50 @@ class HerdrClientService extends ChangeNotifier {
       SharedPreferences.getInstance().then((p) => p.setStringList('muted_panes', _muted.toList()));
     }
     notifyListeners();
+  }
+
+  /// Panes, tabs and workspaces (`machine/id`) closed but still undoable: left out of what's shown until
+  /// they're closed or the close is undone ([closeUnlessUndone]).
+  final _hidden = <String>{};
+
+  /// Shows [m]'s snapshot less what's [_hidden], moving to another pane if the selected one went.
+  void _show(String m) {
+    final c = _conns[m]!;
+    final s = c.raw!;
+    bool hidden(String id) => _hidden.contains('$m/$id');
+    final before = c.snapshot;
+    final tabs = s.tabs.where((t) => !hidden(t.id) && !hidden(t.workspaceId)).toList();
+    final panes = s.panes.where((p) => !hidden(p.id) && tabs.any((t) => t.id == p.tabId)).toList();
+    final now = c.snapshot = _hidden.isEmpty
+        ? s
+        : SessionSnapshot(
+            focusedPaneId: s.focusedPaneId,
+            workspaces: s.workspaces.where((w) => !hidden(w.id)).toList(),
+            tabs: tabs,
+            panes: panes,
+            agents: s.agents.where((a) => panes.any((p) => p.id == a.paneId)).toList(),
+          );
+    if (!now.panes.any((p) => p.id == c.selectedPaneId)) {
+      // Everything hidden isn't herdr left empty: no new workspace for that.
+      c.selectedPaneId = now.panes.isEmpty && s.panes.isNotEmpty ? null : _fallbackPane(m, c.selectedPaneId, before, now);
+    }
+  }
+
+  /// Hides [keys] (`machine/id` of panes, tabs or workspaces) at once, and once [undone] completes shows
+  /// them again: after [close] has closed them, unless it was undone.
+  Future<void> closeUnlessUndone(List<String> keys, Future<bool> undone, Future<void> Function() close) async {
+    void show() {
+      for (final m in _conns.keys) {
+        if (_conns[m]!.raw != null) _show(m);
+      }
+      notifyListeners();
+    }
+
+    _hidden.addAll(keys);
+    show();
+    if (!await undone) await close();
+    _hidden.removeAll(keys);
+    show();
   }
 
   /// The pane to show once the selected one is gone (its shell exited, or its tab or workspace closed):
@@ -934,39 +1028,25 @@ class HerdrClientService extends ChangeNotifier {
       if (seq > seen) completions[pane.id] = seq;
       if (_muted.contains('$m/${pane.id}')) continue;
 
-      final wasStatus = wasAgent?.status ?? was?.agentStatus ?? 'unknown';
-      final nowStatus = agent?.status ?? pane.agentStatus;
-
-      final wasBlocked = wasStatus == 'blocked' || was?.agentStatus == 'blocked' || wasAgent?.status == 'blocked';
-      final isBlocked = nowStatus == 'blocked' || pane.agentStatus == 'blocked' || agent?.status == 'blocked';
-      final blocked = !wasBlocked && isBlocked;
-
-      final wasWorking = wasStatus == 'working' || was?.agentStatus == 'working' || wasAgent?.status == 'working';
-      final isDoneOrIdle = (nowStatus == 'done' || nowStatus == 'idle') ||
-          (pane.agentStatus == 'done' || pane.agentStatus == 'idle') ||
-          (agent?.status == 'done' || agent?.status == 'idle');
-      final statusFinished = wasWorking && isDoneOrIdle && !isBlocked;
-
-      final finished = (wasAgent != null && seq > seen) || (wasAgent != null && statusFinished);
+      final wasBlocked = wasAgent?.status == 'blocked' || was?.agentStatus == 'blocked';
+      final blocked = !wasBlocked && (agent?.status == 'blocked' || pane.agentStatus == 'blocked');
+      final finished = wasAgent != null && seq > seen;
       if (!blocked && !finished) continue;
       if (blocked && !_alertBlocked) continue;
       if (finished && !_alertFinished) continue;
       final agentName = (agent?.name.isNotEmpty == true ? agent?.name : wasAgent?.name) ?? '';
-      final task = pane.terminalTitle.isNotEmpty
-          ? pane.terminalTitle
-          : agentName.isNotEmpty
-              ? agentName
-              : pane.id;
-      final workspace = now.workspaces.where((w) => w.id == pane.workspaceId).firstOrNull;
-      final title = '${blocked ? 'Needs you' : 'Finished'}: $task';
-      final text = [if (workspace != null) workspace.displayName, nameOf(m)].join(' · ');
+      // "Claude needs you", what it's on, and where it runs.
+      final who = agentName.isEmpty ? 'An agent' : agentName[0].toUpperCase() + agentName.substring(1);
+      final title = '$who ${blocked ? 'needs you' : 'finished'}';
+      final place = [now.placeOf(pane), nameOf(m)].where((s) => s.isNotEmpty).join(' · ');
       final iconName = agentName.isNotEmpty ? agentName : pane.terminalTitle;
       final iconBytes = agentIconBytes(iconName);
       if (!watching || pane.id != selectedPaneId) {
         _native('alert', {
           'key': '$m/${pane.id}',
           'title': title,
-          'text': text,
+          'text': pane.terminalTitle,
+          'place': place,
           'machine': m,
           'pane': pane.id,
           'urgent': blocked,
@@ -984,7 +1064,7 @@ class HerdrClientService extends ChangeNotifier {
             '-i',
             iconPath,
             title,
-            text,
+            [pane.terminalTitle, place].where((s) => s.isNotEmpty).join('\n'),
           ]).ignore();
         }
         if (_alertSound) {
@@ -1048,7 +1128,8 @@ class HerdrClientService extends ChangeNotifier {
       if (res.statusCode != 200) throw res.body;
       result = res.body.isEmpty ? null : jsonDecode(res.body);
     } catch (e) {
-      onError?.call('Could not $what: ${_parseError(e)}');
+      debugPrint('$method $m$path failed: $e');
+      onError?.call('Could not $what: ${e is SocketException || e is TimeoutException ? _networkError(parentOf(m) ?? m, e) : _parseError(e)}');
     }
     await _fetchSnapshotHttp(m);
     return result;
@@ -1079,13 +1160,14 @@ class HerdrClientService extends ChangeNotifier {
 
   Future<void> createTab(String workspaceId) => _create('create tab', '/api/tab', {'workspace_id': workspaceId});
 
-  Future<void> closeTab(String tabId) => _request('close tab', 'DELETE', '/api/tab/$tabId');
+  Future<void> closeTab(String tabId, [String? m]) => _request('close tab', 'DELETE', '/api/tab/$tabId', on: m);
 
   /// Closes [paneId] on [m] (the active machine by default). herdr closes a tab with its last pane and a
   /// workspace with its last tab, so when this is the workspace's only pane it first opens a new tab
   /// there, leaving the workspace with a shell.
   Future<void> closePane(String paneId, [String? m]) async {
-    final panes = snapshotOf(m ?? machine)?.panes ?? const [];
+    // What herdr has, panes hidden to close included.
+    final panes = _conns[m ?? machine]?.raw?.panes ?? const [];
     final ws = panes.where((p) => p.id == paneId).firstOrNull?.workspaceId;
     if (ws != null && panes.where((p) => p.workspaceId == ws).length == 1) {
       await _request('create tab', 'POST', '/api/tab', body: {'workspace_id': ws}, on: m);
@@ -1112,9 +1194,10 @@ class HerdrClientService extends ChangeNotifier {
 
   Future<void> createWorkspace() => _create('create workspace', '/api/workspace', {});
 
-  Future<void> deleteWorkspace(String workspaceId, {bool removeWorktree = false, bool force = false}) {
+  Future<void> deleteWorkspace(String workspaceId, {bool removeWorktree = false, bool force = false, String? on}) {
     final query = {if (removeWorktree) 'remove_worktree': 'true', if (force) 'force': 'true'};
-    return _request('delete workspace', 'DELETE', '/api/workspace/$workspaceId', query: query.isEmpty ? null : query);
+    return _request('delete workspace', 'DELETE', '/api/workspace/$workspaceId',
+        query: query.isEmpty ? null : query, on: on);
   }
 
   Future<void> renameWorkspace(String workspaceId, String label) =>
