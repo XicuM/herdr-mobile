@@ -63,9 +63,6 @@ class _AgentsHomeScreenState extends State<AgentsHomeScreen> {
   /// The detail view shown on the right side in landscape wide mode instead of the terminal.
   _Detail? _detail;
 
-  /// Whether the machines panel is open beside the agents list in landscape wide mode.
-  bool _showMachines = false;
-
   /// The terminal's own screen, while it's pushed over the agents (on a narrow screen).
   Route<dynamic>? _terminalRoute;
   bool? _wasWide;
@@ -145,7 +142,6 @@ class _AgentsHomeScreenState extends State<AgentsHomeScreen> {
     if (key == LogicalKeyboardKey.keyH) {
       if (event is! KeyUpEvent) {
         if (_query != null) _closeSearch();
-        if (_showMachines) setState(() => _showMachines = false);
         if (_detail != null) setState(() => _detail = null);
         if (_scaffold.currentState?.isDrawerOpen == true) _scaffold.currentState?.closeDrawer();
         if (_scaffold.currentState?.isEndDrawerOpen == true) _scaffold.currentState?.closeEndDrawer();
@@ -341,8 +337,8 @@ class _AgentsHomeScreenState extends State<AgentsHomeScreen> {
   }
 
   void _openMachines() {
-    if (_isWide(context)) {
-      setState(() => _showMachines = !_showMachines);
+    if (_scaffold.currentState?.isEndDrawerOpen == true) {
+      _scaffold.currentState?.closeEndDrawer();
     } else {
       _scaffold.currentState?.openEndDrawer();
     }
@@ -365,10 +361,7 @@ class _AgentsHomeScreenState extends State<AgentsHomeScreen> {
   /// Pushes the selected pane's terminal; on a wide screen it's already beside the agents.
   Future<void> _openTerminal(BuildContext context) async {
     if (_isWide(context)) {
-      setState(() {
-        _detail = null;
-        _showMachines = false;
-      });
+      setState(() => _detail = null);
       return;
     }
     final route = _terminalRoute = MaterialPageRoute(builder: (_) => TerminalScreen(client: client));
@@ -670,13 +663,12 @@ class _AgentsHomeScreenState extends State<AgentsHomeScreen> {
                               );
 
         final Widget scaffold = PopScope(
-          // Back leaves the selection first, then the search, then the detail view or machines panel.
-          canPop: !selecting && !searching && _detail == null && !_showMachines,
+          // Back leaves the selection first, then the search, then the detail view.
+          canPop: !selecting && !searching && _detail == null,
           onPopInvokedWithResult: (didPop, _) {
             if (didPop) return;
             if (selecting) return setState(_selected.clear);
             if (searching) return _closeSearch();
-            if (_showMachines) return setState(() => _showMachines = false);
             if (_detail != null) return setState(() => _detail = null);
           },
           child: Scaffold(
@@ -733,36 +725,6 @@ class _AgentsHomeScreenState extends State<AgentsHomeScreen> {
                       children: [
                         SizedBox(width: 360, child: Column(children: [bar, Expanded(child: list)])),
                         const VerticalDivider(width: 1),
-                        if (_showMachines) ...[
-                          SizedBox(
-                            width: 304,
-                            child: Material(
-                              color: Theme.of(context).colorScheme.surface,
-                              child: Column(
-                                children: [
-                                  AppBar(
-                                    leading: IconButton(
-                                      icon: const Icon(Icons.close),
-                                      tooltip: 'Close',
-                                      onPressed: () => setState(() => _showMachines = false),
-                                    ),
-                                    title: const Text('Machines'),
-                                    actions: [
-                                      IconButton(
-                                        tooltip: 'Add machine',
-                                        icon: const Icon(Icons.add),
-                                        onPressed: () => showMachinePage(context, client),
-                                      ),
-                                      const SizedBox(width: 4),
-                                    ],
-                                  ),
-                                  Expanded(child: MachineList(client: client)),
-                                ],
-                              ),
-                            ),
-                          ),
-                          const VerticalDivider(width: 1),
-                        ],
                         Expanded(
                           child: switch (_detail) {
                             _SettingsDetail() => SettingsScreen(

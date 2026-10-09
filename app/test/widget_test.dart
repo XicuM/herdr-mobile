@@ -537,15 +537,15 @@ void main() {
       expect(find.byType(TerminalScreen), findsOneWidget);
       expect(find.byType(BackButton), findsNothing);
 
-      // Opening the machines panel in landscape displays the 304dp Machines panel beside the list.
+      // Opening the machines panel in landscape opens the machines drawer.
       await tester.tap(find.byTooltip('Machines'));
       await tester.pump();
       await tester.pump(const Duration(seconds: 1));
       expect(find.byType(MachineList), findsOneWidget);
       expect(find.byType(TerminalScreen), findsOneWidget);
 
-      // Closing it via its close button hides it.
-      await tester.tap(find.descendant(of: find.byType(Column), matching: find.byTooltip('Close')).first);
+      // Tapping outside the drawer closes it.
+      await tester.tapAt(const Offset(10, 10));
       await tester.pump();
       await tester.pump(const Duration(seconds: 1));
       expect(find.byType(MachineList), findsNothing);

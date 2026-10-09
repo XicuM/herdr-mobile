@@ -1,6 +1,12 @@
 /// Newest first. Shown once after an update; add an entry when bumping the version in pubspec.yaml.
 const changelog = <(String, List<String>)>[
   (
+    '1.12.2',
+    [
+      'The machines panel in landscape wide mode now opens as a slide-in overlay drawer, matching the mobile and workspaces drawer behavior.',
+    ]
+  ),
+  (
     '1.12.1',
     [
       'Antigravity quota limits in the usage panel are now ordered with the 5-hour session window before the weekly window.',
