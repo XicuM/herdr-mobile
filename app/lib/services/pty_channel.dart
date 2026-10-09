@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'package:web_socket_channel/io.dart';
 import 'package:web_socket_channel/web_socket_channel.dart';
@@ -19,9 +20,14 @@ class PtyChannel {
   /// Called with each attach's first frame, when herdr shows the pane live.
   final VoidCallback? onAttach;
 
-  WebSocketChannel? _channel;
+  /// Whether herdr is streaming the pane: set by each attach's first frame, cleared when the connection drops.
+  final attached = ValueNotifier(false);
+
+  WebSocketChannel? _channel; // null between a dropped connection and the next attempt
   StreamSubscription? _sub;
   Timer? _reconnectTimer;
+  int _fails = 0; // attempts in a row that never attached, to back off
+  final _pending = <String>[]; // input typed while there was no connection, sent with the next one
   bool _disposed = false;
   final _held = StringBuffer();
   bool _hold = false;
@@ -53,36 +59,65 @@ class PtyChannel {
     var reset = '\x1b[?1049h\x1b[0m\x1b[H\x1b[2J';
     final uri = Uri.parse(
         'ws://$machine/ws/term/${Uri.encodeComponent(paneId)}?cols=${terminal.viewWidth}&rows=${terminal.viewHeight}');
-    _channel = IOWebSocketChannel.connect(uri, headers: headers);
+    // Pings notice a connection that died silently (a bad signal, a changed network), which would otherwise
+    // freeze the screen and swallow input until TCP gives up, minutes later. Only a pong counts, and on a
+    // congested link it waits behind the frames, so shorter would drop slow but live connections; longer
+    // also lets the phone's radio rest between them.
+    final channel = IOWebSocketChannel(
+        WebSocket.connect(uri.toString(), headers: headers).then((s) => s..pingInterval = const Duration(seconds: 10)));
+    _channel = channel;
+    // An attempt made while the network is down can hang as long, so one not streaming soon is given up
+    // (soon enough for a slow link, or a machine the bridge reaches over SSH).
+    _reconnectTimer = Timer(const Duration(seconds: 20), () => _dropped(channel));
     // Connection failures also reach the stream's onError, which reconnects.
-    _channel!.ready.ignore();
+    channel.ready.ignore();
+    // The sink holds them until the socket opens.
+    for (final input in _pending) {
+      channel.sink.add(utf8.encode(input));
+    }
+    _pending.clear();
     // Utf8Decoder as a stream transformer keeps multi-byte characters split across frames intact.
-    _sub = _channel!.stream
+    _sub = channel.stream
         .where((data) => data is List<int>)
         .cast<List<int>>()
         .transform(const Utf8Decoder(allowMalformed: true))
         .listen(
       (data) {
         _hold ? _held.write(reset + data) : terminal.write(reset + data);
-        if (reset.isNotEmpty) onAttach?.call();
+        if (reset.isNotEmpty) {
+          _reconnectTimer?.cancel();
+          _fails = 0;
+          attached.value = true;
+          onAttach?.call();
+        }
         reset = '';
       },
       onError: (err) {
         debugPrint('Terminal WS error: $err');
-        _scheduleReconnect();
+        _dropped(channel);
       },
-      onDone: _scheduleReconnect,
+      onDone: () => _dropped(channel),
       cancelOnError: true,
     );
   }
 
-  void _scheduleReconnect() {
-    if (_disposed) return;
-    _reconnectTimer = Timer(const Duration(seconds: 2), connect);
+  /// Retries soon, since on a phone most drops are brief, backing off to every 4 s while it keeps failing.
+  /// The screen keeps the last frame meanwhile; [attached] tells it it's stale.
+  void _dropped(WebSocketChannel channel) {
+    if (_disposed || _channel != channel) return;
+    _reconnectTimer?.cancel();
+    _sub?.cancel();
+    channel.sink.close();
+    _channel = null;
+    attached.value = false;
+    _reconnectTimer = Timer(Duration(milliseconds: 500 << _fails.clamp(0, 3)), connect);
+    _fails++;
   }
 
+  /// Input typed while reconnecting waits for the connection rather than vanishing.
   void sendInput(String input) {
-    _channel?.sink.add(utf8.encode(input));
+    final channel = _channel;
+    channel == null ? _pending.add(input) : channel.sink.add(utf8.encode(input));
   }
 
   void sendResize(int cols, int rows) {
@@ -100,5 +135,6 @@ class PtyChannel {
     _reconnectTimer?.cancel();
     _sub?.cancel();
     _channel?.sink.close();
+    attached.dispose();
   }
 }

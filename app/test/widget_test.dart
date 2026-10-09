@@ -747,7 +747,7 @@ void main() {
       await tester.tap(find.descendant(of: find.byType(MachineList), matching: find.text('laptop')));
       await settle();
       expect(find.text('Save'), findsOneWidget); // its page
-      expect(find.text('Remove machine'), findsOneWidget);
+      expect(find.text('Remove machine', skipOffstage: false), findsOneWidget);
       await tester.tap(find.byType(CloseButton));
       await settle();
 
@@ -1944,6 +1944,54 @@ void main() {
 
       final editableText = tester.widget<EditableText>(find.byType(EditableText));
       expect(editableText.controller.text, equals('line 1\n'));
+    });
+
+    testWidgets('Send button is same height as single-line message pill, but not made larger when multiline', (tester) async {
+      TerminalScreen.clearDraftsForTesting();
+      final client = HerdrClientService();
+      final snap = SessionSnapshot.fromJson({
+        'version': '0.9.3',
+        'protocol': 22,
+        'focused_workspace_id': 'w1',
+        'focused_tab_id': 'w1:t1',
+        'focused_pane_id': 'w1:p1',
+        'workspaces': [
+          {'workspace_id': 'w1', 'number': 1, 'label': 'main', 'active_tab_id': 'w1:t1', 'agent_status': 'idle'},
+        ],
+        'tabs': [
+          {'tab_id': 'w1:t1', 'workspace_id': 'w1', 'number': 1, 'label': 'Tab 1', 'agent_status': 'idle'},
+        ],
+        'panes': [
+          {'pane_id': 'w1:p1', 'workspace_id': 'w1', 'tab_id': 'w1:t1', 'focused': true, 'agent_status': 'idle', 'terminal_title': ''},
+        ],
+        'agents': [],
+      });
+      client.setSnapshotForTesting(snap);
+      client.selectPane('w1:p1');
+
+      await tester.pumpWidget(MaterialApp(home: TerminalScreen(client: client)));
+      await tester.pump(const Duration(milliseconds: 300));
+
+      final textFieldFinder = find.byType(TextField);
+      final sendButtonFinder = find.byTooltip('Enter');
+
+      final textFieldSize = tester.getSize(textFieldFinder);
+      final sendButtonSize = tester.getSize(sendButtonFinder);
+
+      // Single-line message pill and send button have the exact same height (48dp)
+      expect(sendButtonSize.height, equals(textFieldSize.height));
+      expect(sendButtonSize.height, equals(48.0));
+
+      // Enter multi-line text to make the message pill larger
+      await tester.enterText(textFieldFinder, 'Line 1\nLine 2\nLine 3');
+      await tester.pump();
+
+      final multilineTextFieldSize = tester.getSize(textFieldFinder);
+      final multilineSendButtonSize = tester.getSize(find.byTooltip('Send'));
+
+      // Message pill grew larger, but send button did not grow
+      expect(multilineTextFieldSize.height, greaterThan(48.0));
+      expect(multilineSendButtonSize.height, equals(48.0));
     });
 
     test('HerdrClientService tab and workspace navigation and jumpToAttention', () {

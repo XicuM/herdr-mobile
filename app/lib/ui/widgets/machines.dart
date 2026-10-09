@@ -243,10 +243,9 @@ class MachineDetailScope extends InheritedWidget {
   bool updateShouldNotify(MachineDetailScope oldWidget) => onOpenDetail != oldWidget.onOpenDetail;
 }
 
-/// Adds a machine when [m] is null, else shows it to edit or remove: how it's doing, its switch, its
-/// settings, and for a bridge the machines it reaches. A new one is either a bridge, at its address, or an
-/// SSH machine saved in a bridge's herdr (`herdr machine add`), which that bridge then reaches. One a
-/// bridge reaches is edited and removed in that herdr, where it comes from: its name and its SSH target.
+/// Adds a bridge when [m] is null, else shows it to edit or remove: how it's doing, its switch, its
+/// settings, and for a bridge the remote machines saved in its herdr. A remote machine is added under its
+/// bridge or edited to change its name and SSH target.
 void showMachinePage(BuildContext context, HerdrClientService client, [String? m]) {
   final openDetail = MachineDetailScope.of(context);
   if (openDetail != null) {
@@ -278,9 +277,6 @@ class _MachineScreenState extends State<MachineScreen> {
   String? get m => widget.machine;
 
   late bool reached;
-  late List<String> bridges;
-  String? via;
-  var ssh = false;
   var busy = false;
   late final TextEditingController name;
   late final TextEditingController address;
@@ -291,8 +287,6 @@ class _MachineScreenState extends State<MachineScreen> {
   void initState() {
     super.initState();
     reached = m != null && HerdrClientService.parentOf(m!) != null;
-    bridges = client.machines.where((x) => HerdrClientService.parentOf(x) == null).toList();
-    via = bridges.where(client.isConnected).firstOrNull ?? bridges.firstOrNull;
     name = TextEditingController(text: m == null || client.nameOf(m!) == m ? '' : client.nameOf(m!));
     address = TextEditingController(text: m ?? '');
     target = TextEditingController(text: reached ? client.targetOf(m!) ?? '' : '');
@@ -317,19 +311,17 @@ class _MachineScreenState extends State<MachineScreen> {
   }
 
   Future<void> _save() async {
-    if (ssh || reached) {
-      if (target.text.trim().isEmpty || (!reached && via == null)) return;
+    if (reached) {
+      if (target.text.trim().isEmpty) return;
       setState(() => busy = true);
-      final done = reached
-          ? await client.editSshMachine(m!, target.text.trim(), name.text.trim())
-          : await client.addSshMachine(via!, target.text.trim(), name.text.trim());
+      final done = await client.editSshMachine(m!, target.text.trim(), name.text.trim());
       if (!mounted) return;
       if (done) return _close();
       return setState(() => busy = false);
     }
     if (address.text.trim().isEmpty) return;
     final (host, port) = _parseAddress(address.text);
-    final to = reached ? m! : '$host:$port';
+    final to = '$host:$port';
     final key = _tokenChars(token.text);
     _close();
     if (m != null) return client.updateMachine(m!, to: to, name: name.text.trim(), token: key);
@@ -357,6 +349,73 @@ class _MachineScreenState extends State<MachineScreen> {
     if (ok != true || !mounted) return;
     _close();
     reached ? client.removeSshMachine(m!) : client.removeMachine(m!);
+  }
+
+  Future<void> _addRemoteMachine(BuildContext context) async {
+    final targetCtrl = TextEditingController();
+    final nameCtrl = TextEditingController();
+    var adding = false;
+    await showDialog<void>(
+      context: context,
+      builder: (dialogCtx) => StatefulBuilder(
+        builder: (context, setDialogState) => AlertDialog(
+          title: const Text('Add remote machine'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              TextField(
+                controller: targetCtrl,
+                autofocus: true,
+                enabled: !adding,
+                keyboardType: TextInputType.url,
+                decoration: InputDecoration(
+                  labelText: 'SSH target',
+                  prefixIcon: const Icon(Icons.terminal),
+                  helperText: 'user@host, saved in herdr on ${client.nameOf(m!)}',
+                  border: const OutlineInputBorder(),
+                ),
+              ),
+              const SizedBox(height: 16),
+              TextField(
+                controller: nameCtrl,
+                enabled: !adding,
+                decoration: InputDecoration(
+                  labelText: 'Name',
+                  prefixIcon: const Icon(Icons.label_outline),
+                  hintText: targetCtrl.text,
+                  helperText: 'Optional label',
+                  border: const OutlineInputBorder(),
+                ),
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: adding ? null : () => Navigator.pop(dialogCtx),
+              child: const Text('Cancel'),
+            ),
+            FilledButton(
+              onPressed: adding
+                  ? null
+                  : () async {
+                      final t = targetCtrl.text.trim();
+                      if (t.isEmpty) return;
+                      setDialogState(() => adding = true);
+                      final ok = await client.addSshMachine(m!, t, nameCtrl.text.trim());
+                      if (!dialogCtx.mounted) return;
+                      if (ok) Navigator.pop(dialogCtx);
+                      setDialogState(() => adding = false);
+                    },
+              child: adding
+                  ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2))
+                  : const Text('Add'),
+            ),
+          ],
+        ),
+      ),
+    );
+    targetCtrl.dispose();
+    nameCtrl.dispose();
   }
 
   @override
@@ -401,15 +460,6 @@ class _MachineScreenState extends State<MachineScreen> {
             padding: const EdgeInsets.fromLTRB(16, 16, 16, 32),
             children: [
               if (m != null) machineStatusCard(client, m!, theme),
-              if (m == null && bridges.isNotEmpty)
-                SegmentedButton<bool>(
-                  segments: const [
-                    ButtonSegment(value: false, icon: Icon(Icons.lan_outlined), label: Text('Bridge')),
-                    ButtonSegment(value: true, icon: Icon(Icons.terminal), label: Text('SSH')),
-                  ],
-                  selected: {ssh},
-                  onSelectionChanged: busy ? null : (v) => setState(() => ssh = v.first),
-                ),
               section('Connection'),
               if (reached)
                 TextField(
@@ -425,34 +475,7 @@ class _MachineScreenState extends State<MachineScreen> {
                     border: const OutlineInputBorder(),
                   ),
                 )
-              else if (ssh) ...[
-                if (bridges.length > 1) ...[
-                  DropdownMenu<String>(
-                    initialSelection: via,
-                    expandedInsets: EdgeInsets.zero,
-                    label: const Text('Via'),
-                    leadingIcon: const Icon(Icons.lan_outlined),
-                    enabled: !busy,
-                    onSelected: (b) => setState(() => via = b),
-                    dropdownMenuEntries: [
-                      for (final b in bridges) DropdownMenuEntry(value: b, label: client.nameOf(b))
-                    ],
-                  ),
-                  const SizedBox(height: 16),
-                ],
-                TextField(
-                  controller: target,
-                  autofocus: true,
-                  enabled: !busy,
-                  keyboardType: TextInputType.url,
-                  decoration: InputDecoration(
-                    labelText: 'SSH target',
-                    prefixIcon: const Icon(Icons.terminal),
-                    helperText: 'user@host, saved in herdr on ${client.nameOf(via ?? '')}',
-                    border: const OutlineInputBorder(),
-                  ),
-                ),
-              ] else ...[
+              else ...[
                 TextField(
                   controller: address,
                   autofocus: m == null,
@@ -474,15 +497,29 @@ class _MachineScreenState extends State<MachineScreen> {
                 decoration: InputDecoration(
                   labelText: 'Name',
                   prefixIcon: const Icon(Icons.label_outline),
-                  hintText: reached || ssh ? target.text : address.text,
+                  hintText: reached ? target.text : address.text,
                   helperText: 'Optional; the address is shown without one',
                   border: const OutlineInputBorder(),
                 ),
                 onSubmitted: (_) => _save(),
               ),
-              if (children.isNotEmpty) ...[
-                section('Reached over SSH'),
-                MachineList(client: client, only: children),
+              if (m != null && !reached) ...[
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(4, 24, 0, 4),
+                  child: Row(
+                    children: [
+                      Text('Remote machines', style: theme.textTheme.titleSmall?.copyWith(color: scheme.primary)),
+                      const Spacer(),
+                      IconButton(
+                        icon: const Icon(Icons.add),
+                        color: scheme.primary,
+                        tooltip: 'Add remote machine',
+                        onPressed: () => _addRemoteMachine(context),
+                      ),
+                    ],
+                  ),
+                ),
+                if (children.isNotEmpty) MachineList(client: client, only: children),
               ],
               if (m != null) ...[
                 const SizedBox(height: 24),

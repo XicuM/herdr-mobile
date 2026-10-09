@@ -1,6 +1,15 @@
 /// Newest first. Shown once after an update; add an entry when bumping the version in pubspec.yaml.
 const changelog = <(String, List<String>)>[
   (
+    '1.12.0',
+    [
+      'Terminal connection resilience: automated heartbeat pings, exponential reconnect backoff, and queuing typed messages while reconnecting.',
+      'A reconnecting overlay appears when a pane connection drops, preserving the last rendered frame.',
+      'Add remote SSH machines directly under any configured bridge.',
+      'Fixed message bar send button layout sizing.',
+    ]
+  ),
+  (
     '1.11.0',
     [
       'Multi-provider live quota and token tracking for Claude, Codex, Antigravity, Grok, OpenCode, Copilot, Cursor, OpenRouter, and DeepSeek.',

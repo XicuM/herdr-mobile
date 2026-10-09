@@ -63,6 +63,8 @@ class _TerminalScreenState extends State<TerminalScreen> {
   int _historyIndex = -1;
   String _savedDraft = '';
   PtyChannel? _ptyChannel;
+  bool _stale = false; // the pane hasn't streamed for a while: the screen is its last frame, dimmed
+  Timer? _staleTimer;
   late final AppLifecycleListener _lifecycle;
   bool _ctrl = false;
   List<String> _history = []; // sent messages, newest first, shared by every pane
@@ -1119,7 +1121,22 @@ class _TerminalScreenState extends State<TerminalScreen> {
           _ptyChannel?.sendScroll((_scrolledLines / _scrolledUp).ceil());
         }
       },
-    )..connect();
+    );
+    _ptyChannel!.attached.addListener(_onAttached);
+    _onAttached();
+    _ptyChannel!.connect();
+  }
+
+  /// Marks the screen stale once the pane has been off for a second, so an ordinary attach never flashes it.
+  void _onAttached() {
+    _staleTimer?.cancel();
+    if (_ptyChannel?.attached.value ?? true) {
+      if (_stale && mounted) setState(() => _stale = false);
+      return;
+    }
+    _staleTimer = Timer(const Duration(seconds: 1), () {
+      if (mounted) setState(() => _stale = true);
+    });
   }
 
   @override
@@ -1135,6 +1152,7 @@ class _TerminalScreenState extends State<TerminalScreen> {
     _message.dispose();
     HardwareKeyboard.instance.removeHandler(_onHardwareKey);
     _ptyChannel?.dispose();
+    _staleTimer?.cancel();
     super.dispose();
   }
 
@@ -1606,6 +1624,22 @@ class _TerminalScreenState extends State<TerminalScreen> {
                                 ),
                               ),
                             ),
+                        if (_stale)
+                          // The connection dropped: the screen is the pane's last frame until it's back.
+                          Positioned.fill(
+                            child: IgnorePointer(
+                              child: ColoredBox(
+                                color: background.withAlpha(128),
+                                child: const Align(
+                                  alignment: Alignment(0, -0.8),
+                                  child: Chip(
+                                    avatar: Icon(Icons.wifi_off),
+                                    label: Text('Reconnecting…'),
+                                  ),
+                                ),
+                              ),
+                            ),
+                          ),
                         if (_scrolledUp > 0)
                           // Back to live: a small round arrow, centred at the bottom.
                           Positioned(
@@ -1688,6 +1722,7 @@ class _TerminalScreenState extends State<TerminalScreen> {
                         valueListenable: _message,
                         builder: (context, val, _) => IconButton.filled(
                           style: IconButton.styleFrom(
+                            fixedSize: const Size(48, 48),
                             backgroundColor: scheme.primary,
                             foregroundColor: scheme.onPrimary,
                           ),
