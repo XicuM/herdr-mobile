@@ -1,6 +1,12 @@
 /// Newest first. Shown once after an update; add an entry when bumping the version in pubspec.yaml.
 const changelog = <(String, List<String>)>[
   (
+    '1.12.1',
+    [
+      'Antigravity quota limits in the usage panel are now ordered with the 5-hour session window before the weekly window.',
+    ]
+  ),
+  (
     '1.12.0',
     [
       'Terminal connection resilience: automated heartbeat pings, exponential reconnect backoff, and queuing typed messages while reconnecting.',
