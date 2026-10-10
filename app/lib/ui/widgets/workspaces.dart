@@ -187,14 +187,16 @@ Future<void> showWorkspaceContextMenu(
         value: 'rename',
         child: ListTile(leading: Icon(Icons.edit_outlined), title: Text('Rename')),
       ),
-      const PopupMenuItem(
-        value: 'new_worktree',
-        child: ListTile(leading: Icon(Icons.call_split), title: Text('New worktree')),
-      ),
-      const PopupMenuItem(
-        value: 'open_worktree',
-        child: ListTile(leading: Icon(Icons.folder_open_outlined), title: Text('Open worktree')),
-      ),
+      if (ws.repoKey != null || ws.gitBranch != null) ...[
+        const PopupMenuItem(
+          value: 'new_worktree',
+          child: ListTile(leading: Icon(Icons.call_split), title: Text('New worktree')),
+        ),
+        const PopupMenuItem(
+          value: 'open_worktree',
+          child: ListTile(leading: Icon(Icons.folder_open_outlined), title: Text('Open worktree')),
+        ),
+      ],
       PopupMenuItem(
         value: 'delete',
         child: ListTile(
@@ -284,21 +286,23 @@ void showWorkspaceActions(BuildContext context, HerdrClientService client, Works
                 if (name != null) client.renameWorkspace(ws.id, name);
               }),
             ),
-            ListTile(
-              leading: const Icon(Icons.call_split),
-              title: const Text('New worktree'),
-              onTap: () => run(() async {
-                final branch = await prompt(context, 'New worktree', 'Branch name', hint: 'e.g. feat/my-feature');
-                if (branch == null) return;
-                await client.createWorktree(ws.id, branch);
-                onShow?.call();
-              }),
-            ),
-            ListTile(
-              leading: const Icon(Icons.folder_open_outlined),
-              title: const Text('Open worktree'),
-              onTap: () => run(() => _openWorktree(context, client, ws, onShow)),
-            ),
+            if (ws.repoKey != null || ws.gitBranch != null) ...[
+              ListTile(
+                leading: const Icon(Icons.call_split),
+                title: const Text('New worktree'),
+                onTap: () => run(() async {
+                  final branch = await prompt(context, 'New worktree', 'Branch name', hint: 'e.g. feat/my-feature');
+                  if (branch == null) return;
+                  await client.createWorktree(ws.id, branch);
+                  onShow?.call();
+                }),
+              ),
+              ListTile(
+                leading: const Icon(Icons.folder_open_outlined),
+                title: const Text('Open worktree'),
+                onTap: () => run(() => _openWorktree(context, client, ws, onShow)),
+              ),
+            ],
             ListTile(
               iconColor: error,
               textColor: error,
@@ -320,7 +324,7 @@ void showWorkspaceActions(BuildContext context, HerdrClientService client, Works
 void _delete(BuildContext context, HerdrClientService client, WorkspaceModel ws) {
   final m = client.machine;
   closeWithUndo(context, client, 'Workspace deleted', ['$m/${ws.id}'],
-      () => client.deleteWorkspace(ws.id, removeWorktree: ws.isLinkedWorktree, on: m));
+      () => client.deleteWorkspace(ws.id, removeWorktree: ws.isLinkedWorktree, force: ws.isLinkedWorktree, on: m));
 }
 
 OverlayEntry? _activeUndoEntry;

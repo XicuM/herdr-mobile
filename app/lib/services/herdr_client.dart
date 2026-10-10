@@ -1234,16 +1234,17 @@ class HerdrClientService extends ChangeNotifier {
       });
 
   Future<List<Map<String, dynamic>>> listWorktrees(String workspaceId) async {
-    final res = await _request('list worktrees', 'GET', '/api/worktree', query: {'workspace_id': workspaceId});
+    final res = await _request('list worktrees', 'GET', '/api/worktree', query: {'workspace_id': _getMainWorkspaceId(workspaceId)});
     return ((res is Map ? res['worktrees'] : null) as List<dynamic>? ?? []).cast<Map<String, dynamic>>();
   }
 
-  Future<void> openWorktree(String workspaceId, {String? branch, String? path}) =>
-      _create('open worktree', '/api/worktree/open', {
-        'workspace_id': workspaceId,
-        if (branch != null) 'branch': branch,
-        if (path != null) 'path': path,
-      });
+  Future<void> openWorktree(String workspaceId, {String? branch, String? path}) {
+    final usePath = path != null && path.isNotEmpty;
+    return _create('open worktree', '/api/worktree/open', {
+      'workspace_id': _getMainWorkspaceId(workspaceId),
+      if (usePath) 'path': path else if (branch != null && branch.isNotEmpty) 'branch': branch,
+    });
+  }
 
   @override
   void dispose() {
