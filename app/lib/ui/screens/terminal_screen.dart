@@ -1745,6 +1745,7 @@ class _TerminalScreenState extends State<TerminalScreen> {
                         valueListenable: _message,
                         builder: (context, val, _) => IconButton.filled(
                           style: IconButton.styleFrom(
+                            fixedSize: Platform.isAndroid ? const Size(48, 48) : null,
                             backgroundColor: scheme.primary,
                             foregroundColor: scheme.onPrimary,
                           ),
