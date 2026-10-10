@@ -1788,6 +1788,11 @@ void main() {
                   'percent': 0.47,
                   'resets_at': DateTime.now().add(const Duration(days: 3, hours: 23, minutes: 15)).toIso8601String(),
                 },
+                {
+                  'label': 'Monthly',
+                  'percent': 0.10,
+                  'resets_at': DateTime.now().add(const Duration(days: 4, minutes: 10)).toIso8601String(),
+                },
               ],
               'today_tokens': 50000,
               'today_prompts': 10,
@@ -1815,6 +1820,7 @@ void main() {
       expect(find.text('Session (5-hour)'), findsOneWidget);
       expect(find.text('Weekly (7-day)'), findsOneWidget);
       expect(find.text('Resets in 3d 23h'), findsOneWidget);
+      expect(find.text('Resets in 4d 0h'), findsOneWidget);
       expect(find.text('15% left'), findsOneWidget);
       expect(find.text('85% used'), findsOneWidget);
       expect(find.text('50.0k'), findsOneWidget);

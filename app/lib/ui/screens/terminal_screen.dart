@@ -505,7 +505,7 @@ class _TerminalScreenState extends State<TerminalScreen> {
       if (diff.inHours >= 24) {
         final days = diff.inDays;
         final h = diff.inHours % 24;
-        return h > 0 ? 'in ${days}d ${h}h' : 'in ${days}d';
+        return 'in ${days}d ${h}h';
       }
       if (diff.inHours > 0) {
         final m = diff.inMinutes % 60;

@@ -587,7 +587,13 @@ class HerdrClientService extends ChangeNotifier {
           if (n.contains('=')) n.substring(0, n.indexOf('=')): n.substring(n.indexOf('=') + 1)
       };
 
-  /// Forgets [m], and the machines it reaches; removing the active machine shows another.
+  /// Resolves a workspace ID to the ID of its main repository workspace if it's a linked worktree.
+  String _getMainWorkspaceId(String workspaceId) {
+    final ws = snapshot?.workspaces.where((w) => w.id == workspaceId).firstOrNull;
+    if (ws == null || !ws.isLinkedWorktree) return workspaceId;
+    return snapshot?.workspaces.where((w) => w.repoKey == ws.repoKey && !w.isLinkedWorktree).firstOrNull?.id ?? workspaceId;
+  }
+
   void removeMachine(String m) {
     _forget([m, ..._machines.where((x) => parentOf(x) == m)]);
     if (_machines.contains(machine)) return notifyListeners();
@@ -1220,7 +1226,7 @@ class HerdrClientService extends ChangeNotifier {
 
   Future<void> createWorktree(String workspaceId, String branch, {String? base, String? path, String? label}) =>
       _create('create worktree', '/api/worktree', {
-        'workspace_id': workspaceId,
+        'workspace_id': _getMainWorkspaceId(workspaceId),
         'branch': branch,
         if (base != null && base.isNotEmpty) 'base': base,
         if (path != null && path.isNotEmpty) 'path': path,
