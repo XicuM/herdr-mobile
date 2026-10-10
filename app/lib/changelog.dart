@@ -1,6 +1,12 @@
 /// Newest first. Shown once after an update; add an entry when bumping the version in pubspec.yaml.
 const changelog = <(String, List<String>)>[
   (
+    '1.12.4',
+    [
+      'Fixed worktree creation when initiating from another linked worktree.',
+    ]
+  ),
+  (
     '1.12.3',
     [
       'In the message box, Enter inserts a newline and Ctrl+Enter (or the Send button) sends the message.',
