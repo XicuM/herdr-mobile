@@ -591,7 +591,7 @@ class HerdrClientService extends ChangeNotifier {
   String _getMainWorkspaceId(String workspaceId) {
     final ws = snapshot?.workspaces.where((w) => w.id == workspaceId).firstOrNull;
     if (ws == null || !ws.isLinkedWorktree) return workspaceId;
-    return snapshot?.workspaces.where((w) => w.repoKey == ws.repoKey && !w.isLinkedWorktree).firstOrNull?.id ?? workspaceId;
+    return snapshot?.mainOf(ws.repoKey)?.id ?? workspaceId;
   }
 
   void removeMachine(String m) {

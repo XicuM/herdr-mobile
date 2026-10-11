@@ -1224,9 +1224,7 @@ class _TerminalScreenState extends State<TerminalScreen> {
     }
 
     final isWorktree = workspace?.isLinkedWorktree ?? false;
-    final mainRepo = isWorktree
-        ? snapshot?.workspaces.where((w) => !w.isLinkedWorktree && w.repoKey == workspace?.repoKey).firstOrNull
-        : null;
+    final mainRepo = isWorktree ? snapshot?.mainOf(workspace?.repoKey) : null;
     final title =
         (isWorktree ? mainRepo?.displayName : workspace?.displayName) ?? workspace?.displayName ?? 'workspace';
     final branch = isWorktree

@@ -488,9 +488,7 @@ class _AgentsHomeScreenState extends State<AgentsHomeScreen> {
             if (s == null) continue;
             for (final ws in s.workspaces) {
               // A worktree is also found by its repository's workspace.
-              final repo = ws.isLinkedWorktree
-                  ? s.workspaces.where((w) => !w.isLinkedWorktree && w.repoKey == ws.repoKey).firstOrNull
-                  : null;
+              final repo = ws.isLinkedWorktree ? s.mainOf(ws.repoKey) : null;
               if (hit([
                 ws.displayName,
                 ws.gitBranch,
@@ -832,13 +830,7 @@ class _AgentsHomeScreenState extends State<AgentsHomeScreen> {
                 leading: StatusDot(ws.agentStatus, size: 10),
                 minLeadingWidth: 10,
                 title: Text(
-                  ws.isLinkedWorktree
-                      ? (s.workspaces
-                              .where((w) => !w.isLinkedWorktree && w.repoKey == ws.repoKey)
-                              .firstOrNull
-                              ?.displayName ??
-                          ws.displayName)
-                      : ws.displayName,
+                  ws.isLinkedWorktree ? (s.mainOf(ws.repoKey)?.displayName ?? ws.displayName) : ws.displayName,
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                 ),

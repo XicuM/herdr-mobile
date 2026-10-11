@@ -45,6 +45,29 @@ class SessionSnapshot {
     final wsName = ws?.displayName;
     return [if (wsName != null) wsName, if (tab != null) '(${tab.displayName})'].join(' ');
   }
+
+  /// A repo's main workspace: the first non-linked one with [repoKey] in herdr's order, which is
+  /// also the workspace herdr's `worktree.list` answers from (`source_workspace_id`).
+  WorkspaceModel? mainOf(String? repoKey) {
+    if (repoKey == null) return null;
+    return workspaces.where((w) => !w.isLinkedWorktree && w.repoKey == repoKey).firstOrNull;
+  }
+
+  /// One block per top-level workspace, so a block drags with its worktrees: each linked worktree
+  /// nests under its repo's main workspace ([mainOf]); one whose repo has no open main workspace
+  /// stands alone. Every workspace appears exactly once, even when several workspaces share a repo.
+  List<List<WorkspaceModel>> get worktreeBlocks {
+    final blocks = <List<WorkspaceModel>>[];
+    for (final w in workspaces) {
+      if (w.isLinkedWorktree && mainOf(w.repoKey) != null) continue;
+      blocks.add([
+        w,
+        if (!w.isLinkedWorktree && w.repoKey != null)
+          ...workspaces.where((c) => c.isLinkedWorktree && c.repoKey == w.repoKey && mainOf(c.repoKey)?.id == w.id),
+      ]);
+    }
+    return blocks;
+  }
 }
 
 class WorkspaceModel {

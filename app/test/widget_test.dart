@@ -454,6 +454,46 @@ void main() {
       expect(WorkspaceModel.fromJson({'git_branch': 'main'}).gitBranch, 'main');
     });
 
+    test('Each linked worktree nests under exactly one parent, the first main of its repo', () {
+      Map<String, dynamic> ws(String id, String label, {String? repo, bool linked = false}) => {
+            'workspace_id': id,
+            'number': 1,
+            'label': label,
+            if (repo != null)
+              'worktree': {'repo_key': repo, 'is_linked_worktree': linked},
+          };
+      final snap = SessionSnapshot.fromJson({
+        'workspaces': [
+          ws('wS', 'cohort', repo: 'repo-a'),
+          ws('w1', 'worktree-x', repo: 'repo-a', linked: true),
+          ws('w2', 'worktree-y', repo: 'repo-a', linked: true),
+          ws('w2D', 'Podarcis', repo: 'repo-b'),
+          // A second workspace on the same checkout: it stands alone, it doesn't adopt the worktree too.
+          ws('w2G', 'herdr-mobile', repo: 'repo-b'),
+          ws('w2R', 'worktree-z', repo: 'repo-b', linked: true),
+          // No main workspace left for this repo: the orphan stands alone instead of vanishing.
+          ws('w9', 'worktree-orphan', repo: 'repo-c', linked: true),
+          ws('w26', '~'),
+        ],
+      });
+
+      expect(snap.mainOf('repo-a')?.id, 'wS');
+      expect(snap.mainOf('repo-b')?.id, 'w2D');
+      expect(snap.mainOf('repo-c'), isNull);
+      expect(snap.mainOf(null), isNull);
+
+      final blocks = snap.worktreeBlocks.map((b) => b.map((w) => w.id).toList()).toList();
+      expect(blocks, [
+        ['wS', 'w1', 'w2'],
+        ['w2D', 'w2R'],
+        ['w2G'],
+        ['w9'],
+        ['w26'],
+      ]);
+      // Every workspace exactly once: nothing duplicated, nothing lost.
+      expect([for (final b in blocks) ...b]..sort(), ['w1', 'w2', 'w26', 'w2D', 'w2G', 'w2R', 'w9', 'wS']);
+    });
+
     testWidgets("The ☰ drawer lists the workspaces; tap one for its terminal, hold one for its actions",
         (tester) async {
       SharedPreferences.setMockInitialValues({'last_seen_changelog': changelog.first.$1});

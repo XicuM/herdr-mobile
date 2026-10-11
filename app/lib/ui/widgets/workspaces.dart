@@ -90,20 +90,7 @@ class WorkspaceList extends StatelessWidget {
   Widget _machine(String m,
       Widget Function(String, WorkspaceModel, {double indent, VoidCallback? up, VoidCallback? down, int? drag}) row,
       void Function(String, VoidCallback) at) {
-    final workspaces = client.snapshotOf(m)!.workspaces;
-    final parentKeys = {
-      for (final w in workspaces)
-        if (!w.isLinkedWorktree && w.repoKey != null) w.repoKey
-    };
-    final blocks = <List<WorkspaceModel>>[];
-    for (final w in workspaces) {
-      if (w.isLinkedWorktree && parentKeys.contains(w.repoKey)) continue;
-      blocks.add([
-        w,
-        if (!w.isLinkedWorktree && w.repoKey != null)
-          ...workspaces.where((c) => c.isLinkedWorktree && c.repoKey == w.repoKey),
-      ]);
-    }
+    final blocks = client.snapshotOf(m)!.worktreeBlocks;
     // Indices as ReorderableListView gives them: [to] counts in the order before the move.
     void moveBlock(int from, int to) {
       if (to > from) to--;
@@ -247,9 +234,7 @@ void showWorkspaceActions(BuildContext context, HerdrClientService client, Works
 
       final snapshot = client.snapshotOf(client.machine) ?? client.snapshot;
       final isWorktree = ws.isLinkedWorktree;
-      final mainRepo = isWorktree
-          ? snapshot?.workspaces.where((w) => !w.isLinkedWorktree && w.repoKey == ws.repoKey).firstOrNull
-          : null;
+      final mainRepo = isWorktree ? snapshot?.mainOf(ws.repoKey) : null;
       final title = (isWorktree ? mainRepo?.displayName : ws.displayName) ?? ws.displayName;
       final branch = isWorktree
           ? (ws.gitBranch?.replaceFirst('worktree/', '') ?? ws.displayName)
@@ -486,10 +471,13 @@ Future<String?> prompt(BuildContext context, String title, String label, {String
 }
 
 void _openWorktree(BuildContext context, HerdrClientService client, WorkspaceModel ws, VoidCallback? onShow) {
+  // Hoisted, so a rebuild (e.g. a snapshot landing while the dialog is open) can't restart it
+  // back into its spinner: a FutureBuilder with an inline future loads forever then.
+  final worktrees = client.listWorktrees(ws.id);
   showDialog(
     context: context,
     builder: (dialogContext) => FutureBuilder<List<Map<String, dynamic>>>(
-      future: client.listWorktrees(ws.id),
+      future: worktrees,
       builder: (_, result) {
         final list = result.data ?? [];
         return AlertDialog(
@@ -511,7 +499,8 @@ void _openWorktree(BuildContext context, HerdrClientService client, WorkspaceMod
                             ListTile(
                               contentPadding: const EdgeInsets.symmetric(horizontal: 24),
                               leading: const Icon(Icons.call_split),
-                              title: Text(wt['branch']?.toString() ?? wt['label']?.toString() ?? 'unknown'),
+                              title: Text((wt['branch']?.toString() ?? wt['label']?.toString() ?? 'unknown')
+                                  .replaceFirst('worktree/', '')),
                               subtitle: Text(
                                 wt['open_workspace_id'] != null ? 'Already open' : (wt['path']?.toString() ?? ''),
                                 overflow: TextOverflow.ellipsis,
