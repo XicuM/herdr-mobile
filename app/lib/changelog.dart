@@ -1,6 +1,13 @@
 /// Newest first. Shown once after an update; add an entry when bumping the version in pubspec.yaml.
 const changelog = <(String, List<String>)>[
   (
+    '1.12.6',
+    [
+      'Nest each worktree under one parent in the drawer and fix open-worktree reload.',
+      'Prioritize active pane working directory for workspace git branch resolution in bridge.',
+    ]
+  ),
+  (
     '1.12.4',
     [
       'Fixed worktree creation when initiating from another linked worktree.',
