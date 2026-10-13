@@ -1,6 +1,15 @@
 /// Newest first. Shown once after an update; add an entry when bumping the version in pubspec.yaml.
 const changelog = <(String, List<String>)>[
   (
+    '1.14.4',
+    [
+      'Recent messages now stay above the message box, which filters them as you type: tap one to edit and send, or a /command to resend it at once.',
+      'A raised keyboard stays up when switching to the control keys, typing straight into the terminal.',
+      'Settings can make Enter send the message instead of a new line (Shift+Enter still breaks the line).',
+      'Swiping down with two fingers together closes the current tab, undoable like closing it from its menu.',
+    ]
+  ),
+  (
     '1.14.3',
     [
       'Tapping the terminal no longer swaps in the control keys: it only clicks, and the bar is back to a CTRL label with the command-key button beside the message box.',
