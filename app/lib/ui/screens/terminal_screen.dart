@@ -578,8 +578,9 @@ class _TerminalScreenState extends State<TerminalScreen> {
                   ),
                 ),
             ],
-          );
-        },
+          ),
+        );
+      },
     );
   }
 
