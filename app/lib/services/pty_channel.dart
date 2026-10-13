@@ -20,6 +20,15 @@ class PtyChannel {
   /// Called with each attach's first frame, when herdr shows the pane live.
   final VoidCallback? onAttach;
 
+  /// Called with the `term-closed` reason the bridge sends when herdr ends the
+  /// session (e.g. another client holds the pane), before the reconnect logic.
+  final ValueChanged<String>? onClose;
+
+  /// One-shot request to steal the pane from another attached client
+  /// (`?takeover=1`): used for the next attach only, so a held pane is taken
+  /// over when the user asks, never by background reconnects fighting it.
+  final bool takeover;
+
   /// Whether herdr is streaming the pane: set by each attach's first frame, cleared when the connection drops.
   final attached = ValueNotifier(false);
 
@@ -27,10 +36,24 @@ class PtyChannel {
   StreamSubscription? _sub;
   Timer? _reconnectTimer;
   int _fails = 0; // attempts in a row that never attached, to back off
+  bool _takeoverArmed; // a steal asked for this channel, spent on its first attach
+  String? _closeReason; // why herdr ended the last session, when it said
   final _pending = <String>[]; // input typed while there was no connection, sent with the next one
   bool _disposed = false;
   final _held = StringBuffer();
   bool _hold = false;
+
+  /// Whether herdr refused the attach because another client holds the pane
+  /// ("already has an attached client"), or this client was taken over by one
+  /// ("terminal attach taken over"): then a fast reconnect would only fight it.
+  static bool isBusyReason(String reason) =>
+      reason.contains('already has an attached client') || reason.contains('taken over');
+
+  /// How long a reconnect waits: 15 s after herdr reported a busy pane, else
+  /// soon, since on a phone most drops are brief, backing off while it fails.
+  Duration get _retryDelay => _closeReason != null && isBusyReason(_closeReason!)
+      ? const Duration(seconds: 15)
+      : Duration(milliseconds: 500 << _fails.clamp(0, 3));
 
   /// While set (text is selected), frames wait instead of moving the text under the selection; cleared,
   /// they're written in order.
@@ -48,7 +71,9 @@ class PtyChannel {
     required this.terminal,
     this.headers = const {},
     this.onAttach,
-  });
+    this.onClose,
+    this.takeover = false,
+  }) : _takeoverArmed = takeover;
 
   void connect() {
     if (_disposed) return;
@@ -57,8 +82,10 @@ class PtyChannel {
     // and start each attach from a blank screen; herdr repaints the whole pane on attach. The clear goes
     // in front of the first frame, not here, so the old screen stays up until then instead of going black.
     var reset = '\x1b[?1049h\x1b[0m\x1b[H\x1b[2J';
+    final take = _takeoverArmed;
+    _takeoverArmed = false;
     final uri = Uri.parse(
-        'ws://$machine/ws/term/${Uri.encodeComponent(paneId)}?cols=${terminal.viewWidth}&rows=${terminal.viewHeight}');
+        'ws://$machine/ws/term/${Uri.encodeComponent(paneId)}?cols=${terminal.viewWidth}&rows=${terminal.viewHeight}${take ? '&takeover=1' : ''}');
     // Pings notice a connection that died silently (a bad signal, a changed network), which would otherwise
     // freeze the screen and swallow input until TCP gives up, minutes later. Only a pong counts, and on a
     // congested link it waits behind the frames, so shorter would drop slow but live connections; longer
@@ -77,16 +104,26 @@ class PtyChannel {
     }
     _pending.clear();
     // Utf8Decoder as a stream transformer keeps multi-byte characters split across frames intact.
-    _sub = channel.stream
-        .where((data) => data is List<int>)
-        .cast<List<int>>()
-        .transform(const Utf8Decoder(allowMalformed: true))
-        .listen(
+    // Text frames carry the bridge's `term-closed` reasons; anything else is ignored.
+    _sub = channel.stream.listen(
       (data) {
-        _hold ? _held.write(reset + data) : terminal.write(reset + data);
+        if (data is String) {
+          try {
+            final msg = jsonDecode(data);
+            if (msg is Map && msg['type'] == 'term-closed' && msg['reason'] is String) {
+              _closeReason = msg['reason'] as String;
+              onClose?.call(_closeReason!);
+            }
+          } catch (_) {}
+          return;
+        }
+        if (data is! List<int>) return;
+        final text = const Utf8Decoder(allowMalformed: true).convert(data);
+        _hold ? _held.write(reset + text) : terminal.write(reset + text);
         if (reset.isNotEmpty) {
           _reconnectTimer?.cancel();
           _fails = 0;
+          _closeReason = null;
           attached.value = true;
           onAttach?.call();
         }
@@ -101,7 +138,8 @@ class PtyChannel {
     );
   }
 
-  /// Retries soon, since on a phone most drops are brief, backing off to every 4 s while it keeps failing.
+  /// Retries after [_retryDelay]: soon for a dropped connection, slowly when
+  /// another client holds the pane, so the two never fight over it.
   /// The screen keeps the last frame meanwhile; [attached] tells it it's stale.
   void _dropped(WebSocketChannel channel) {
     if (_disposed || _channel != channel) return;
@@ -110,7 +148,7 @@ class PtyChannel {
     channel.sink.close();
     _channel = null;
     attached.value = false;
-    _reconnectTimer = Timer(Duration(milliseconds: 500 << _fails.clamp(0, 3)), connect);
+    _reconnectTimer = Timer(_retryDelay, connect);
     _fails++;
   }
 

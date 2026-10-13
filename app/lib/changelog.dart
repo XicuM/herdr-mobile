@@ -1,6 +1,12 @@
 /// Newest first. Shown once after an update; add an entry when bumping the version in pubspec.yaml.
 const changelog = <(String, List<String>)>[
   (
+    '1.14.1',
+    [
+      'Opening a pane the desktop is viewing no longer steals it and flickers taken-over warnings: it shows an "Another client is viewing this pane" banner with a Take over button instead, retrying quietly in the background.',
+    ]
+  ),
+  (
     '1.14.0',
     [
       'Attach images from the message box: they upload to the bridge and drop an @-reference in to review and send.',

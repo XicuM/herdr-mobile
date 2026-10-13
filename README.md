@@ -30,7 +30,7 @@
 ## ✨ Features
 
 - 💬 **WhatsApp-Style Agent Feed**: All your AI coding agents across multiple machines aggregated in a single list, prioritized by urgency (`working`, `needs you`, `done`, `idle`).
-- ⚡ **Interactive Terminal Streaming**: Low-latency PTY takeover with rendered viewports, touch-friendly scrollback, and bracketed paste message input.
+- ⚡ **Interactive Terminal Streaming**: Low-latency PTY streaming with rendered viewports, touch-friendly scrollback, and bracketed paste message input. It never steals a pane the desktop is viewing: that shows a Take over banner instead.
 - 🎛️ **Mobile-First Dev Keyboard**: One-tap access to essential terminal keys (`Esc`, `^C`, `Tab`, `⇧Tab`, `Ctrl`, arrow keys) and persistent prompt history / quick replies.
 - 🔔 **Instant Background Alerts**: Native Android background notifications ping you the second an agent requires feedback or completes a task.
 - 🌐 **Multi-Machine & Multi-Agent**: Manage local processes, remote SSH machines, and Tailscale nodes seamlessly from one app.

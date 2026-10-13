@@ -71,6 +71,8 @@ class _TerminalScreenState extends State<TerminalScreen> {
   String _savedDraft = '';
   PtyChannel? _ptyChannel;
   bool _stale = false; // the pane hasn't streamed for a while: the screen is its last frame, dimmed
+  bool _termBusy = false; // another client holds the pane: herdr refused the attach, retrying slowly
+  bool _takeOver = false; // steal the pane on the next attach, asked once through the banner below
   Timer? _staleTimer;
   late final AppLifecycleListener _lifecycle;
   bool _ctrl = false;
@@ -401,7 +403,7 @@ class _TerminalScreenState extends State<TerminalScreen> {
     return true;
   }
 
-  /// Everything typed or tapped reaches the pane here, with an armed CTRL applied once. Typing while
+  /// Everything typed or tapped reaches the pane here, with an armed ⌘ (control) applied once. Typing while
   /// scrolled back returns to the live screen first, so you see what you type.
   void _send(String data) {
     _toLive();
@@ -1062,26 +1064,22 @@ class _TerminalScreenState extends State<TerminalScreen> {
     return '${pane.terminalTitle.isNotEmpty ? pane.terminalTitle : agent?.name ?? ''}\n$place';
   }
 
-  /// The soft keyboard opens when a tap lifts ([_onTap]), as a text field's does, not when a finger lands, as
-  /// xterm's own would (on tap-down, before it knows a long-press or a scroll): those never bring it up, so the
-  /// pane never shrinks, and herdr never redraws it, under a selection being made. A keyboard already up stays up.
+  /// The soft keyboard never opens on a tap: typing is what the control keys are for, and opening it
+  /// would shrink the pane and make herdr redraw it under the tap. It opens only from the keyboard button
+  /// beside the keys. xterm would still open it on tap-down, before it knows a long-press or a scroll, so
+  /// this holds it off by `canRequestFocus` on the terminal's focus node, and never puts it back: only the
+  /// keyboard button does. A keyboard already up stays up.
   void _gateKeyboard(PointerEvent e) {
     if (e is PointerDownEvent && _pointers.length == 1) {
       // Unless its keyboard is up already. Focused with it put away (e.g. by back), xterm would bring it back on
       // tap-down too, so this unfocuses it.
       if (!_termFocus.hasFocus || MediaQuery.viewInsetsOf(context).bottom == 0) _termFocus.canRequestFocus = false;
-      return;
     }
-    if ((e is! PointerUpEvent && e is! PointerCancelEvent) || _termFocus.canRequestFocus) return;
-    // After this event: a tap quicker than xterm's tap-down timeout gets its tap-down only once the gesture
-    // arena settles, after every listener has seen the release.
-    scheduleMicrotask(() {
-      if (mounted) _termFocus.canRequestFocus = true;
-    });
   }
 
   /// A tap (or a left click) is a click for the pane's program, which herdr drops unless it asked for the mouse.
-  /// Herdr doesn't say which panes do, so a finger's tap also starts typing into the terminal ([_typeInTerminal]).
+  /// Herdr doesn't say which panes do, so a finger's tap also brings up the control keys, but never the soft
+  /// keyboard: typing is what the keys are for, and the keyboard button beside them opens it when wanted.
   /// A tap that clears a selection does only that. xterm selects a word on a double-tap, which isn't wanted
   /// here, so its second tap clears that once the gesture arena has run (which is after this, at the lift).
   void _onTap(PointerUpEvent e) {
@@ -1095,12 +1093,16 @@ class _TerminalScreenState extends State<TerminalScreen> {
     // xterm counts rows from the buffer's top; herdr, from the screen's.
     final top = _terminal.buffer.height - _terminal.viewHeight;
     _ptyChannel?.sendClick(cell.x, (cell.y - top).clamp(0, _terminal.viewHeight - 1));
-    if (e.kind == PointerDeviceKind.touch) _typeInTerminal();
+    if (e.kind == PointerDeviceKind.touch) _showKeyBar();
   }
 
-  /// Types into the terminal: the control keys in place of the message box, and the soft keyboard up.
-  void _typeInTerminal() {
+  /// Brings up the control keys in the message box's place, leaving the soft keyboard put away.
+  void _showKeyBar() {
     if (!widget.client.keyBar) widget.client.setKeyBar(true);
+  }
+
+  /// Opens the soft keyboard into the terminal, from the keyboard button beside the control keys.
+  void _openKeyboard() {
     _termFocus.canRequestFocus = true;
     _view.currentState?.requestKeyboard();
   }
@@ -1264,6 +1266,8 @@ class _TerminalScreenState extends State<TerminalScreen> {
       paneId: paneId,
       terminal: _terminal,
       headers: headers,
+      takeover: _takeOver,
+      onClose: _onTermClosed,
       // Herdr shows a freshly attached pane live, also after a lost connection, so scroll back to where
       // it was: as many scrolls as went up (an app on the alternate screen counts each as one wheel tick,
       // see [_toLive]), sharing the lines they carried (herdr's own scrollback counts those), at the cell
@@ -1275,6 +1279,8 @@ class _TerminalScreenState extends State<TerminalScreen> {
         }
       },
     );
+    _takeOver = false; // spent on this attach; reconnects stay polite unless asked again
+    _termBusy = false; // a new attach: herdr hasn't refused it yet
     _ptyChannel!.attached.addListener(_onAttached);
     _onAttached();
     _ptyChannel!.connect();
@@ -1291,12 +1297,33 @@ class _TerminalScreenState extends State<TerminalScreen> {
   void _onAttached() {
     _staleTimer?.cancel();
     if (_ptyChannel?.attached.value ?? true) {
-      if (_stale && mounted) setState(() => _stale = false);
+      if ((_stale || _termBusy) && mounted) {
+        setState(() {
+          _stale = false;
+          _termBusy = false;
+        });
+      }
       return;
     }
     _staleTimer = Timer(const Duration(seconds: 1), () {
       if (mounted) setState(() => _stale = true);
     });
+  }
+
+  /// Herdr ended the session: when another client holds the pane, show the
+  /// banner instead of fighting it; the channel retries slowly on its own.
+  void _onTermClosed(String reason) {
+    if (!mounted || _termBusy || !PtyChannel.isBusyReason(reason)) return;
+    setState(() => _termBusy = true);
+  }
+
+  /// Steals the pane from the client holding it, once: the banner's Take over.
+  void _takeOverPane() {
+    _takeOver = true;
+    if (mounted) setState(() => _termBusy = false);
+    _ptyChannel?.dispose();
+    _ptyChannel = null;
+    _connectTerminal();
   }
 
   @override
@@ -1637,6 +1664,32 @@ class _TerminalScreenState extends State<TerminalScreen> {
       body: SafeArea(
         child: Column(
           children: [
+            if (_termBusy)
+              // Another client (usually the desktop) holds this pane: herdr refused the
+              // attach rather than taking it over, and retries slowly. Take over steals it.
+              Container(
+                color: scheme.surfaceContainerHigh,
+                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                child: Row(
+                  children: [
+                    Icon(Icons.desktop_windows_outlined, size: 18, color: scheme.onSurfaceVariant),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        'Another client is viewing this pane',
+                        style: Theme.of(context)
+                            .textTheme
+                            .bodySmall
+                            ?.copyWith(color: scheme.onSurfaceVariant),
+                      ),
+                    ),
+                    TextButton(
+                      onPressed: _takeOverPane,
+                      child: const Text('Take over'),
+                    ),
+                  ],
+                ),
+              ),
             Expanded(
               // Connected to its bridge, which can't show it: e.g. a machine it reaches over SSH is down.
               child: client.errorOf(client.machine) != null && snapshot == null
@@ -1848,14 +1901,14 @@ class _TerminalScreenState extends State<TerminalScreen> {
                             )
                           : IconButton(
                               tooltip: 'Control keys',
-                              // Text like the control keys' own CTRL key, not a keycap icon.
+                              // Text like the control keys' own ⌘ key, not a keycap icon.
                               icon: Builder(
                                 builder: (context) => Text(
-                                  'CTRL',
+                                  '⌘',
                                   style: TextStyle(
                                     color: Theme.of(context).iconTheme.color,
                                     fontWeight: FontWeight.bold,
-                                    fontSize: 15,
+                                    fontSize: 20,
                                   ),
                                 ),
                               ),
@@ -1913,7 +1966,7 @@ class _TerminalScreenState extends State<TerminalScreen> {
                             : IconButton(
                                 tooltip: 'Keyboard',
                                 icon: const Icon(Icons.keyboard_outlined),
-                                onPressed: _typeInTerminal,
+                                onPressed: _openKeyboard,
                               ),
                       ),
                     if (!client.keyBar) ...[
