@@ -273,41 +273,53 @@ void main() {
       expect(client.selectedPaneId, 'w2:p4');
     });
 
-    testWidgets('The keyboard opens when a tap on the terminal lifts, never for a long-press', (tester) async {
+    testWidgets('A tap on the terminal types into it, never a long-press or a double-tap', (tester) async {
       SharedPreferences.setMockInitialValues({'last_seen_changelog': changelog.first.$1});
       final client = HerdrClientService()
         ..setMachines(['100.1.2.3:7788'], [])
         ..setSnapshotForTesting(twoWorkspaces())
         ..selectPane('w1:p1');
       await tester.pumpWidget(MaterialApp(home: TerminalScreen(client: client)));
+      tester.widget<TerminalView>(find.byType(TerminalView)).terminal.write('\r\n\r\nhello world');
       await tester.pump();
       final terminal = find.byType(TerminalView);
+      final hello = tester.getTopLeft(terminal) + const Offset(10, 40);
 
-      // Held down past the tap-down that xterm opens it on, and on to a long-press: still no keyboard. (A test's
-      // keyboard takes no room, so it counts as put away, as by back, with the terminal still focused.)
-      final press = await tester.startGesture(tester.getCenter(terminal));
+      // Held down past the tap-down that xterm opens it on, and on to a long-press: no keyboard, and the
+      // message box stays. (A test's keyboard takes no room, so it counts as put away, as by back.)
+      final press = await tester.startGesture(hello);
       await tester.pump(const Duration(milliseconds: 200));
       expect(tester.testTextInput.isVisible, isFalse);
       await tester.pump(const Duration(milliseconds: 600));
       await press.up(timeStamp: const Duration(milliseconds: 800)); // a test's events are otherwise all at 0
       await tester.pump();
       expect(tester.testTextInput.isVisible, isFalse);
-
-      // A tap opens it once it can't be a double-tap's first.
-      await tester.tap(terminal);
-      await tester.pump();
-      expect(tester.testTextInput.isVisible, isFalse);
-      await tester.pump(const Duration(milliseconds: 400));
-      expect(tester.testTextInput.isVisible, isTrue);
-
-      // With the message box typed in, a tap on the terminal puts the keyboard away, as outside any text field.
-      await tester.tap(find.byType(TextField));
-      await tester.pump();
-      expect(tester.testTextInput.isVisible, isTrue);
-      await tester.tap(terminal);
+      expect(find.byType(TextField), findsOneWidget);
+      expect(find.text('Copy'), findsOneWidget);
+      await tester.tap(terminal); // clears the long-press's selection, and only that
       await tester.pump(const Duration(milliseconds: 400));
       expect(tester.testTextInput.isVisible, isFalse);
-      expect(find.byType(TextField).evaluate().isNotEmpty, isTrue);
+
+      // A tap opens it at once, with the control keys in the message box's place.
+      await tester.tap(terminal);
+      await tester.pump();
+      expect(tester.testTextInput.isVisible, isTrue);
+      expect(client.keyBar, isTrue);
+      expect(find.text('ESC'), findsOneWidget);
+      expect(find.byType(TextField), findsNothing);
+
+      // A double-tap selects nothing.
+      await tester.tapAt(hello);
+      await tester.pump(const Duration(milliseconds: 50));
+      await tester.tapAt(hello);
+      await tester.pump();
+      expect(find.text('Copy'), findsNothing);
+
+      // The message box button goes back to the box.
+      await tester.tap(find.byTooltip('Message box'));
+      await tester.pump();
+      expect(client.keyBar, isFalse);
+      expect(find.byType(TextField), findsOneWidget);
       await tester.pump(const Duration(seconds: 1)); // xterm's double-tap timer
     });
 
@@ -396,8 +408,8 @@ void main() {
       await tester.tap(inBar('db'));
       expect(client.selectedPaneId, 'w1:p3');
 
-      // The keyboard button swaps the message box for the control keys, and back.
-      await tester.tap(find.byTooltip('Control keys'));
+      // The keyboard button swaps the message box for the control keys, and the message box button back.
+      await tester.tap(find.byTooltip('Keyboard'));
       await tester.pump();
       expect(find.byType(TextField), findsNothing);
       expect(find.text('ESC'), findsOneWidget);
@@ -1507,14 +1519,14 @@ void main() {
       await tester.pumpWidget(MaterialApp(home: TerminalScreen(client: client)));
       await tester.pump(const Duration(milliseconds: 300));
       expect(find.byType(TextField), findsNothing);
-      expect(find.byTooltip('Control keys'), findsNothing);
+      expect(find.byTooltip('Keyboard'), findsNothing);
 
       // Toggle back in client
       client.setHideMessageTerminal(false);
       await tester.pumpWidget(MaterialApp(home: TerminalScreen(client: client)));
       await tester.pump(const Duration(milliseconds: 300));
       expect(find.byType(TextField), findsOneWidget);
-      expect(find.byTooltip('Control keys'), findsOneWidget);
+      expect(find.byTooltip('Keyboard'), findsOneWidget);
     });
 
     testWidgets('SettingsScreen displays notification options when alerts are enabled', (tester) async {
@@ -2047,11 +2059,16 @@ void main() {
       await tester.tap(terminalView);
       await tester.pump(const Duration(milliseconds: 350));
 
-      // Press ShiftLeft + Enter on terminal
+      // What xterm itself would type: Shift+Enter is the screen's newline, never xterm's Enter (\r).
+      final typed = <String>[];
+      tester.widget<TerminalView>(terminalView).terminal.onOutput = typed.add;
       await tester.sendKeyDownEvent(LogicalKeyboardKey.shiftLeft);
       await tester.sendKeyEvent(LogicalKeyboardKey.enter);
       await tester.sendKeyUpEvent(LogicalKeyboardKey.shiftLeft);
       await tester.pump(const Duration(milliseconds: 350));
+      expect(typed, isEmpty);
+      await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+      expect(typed, ['\r']);
     });
 
     testWidgets('Send button is not made larger when multiline', (tester) async {

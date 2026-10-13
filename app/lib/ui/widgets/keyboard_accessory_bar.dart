@@ -31,9 +31,10 @@ class _KeyboardAccessoryBarState extends State<KeyboardAccessoryBar> {
     super.dispose();
   }
 
-  /// M3 tonal buttons, narrow to fit nine in a row and 48 dp tall like the message box they replace. CTRL turns
-  /// filled while armed; ^C uses the error container. [repeat] keys fire again every 60 ms while held.
-  Widget _key(String label, VoidCallback onTap, {bool repeat = false, bool active = false, bool danger = false}) {
+  /// M3 tonal buttons, [width] wide and 48 dp tall like the message box they replace. CTRL turns filled while
+  /// armed; ^C uses the error container. [repeat] keys fire again every 60 ms while held.
+  Widget _key(double width, String label, VoidCallback onTap,
+      {bool repeat = false, bool active = false, bool danger = false}) {
     final scheme = Theme.of(context).colorScheme;
     final style = FilledButton.styleFrom(
       minimumSize: const Size(0, 48),
@@ -46,7 +47,6 @@ class _KeyboardAccessoryBarState extends State<KeyboardAccessoryBar> {
       onTap();
     }
 
-    // Shrunk to fit when the row is narrow, beside the keyboard button.
     final text = FittedBox(fit: BoxFit.scaleDown, child: Text(label));
     Widget key = active
         ? FilledButton(style: style, onPressed: tap, child: text)
@@ -66,27 +66,31 @@ class _KeyboardAccessoryBarState extends State<KeyboardAccessoryBar> {
         child: key,
       );
     }
-    return Expanded(child: Padding(padding: const EdgeInsets.symmetric(horizontal: 2), child: key));
+    return Padding(padding: const EdgeInsets.symmetric(horizontal: 2), child: SizedBox(width: width, child: key));
   }
 
+  /// The keys share the row out, but never narrower than a 48 dp touch target: past that, it scrolls sideways.
   @override
   Widget build(BuildContext context) {
     final w = widget;
-    return Padding(
-      padding: const EdgeInsets.only(right: 8),
-      child: Row(
-        children: [
-          _key('ESC', () => w.onKey(TerminalKey.escape)),
-          _key('^C', () => w.onText('\x03'), danger: true),
-          _key('TAB', () => w.onKey(TerminalKey.tab)),
-          _key('⇧TAB', () => w.onKey(TerminalKey.tab, shift: true)),
-          _key('CTRL', w.onCtrl, active: w.ctrl),
-          _key('←', () => w.onKey(TerminalKey.arrowLeft), repeat: true),
-          _key('↓', () => w.onKey(TerminalKey.arrowDown), repeat: true),
-          _key('↑', () => w.onKey(TerminalKey.arrowUp), repeat: true),
-          _key('→', () => w.onKey(TerminalKey.arrowRight), repeat: true),
-        ],
-      ),
-    );
+    return LayoutBuilder(builder: (context, constraints) {
+      final width = (constraints.maxWidth / 9 - 4).clamp(48.0, double.infinity);
+      return SingleChildScrollView(
+        scrollDirection: Axis.horizontal,
+        child: Row(
+          children: [
+            _key(width, 'ESC', () => w.onKey(TerminalKey.escape)),
+            _key(width, '^C', () => w.onText('\x03'), danger: true),
+            _key(width, 'TAB', () => w.onKey(TerminalKey.tab)),
+            _key(width, '⇧TAB', () => w.onKey(TerminalKey.tab, shift: true)),
+            _key(width, 'CTRL', w.onCtrl, active: w.ctrl),
+            _key(width, '←', () => w.onKey(TerminalKey.arrowLeft), repeat: true),
+            _key(width, '↓', () => w.onKey(TerminalKey.arrowDown), repeat: true),
+            _key(width, '↑', () => w.onKey(TerminalKey.arrowUp), repeat: true),
+            _key(width, '→', () => w.onKey(TerminalKey.arrowRight), repeat: true),
+          ],
+        ),
+      );
+    });
   }
 }

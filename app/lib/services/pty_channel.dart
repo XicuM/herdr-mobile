@@ -130,6 +130,14 @@ class PtyChannel {
         .add(jsonEncode({'type': 'terminal.scroll', 'direction': lines > 0 ? 'up' : 'down', 'lines': lines.abs()}));
   }
 
+  /// A left click on a cell (0-based), which herdr hands to the pane only if its program asked for the mouse.
+  void sendClick(int column, int row) {
+    for (final action in ['down', 'up']) {
+      _channel?.sink.add(
+          jsonEncode({'type': 'terminal.mouse', 'action': action, 'button': 'left', 'column': column, 'row': row}));
+    }
+  }
+
   void dispose() {
     _disposed = true;
     _reconnectTimer?.cancel();

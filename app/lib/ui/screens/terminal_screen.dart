@@ -47,6 +47,11 @@ class TerminalScreen extends StatefulWidget {
   static void setDraftForTesting(String paneId, String machine, String text) => _drafts['$machine/$paneId'] = text;
   static void clearDraftsForTesting() => _drafts.clear();
 
+  // Where each pane left was scrolled back to ([_scrolledUp], [_scrolledLines]), by `machine/pane`, with its
+  // agent's `state_change_seq` at the last scroll. Restored only while that seq holds: the replay lands as
+  // far from the bottom as before, which shows other text once the pane has printed meanwhile.
+  static final _places = <String, (int, int, int?)>{};
+
   @override
   State<TerminalScreen> createState() => _TerminalScreenState();
 }
@@ -57,9 +62,8 @@ class _TerminalScreenState extends State<TerminalScreen> {
   final _view = GlobalKey<TerminalViewState>();
   final _message = TextEditingController();
   final _messageFocus = FocusNode();
-  final _termFocus = FocusNode(); // the terminal's, to open the keyboard when a tap lifts ([_gateKeyboard])
+  final _termFocus = FocusNode(); // the terminal's, to open the keyboard when a tap lifts ([_onTap])
   bool _tapSelected = false; // the press began with text selected, so lifting it only clears that
-  Timer? _keyboardTimer; // a tap's keyboard, waiting to see it isn't a double-tap
   int _historyIndex = -1;
   String _savedDraft = '';
   PtyChannel? _ptyChannel;
@@ -72,6 +76,7 @@ class _TerminalScreenState extends State<TerminalScreen> {
   int _scrolledUp = 0; // scrolls back into the pane's history; 0 is live
   int _scrolledLines = 0; // the lines those scrolls carried, to scroll back there after a reattach
   String? _scrolledPane; // the pane (machine/pane) they were in
+  int? _scrolledSeq; // its agent's `state_change_seq` at the last scroll
   bool _left = false; // popped back to the agents, since the machine went off
 
   // Pinch-to-zoom, two-finger swipes between agents and history scrolling, tracked from raw pointers so
@@ -86,6 +91,7 @@ class _TerminalScreenState extends State<TerminalScreen> {
   Axis? _padAxis;
   double _pinchFont = 0;
   Offset _downAt = Offset.zero;
+  int? _downPointer; // the press that may be a tap; a right or middle click never is
   Duration _downTime = Duration.zero;
   bool _dragging = false; // set once a one-finger drag counts as a scroll
   double _scrollRest = 0; // scrolled pixels not yet a whole line
@@ -111,7 +117,6 @@ class _TerminalScreenState extends State<TerminalScreen> {
 
     _message.addListener(_onMessageChanged);
     _messageFocus.onKeyEvent = _onMessageKeyEvent;
-    _termFocus.onKeyEvent = _onTermKeyEvent;
     // Shows the Copy button and handles while text is selected, and holds the pane still meanwhile.
     _controller.addListener(() {
       _ptyChannel?.hold = _controller.selection != null;
@@ -929,8 +934,21 @@ class _TerminalScreenState extends State<TerminalScreen> {
       _downTime = e.timeStamp;
       _dragging = false;
       _pinched = false;
+      _tapSelected = _controller.selection != null;
+      _downPointer = e.pointer;
     }
     if (e.kind == PointerDeviceKind.touch) _gateKeyboard(e);
+    // A press that has made a selection by the time it lifts was a long-press, not a tap.
+    if (e is PointerUpEvent &&
+        e.pointer == _downPointer &&
+        _controller.selection == null &&
+        _pointers.isEmpty &&
+        !_dragging &&
+        !_pinched &&
+        e.timeStamp - _downTime < kLongPressTimeout &&
+        (e.position - _downAt).distance < kTouchSlop) {
+      return _onTap(e);
+    }
     if (e is PointerMoveEvent && _pointers.length == 1 && !_pinched) return _scroll(e);
     if (_pointers.length != 2) {
       if (_twoAt != null) _endSwipe();
@@ -972,13 +990,11 @@ class _TerminalScreenState extends State<TerminalScreen> {
     return '${pane.terminalTitle.isNotEmpty ? pane.terminalTitle : agent?.name ?? ''}\n$place';
   }
 
-  /// The soft keyboard opens when a tap lifts (and isn't the first of a double-tap), as a text field's does, not when a finger lands, as xterm's own
-  /// would (on tap-down, before it knows a long-press or a scroll): those never bring it up, so the pane never
-  /// shrinks, and herdr never redraws it, under a selection being made. A keyboard already up stays up.
+  /// The soft keyboard opens when a tap lifts ([_onTap]), as a text field's does, not when a finger lands, as
+  /// xterm's own would (on tap-down, before it knows a long-press or a scroll): those never bring it up, so the
+  /// pane never shrinks, and herdr never redraws it, under a selection being made. A keyboard already up stays up.
   void _gateKeyboard(PointerEvent e) {
     if (e is PointerDownEvent && _pointers.length == 1) {
-      _keyboardTimer?.cancel();
-      _tapSelected = _controller.selection != null;
       // Unless its keyboard is up already. Focused with it put away (e.g. by back), xterm would bring it back on
       // tap-down too, so this unfocuses it.
       if (!_termFocus.hasFocus || MediaQuery.viewInsetsOf(context).bottom == 0) _termFocus.canRequestFocus = false;
@@ -990,21 +1006,31 @@ class _TerminalScreenState extends State<TerminalScreen> {
     scheduleMicrotask(() {
       if (mounted) _termFocus.canRequestFocus = true;
     });
-    final tap = e is PointerUpEvent &&
-        _pointers.isEmpty &&
-        !_dragging &&
-        !_pinched &&
-        !_tapSelected &&
-        e.timeStamp - _downTime < kLongPressTimeout &&
-        (e.position - _downAt).distance < kTouchSlop;
-    if (!tap) return;
-    // A tap outside the message box puts its keyboard away, as outside any text field, rather than quietly
-    // sending what's typed next to the terminal instead.
-    if (_messageFocus.hasFocus) return _messageFocus.unfocus();
-    // Once a double-tap is ruled out: its second tap selects a word, which the keyboard would shift.
-    _keyboardTimer = Timer(kDoubleTapTimeout, () {
-      if (mounted && _controller.selection == null) _view.currentState?.requestKeyboard();
+  }
+
+  /// A tap (or a left click) is a click for the pane's program, which herdr drops unless it asked for the mouse.
+  /// Herdr doesn't say which panes do, so a finger's tap also starts typing into the terminal ([_typeInTerminal]).
+  /// A tap that clears a selection does only that. xterm selects a word on a double-tap, which isn't wanted
+  /// here, so its second tap clears that once the gesture arena has run (which is after this, at the lift).
+  void _onTap(PointerUpEvent e) {
+    if (_tapSelected) return;
+    scheduleMicrotask(() {
+      if (mounted && _controller.selection != null) _controller.clearSelection();
     });
+    final render = _view.currentState?.renderTerminal;
+    if (render == null) return;
+    final cell = render.getCellOffset(render.globalToLocal(e.position));
+    // xterm counts rows from the buffer's top; herdr, from the screen's.
+    final top = _terminal.buffer.height - _terminal.viewHeight;
+    _ptyChannel?.sendClick(cell.x, (cell.y - top).clamp(0, _terminal.viewHeight - 1));
+    if (e.kind == PointerDeviceKind.touch) _typeInTerminal();
+  }
+
+  /// Types into the terminal: the control keys in place of the message box, and the soft keyboard up.
+  void _typeInTerminal() {
+    if (!widget.client.keyBar) widget.client.setKeyBar(true);
+    _termFocus.canRequestFocus = true;
+    _view.currentState?.requestKeyboard();
   }
 
   /// Two fingers have moved [dx] sideways together: the terminal follows them, with a tick as they pass the
@@ -1068,6 +1094,7 @@ class _TerminalScreenState extends State<TerminalScreen> {
     // many lines it carries (see [_toLive]). Herdr stops at the bottom, so the count does too; it may
     // overshoot the top, which only means the way back scrolls further than needed. Capped, since the
     // way back sends a scroll per count.
+    _scrolledSeq = widget.client.snapshot?.agentOf(widget.client.selectedPaneId ?? '')?.stateChangeSeq;
     setState(() {
       _scrolledUp = (_scrolledUp + lines.sign).clamp(0, 1000);
       _scrolledLines = _scrolledUp == 0 ? 0 : (_scrolledLines + lines).clamp(_scrolledUp, 65535);
@@ -1126,11 +1153,17 @@ class _TerminalScreenState extends State<TerminalScreen> {
     }
     pty?.dispose();
     if (_controller.selection != null) _controller.clearSelection(); // the old pane's text
-    // Another pane starts live; the same one, reattached, keeps its place in history.
+    // The same pane, reattached, keeps its place in history; another goes back to where it was left, unless
+    // its agent changed status since, which starts it live.
     final pane = '${client.machine}/$paneId';
     if (pane != _scrolledPane) {
+      _parkPlace();
       _scrolledPane = pane;
-      _scrolledUp = _scrolledLines = 0;
+      final place = TerminalScreen._places.remove(pane);
+      final kept = place != null && place.$3 == client.snapshot?.agentOf(paneId)?.stateChangeSeq;
+      _scrolledUp = kept ? place.$1 : 0;
+      _scrolledLines = kept ? place.$2 : 0;
+      _scrolledSeq = kept ? place.$3 : null;
     }
     _ptyChannel = PtyChannel(
       machine: client.machine,
@@ -1151,6 +1184,11 @@ class _TerminalScreenState extends State<TerminalScreen> {
     _ptyChannel!.connect();
   }
 
+  /// Keeps where the pane on screen is scrolled to, for when it's shown again.
+  void _parkPlace() {
+    if (_scrolledPane != null && _scrolledUp > 0) TerminalScreen._places[_scrolledPane!] = (_scrolledUp, _scrolledLines, _scrolledSeq);
+  }
+
   /// Marks the screen stale once the pane has been off for a second, so an ordinary attach never flashes it.
   void _onAttached() {
     _staleTimer?.cancel();
@@ -1165,11 +1203,11 @@ class _TerminalScreenState extends State<TerminalScreen> {
 
   @override
   void dispose() {
+    _parkPlace();
     _onMessageChanged();
     _message.removeListener(_onMessageChanged);
     _messageFocus.dispose();
     _termFocus.dispose();
-    _keyboardTimer?.cancel();
     _lifecycle.dispose();
     widget.client.removeListener(_onClientUpdate);
     _controller.dispose();
@@ -1592,6 +1630,8 @@ class _TerminalScreenState extends State<TerminalScreen> {
                                         height: 1.1,
                                       ),
                                       focusNode: _termFocus,
+                                      // Not on the focus node: xterm's own Focus widgets replace a handler set there.
+                                      onKeyEvent: _onTermKeyEvent,
                                       // For a hardware keyboard; on a phone it would open the soft one with every agent.
                                       autofocus: !Platform.isAndroid,
                                       simulateScroll: false,
@@ -1679,7 +1719,10 @@ class _TerminalScreenState extends State<TerminalScreen> {
                       ],
                     ),
             ),
-            // The keyboard button swaps the message box for the control keys and back. It takes the terminal's background.
+            // Two places to type, in the terminal's background: the message box, or the terminal itself with the
+            // control keys in the box's place. The keyboard button, always on the left, types into the terminal: from
+            // the box it brings the keys and the keyboard, beside the keys it shows or hides the keyboard. The button on
+            // the right sends the message, or goes back to the box. A keyboard that is up stays up across the swap.
             if (!client.hideMessageTerminal)
               Container(
                 color: background,
@@ -1688,20 +1731,17 @@ class _TerminalScreenState extends State<TerminalScreen> {
                   children: [
                     Theme(
                       data: onBackground,
-                      child: IconButton(
-                        tooltip: client.keyBar ? 'Message box' : 'Control keys',
-                        isSelected: client.keyBar,
-                        icon: const Icon(Icons.keyboard_command_key),
-                        selectedIcon: const Icon(Icons.chat_bubble_outline),
-                        onPressed: () {
-                          // A keyboard that is up stays up: it types into the terminal beside the keys, and
-                          // into the box again when it comes back. Focus moves before the swap, in one frame.
-                          if (MediaQuery.viewInsetsOf(context).bottom > 0) {
-                            client.keyBar ? _messageFocus.requestFocus() : _view.currentState?.requestKeyboard();
-                          }
-                          client.setKeyBar(!client.keyBar);
-                        },
-                      ),
+                      child: client.keyBar && _termFocus.hasFocus && MediaQuery.viewInsetsOf(context).bottom > 0
+                          ? IconButton(
+                              tooltip: 'Hide keyboard',
+                              icon: const Icon(Icons.keyboard_hide_outlined),
+                              onPressed: _termFocus.unfocus,
+                            )
+                          : IconButton(
+                              tooltip: 'Keyboard',
+                              icon: const Icon(Icons.keyboard_outlined),
+                              onPressed: _typeInTerminal,
+                            ),
                     ),
                     Expanded(
                       child: client.keyBar
@@ -1737,6 +1777,19 @@ class _TerminalScreenState extends State<TerminalScreen> {
                               ),
                             ),
                     ),
+                    if (client.keyBar)
+                      Theme(
+                        data: onBackground,
+                        child: IconButton(
+                          tooltip: 'Message box',
+                          icon: const Icon(Icons.chat_bubble_outline),
+                          onPressed: () {
+                            // Focus moves before the swap, in one frame.
+                            if (MediaQuery.viewInsetsOf(context).bottom > 0) _messageFocus.requestFocus();
+                            client.setKeyBar(false);
+                          },
+                        ),
+                      ),
                     if (!client.keyBar) ...[
                       const SizedBox(width: 6),
                       ValueListenableBuilder<TextEditingValue>(
