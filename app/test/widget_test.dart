@@ -273,7 +273,7 @@ void main() {
       expect(client.selectedPaneId, 'w2:p4');
     });
 
-    testWidgets('A tap on the terminal types into it, never a long-press or a double-tap', (tester) async {
+    testWidgets('A tap on the terminal shows the control keys, never the keyboard', (tester) async {
       SharedPreferences.setMockInitialValues({'last_seen_changelog': changelog.first.$1});
       final client = HerdrClientService()
         ..setMachines(['100.1.2.3:7788'], [])
@@ -300,13 +300,18 @@ void main() {
       await tester.pump(const Duration(milliseconds: 400));
       expect(tester.testTextInput.isVisible, isFalse);
 
-      // A tap opens it at once, with the control keys in the message box's place.
+      // A tap brings up the control keys in the message box's place, but never the keyboard.
       await tester.tap(terminal);
       await tester.pump();
-      expect(tester.testTextInput.isVisible, isTrue);
+      expect(tester.testTextInput.isVisible, isFalse);
       expect(client.keyBar, isTrue);
       expect(find.text('ESC'), findsOneWidget);
       expect(find.byType(TextField), findsNothing);
+
+      // Only the keyboard button beside the keys opens it.
+      await tester.tap(find.byTooltip('Keyboard'));
+      await tester.pump();
+      expect(tester.testTextInput.isVisible, isTrue);
 
       // A double-tap selects nothing.
       await tester.tapAt(hello);
@@ -2155,6 +2160,9 @@ void main() {
 
       final terminalView = find.byType(TerminalView);
       await tester.tap(terminalView);
+      await tester.pump(const Duration(milliseconds: 350));
+      // A tap brings up the keys but never the keyboard: open it from its button.
+      await tester.tap(find.byTooltip('Keyboard'));
       await tester.pump(const Duration(milliseconds: 350));
 
       // What xterm itself would type: Shift+Enter is the screen's newline, never xterm's Enter (\r).

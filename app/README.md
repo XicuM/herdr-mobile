@@ -6,7 +6,7 @@ Terminal-first mobile companion app for [Herdr](https://herdr.dev).
 
 - **Full-screen terminal**: `xterm.dart` showing the pane as herdr renders it. Drag to scroll back through herdr's history; a ↓ button returns to live.
 - **Agent awareness**: status colours as in herdr: yellow working, red blocked (waiting for you), green done, grey idle. The circle next to the message box lists every agent, most urgent first.
-- **Control keys bar**: `[ESC]` `[^C]` `[TAB]` `[⇧TAB]` `[CTRL]` `[←]` `[↓]` `[↑]` `[→]`.
+- **Control keys bar**: `[ESC]` `[^C]` `[TAB]` `[⇧TAB]` `[⌘]` `[←]` `[↓]` `[↑]` `[→]`.
 - **Message box**: type with autocorrect and voice; sends as one paste plus Enter. Earlier messages and quick replies are a tap away.
 - **Navigation**: tap the title for workspaces, swipe the top bar between tabs and the message bar between agents.
 - **Several machines** at once, with background alerts when an agent needs you or finishes.
