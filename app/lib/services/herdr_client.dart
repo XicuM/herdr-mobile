@@ -13,6 +13,10 @@ import '../ui/widgets/agent_avatar.dart';
 /// What the volume keys do on the terminal screen; [volume] leaves them to the system.
 enum VolumeKeys { fontSize, arrows, volume }
 
+/// What Enter does in the message box; [newline] inserts a new line (Ctrl+Enter sends),
+/// [send] sends the message (Shift+Enter inserts a new line).
+enum EnterBehavior { newline, send }
+
 /// One machine's `/ws/session` link, its last snapshot, and the pane last viewed on it.
 class _Conn {
   WebSocketChannel? channel;
@@ -79,6 +83,7 @@ class HerdrClientService extends ChangeNotifier {
   VolumeKeys _volumeKeys = VolumeKeys.fontSize;
   bool _pinchZoom = true;
   bool _hideMessageTerminal = false;
+  EnterBehavior _enterBehavior = EnterBehavior.newline;
   bool _started = false;
   bool _disposed = false;
   final _conns = <String, _Conn>{};
@@ -334,6 +339,14 @@ class HerdrClientService extends ChangeNotifier {
     notifyListeners();
   }
 
+  EnterBehavior get enterBehavior => _enterBehavior;
+
+  void setEnterBehavior(EnterBehavior v) {
+    _enterBehavior = v;
+    SharedPreferences.getInstance().then((p) => p.setString('enter_behavior', v.name));
+    notifyListeners();
+  }
+
   /// Reads the saved settings, without writing them back. The first launch turns alerts on and asks
   /// for the permissions they need. The machine on screen last time stays off if it was disconnected.
   void load(SharedPreferences p) {
@@ -345,6 +358,7 @@ class HerdrClientService extends ChangeNotifier {
     _volumeKeys = VolumeKeys.values.asNameMap()[p.getString('volume_keys')] ?? VolumeKeys.fontSize;
     _pinchZoom = p.getBool('pinch_zoom') ?? true;
     _hideMessageTerminal = p.getBool('hide_message_terminal') ?? false;
+    _enterBehavior = EnterBehavior.values.asNameMap()[p.getString('enter_behavior')] ?? EnterBehavior.newline;
     _muted = (p.getStringList('muted_panes') ?? []).toSet();
     final alerts = p.getBool('background_alerts');
     alerts == null ? setAlerts(true) : _alerts = alerts;

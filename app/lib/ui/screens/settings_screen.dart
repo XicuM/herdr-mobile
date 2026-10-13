@@ -313,13 +313,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
               value: client.pinchZoom,
               onChanged: (v) => setState(() => client.setPinchZoom(v)),
             ),
-            SwitchListTile(
-              secondary: const Icon(Icons.chat_bubble_outline),
-              title: const Text('Hide message bar'),
-              subtitle: const Text('Hide the message box and control keys under the terminal'),
-              value: client.hideMessageTerminal,
-              onChanged: (v) => setState(() => client.setHideMessageTerminal(v)),
-            ),
             // Only on Android, where the terminal screen takes them ([VolumeKeys]).
             if (Platform.isAndroid) ...[
               const ListTile(
@@ -340,6 +333,31 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 ),
               ),
             ],
+            const Divider(),
+            section('Message bar'),
+            SwitchListTile(
+              secondary: const Icon(Icons.chat_bubble_outline),
+              title: const Text('Hide message bar'),
+              subtitle: const Text('Hide the message box and control keys under the terminal'),
+              value: client.hideMessageTerminal,
+              onChanged: (v) => setState(() => client.setHideMessageTerminal(v)),
+            ),
+            const ListTile(
+              leading: Icon(Icons.keyboard_return_outlined),
+              title: Text('Enter key'),
+              subtitle: Text('What Enter does in the message box'),
+            ),
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16),
+              child: SegmentedButton<EnterBehavior>(
+                segments: const [
+                  ButtonSegment(value: EnterBehavior.newline, label: Text('New line'), icon: Icon(Icons.wrap_text)),
+                  ButtonSegment(value: EnterBehavior.send, label: Text('Send'), icon: Icon(Icons.send_outlined)),
+                ],
+                selected: {client.enterBehavior},
+                onSelectionChanged: (s) => setState(() => client.setEnterBehavior(s.first)),
+              ),
+            ),
             const SizedBox(height: 16),
           ],
         ),

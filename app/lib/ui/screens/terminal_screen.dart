@@ -75,6 +75,8 @@ class _TerminalScreenState extends State<TerminalScreen> {
   bool _ctrl = false;
   List<String> _history = []; // sent messages, newest first, shared by every pane
   List<String> _recentCommands = []; // sent slash commands (`/models`…), newest first, for one-tap resend
+  bool _showingHistory = false; // the recent-messages panel above the pill; the pill filters it
+  String _historyDraft = ''; // the box's text when the panel opened, restored on close without a pick
   String? _draftKey; // the pane whose draft is in the message box
   int _scrolledUp = 0; // scrolls back into the pane's history; 0 is live
   int _scrolledLines = 0; // the lines those scrolls carried, to scroll back there after a reattach
@@ -84,14 +86,17 @@ class _TerminalScreenState extends State<TerminalScreen> {
   int? _scrollRow; // widget scrolled (an alternate-screen app only scrolls the widget under the wheel)
   bool _left = false; // popped back to the agents, since the machine went off
 
-  // Pinch-to-zoom, two-finger swipes between agents and history scrolling, tracked from raw pointers so
-  // they don't fight the terminal's own gestures.
+  // Pinch-to-zoom, two-finger swipes between agents, a two-finger swipe down to close the tab,
+  // and history scrolling, tracked from raw pointers so they don't fight the terminal's own gestures.
   final _pointers = <int, Offset>{};
   Offset? _twoAt; // where two fingers' midpoint started, while two are down
   double _twoDistance = 0; // and how far apart they were
   bool? _swiping; // what two fingers do: null until they pinch (false) or move sideways together (true)
-  double _swipeDx = 0; // how far the terminal follows a swipe; past [_swipeAt] on release, it switches
+  double _swipeDx = 0; // how far the terminal follows a sideways swipe; past [_swipeAt] on release, it switches
   static const _swipeAt = 80.0;
+  double _swipeDy = 0; // how far two fingers moved down together; past [_swipeDownAt] on release, it closes the tab
+  static const _swipeDownAt = 80.0;
+  bool _swipeDown = false; // two fingers heading down together, not swiping sideways nor pinching
   Offset _padPan = Offset.zero; // a touchpad's two-finger pan so far, until it picks an axis
   Axis? _padAxis;
   double _pinchFont = 0;
@@ -160,8 +165,17 @@ class _TerminalScreenState extends State<TerminalScreen> {
     if (event is! KeyDownEvent && event is! KeyRepeatEvent) return KeyEventResult.ignored;
     if (event.logicalKey == LogicalKeyboardKey.enter || event.logicalKey == LogicalKeyboardKey.numpadEnter) {
       final isCtrl = HardwareKeyboard.instance.isControlPressed || HardwareKeyboard.instance.isMetaPressed;
+      final isShift = HardwareKeyboard.instance.isShiftPressed;
       if (isCtrl) {
-        if (event is KeyDownEvent) {
+        if (event is KeyDownEvent && !_showingHistory) {
+          _sendMessage();
+        }
+        return KeyEventResult.handled;
+      }
+      // Enter sends when that mode is picked, with Shift+Enter for a new line; otherwise Enter
+      // (with or without Shift) inserts a new line and Ctrl+Enter sends.
+      if (widget.client.enterBehavior == EnterBehavior.send && !isShift) {
+        if (event is KeyDownEvent && !_showingHistory) {
           _sendMessage();
         }
         return KeyEventResult.handled;
@@ -189,6 +203,8 @@ class _TerminalScreenState extends State<TerminalScreen> {
       return KeyEventResult.ignored;
     }
     if (event.logicalKey == LogicalKeyboardKey.arrowUp) {
+      // While the history panel is open the pill is a search query: leave the arrows to the field.
+      if (_showingHistory) return KeyEventResult.ignored;
       if (_history.isNotEmpty) {
         if (_historyIndex == -1) _savedDraft = _message.text;
         if (_historyIndex + 1 < _history.length) {
@@ -204,6 +220,7 @@ class _TerminalScreenState extends State<TerminalScreen> {
         }
       }
     } else if (event.logicalKey == LogicalKeyboardKey.arrowDown) {
+      if (_showingHistory) return KeyEventResult.ignored;
       if (_historyIndex > 0) {
         setState(() {
           _historyIndex--;
@@ -232,6 +249,7 @@ class _TerminalScreenState extends State<TerminalScreen> {
     if (_historyIndex != -1 && (_historyIndex >= _history.length || _message.text != _history[_historyIndex])) {
       _historyIndex = -1;
     }
+    if (_showingHistory) return; // the pill is a search query, not a draft, while the panel is open
     if (_draftKey != null) {
       if (_message.text.isNotEmpty) {
         TerminalScreen._drafts[_draftKey!] = _message.text;
@@ -429,6 +447,9 @@ class _TerminalScreenState extends State<TerminalScreen> {
   void _sendMessage([String? command]) {
     final text = command ?? _message.text;
     if (_ptyChannel == null || !widget.client.connected) return;
+    // The pill is a search query while the history panel is open: only one-tap resends go out.
+    if (_showingHistory && command == null) return;
+    if (_showingHistory) _closeHistory();
     _toLive();
     final channel = _ptyChannel;
     if (text.isEmpty) {
@@ -517,71 +538,51 @@ class _TerminalScreenState extends State<TerminalScreen> {
     }();
   }
 
-  /// Recent slash commands, sent as soon as picked, and earlier messages, which go in the message box to edit or send.
-  void _showHistory() {
-    void pick(String text) {
+  /// Recent messages live in a panel above the pill, which stays on screen as its search box:
+  /// typing filters the list, a message goes back in the box to edit or send, and a slash command
+  /// sends at once. Closing without a pick brings back the box's text from before the search.
+  void _toggleHistory() {
+    if (_showingHistory) {
+      _closeHistory();
+      return;
+    }
+    setState(() {
+      _historyDraft = _message.text;
+      _historyIndex = -1;
+      _showingHistory = true;
+      // The pill becomes a search box: start with an empty query over the full
+      // history. The pre-search text is parked in [_historyDraft], not saved as
+      // a draft (see [_onMessageChanged]), and comes back on close.
+      _message.value = const TextEditingValue(text: '');
+    });
+    _messageFocus.requestFocus();
+  }
+
+  void _closeHistory() {
+    setState(() {
+      _showingHistory = false;
+      _message.value = TextEditingValue(
+        text: _historyDraft,
+        selection: TextSelection.collapsed(offset: _historyDraft.length),
+      );
+      _historyDraft = '';
+    });
+  }
+
+  void _pickHistory(String text) {
+    setState(() {
+      _showingHistory = false;
+      _historyDraft = '';
       _historyIndex = -1;
       _message.value = TextEditingValue(text: text, selection: TextSelection.collapsed(offset: text.length));
-      Navigator.pop(context);
-    }
+    });
+    _messageFocus.requestFocus();
+  }
 
-    showModalBottomSheet(
-      context: context,
-      builder: (sheetContext) {
-        // Toned like the machine pill, to read as shortcuts rather than content.
-        final scheme = Theme.of(sheetContext).colorScheme;
-        return SafeArea(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Flexible(
-                child: ListView(
-                  shrinkWrap: true,
-                  children: [
-                    // Headed like the other sheets.
-                    Padding(
-                      padding: const EdgeInsets.fromLTRB(16, 0, 16, 10),
-                      child: Text('Recent messages',
-                          style: Theme.of(context)
-                              .textTheme
-                              .titleSmall
-                              ?.copyWith(color: Theme.of(context).colorScheme.primary)),
-                    ),
-                    for (final h in _history)
-                      ListTile(
-                        leading: const Icon(Icons.history),
-                        title: Text(h, maxLines: 2, overflow: TextOverflow.ellipsis),
-                        onTap: () => pick(h),
-                      ),
-                  ],
-                ),
-              ),
-              // Pinned under the history, nearest the thumb. Hidden until a slash command has been sent.
-              if (_recentCommands.isNotEmpty)
-                Padding(
-                  padding: const EdgeInsets.all(12),
-                  child: Wrap(
-                    spacing: 8,
-                    children: [
-                      for (final r in _recentCommands)
-                        ActionChip(
-                          backgroundColor: scheme.secondaryContainer,
-                          side: BorderSide.none,
-                          labelStyle: TextStyle(color: scheme.onSecondaryContainer),
-                          label: Text(r),
-                          onPressed: () {
-                            Navigator.pop(context);
-                            _sendMessage(r);
-                          },
-                        ),
-                    ],
-                  ),
-                ),
-            ],
-          ),
-        );
-      },
-    );
+  List<String> _filterHistory(List<String> items, String query) {
+    final q = query.trim().toLowerCase();
+    if (q.isEmpty) return items;
+    return items.where((h) => h.toLowerCase().contains(q)).toList();
   }
 
   /// How much of a quota is [used], as a colour from the status palette: done's green while there's plenty,
@@ -1055,18 +1056,31 @@ class _TerminalScreenState extends State<TerminalScreen> {
       _twoDistance = distance;
       _pinchFont = widget.client.fontSize;
       _swiping = null;
+      _swipeDown = false;
+      _swipeDy = 0;
       return;
     }
-    // Fingers moving sideways together swipe; moving apart or together pinch, whichever shows first.
+    // Fingers moving sideways together swipe; moving apart or together pinch; moving down together
+    // close the tab on release; whichever shows first wins.
     final dx = centre.dx - _twoAt!.dx;
+    final dy = centre.dy - _twoAt!.dy;
     final stretch = distance - _twoDistance;
-    _swiping ??= dx.abs() > kPanSlop && dx.abs() > stretch.abs()
-        ? true
-        : stretch.abs() > kPanSlop && widget.client.pinchZoom
-            ? false
-            : null;
+    if (!_swipeDown) {
+      _swiping ??= dx.abs() > kPanSlop && dx.abs() > stretch.abs()
+          ? true
+          : stretch.abs() > kPanSlop && widget.client.pinchZoom
+              ? false
+              : null;
+    }
+    if (!_swipeDown && _swiping == null && dy > kPanSlop && dy > dx.abs() && dy > stretch.abs()) {
+      _swipeDown = true;
+    }
     if (_swiping == false) widget.client.setFontSize((_pinchFont * distance / _twoDistance).roundToDouble());
     if (_swiping == true) _swipe(dx);
+    if (_swipeDown) {
+      if ((dy >= _swipeDownAt) != (_swipeDy >= _swipeDownAt)) HapticFeedback.selectionClick();
+      _swipeDy = dy;
+    }
   }
 
   /// Where a swipe [step] agents along leads, named as the list does: the agent's summary, then where it is.
@@ -1124,10 +1138,26 @@ class _TerminalScreenState extends State<TerminalScreen> {
   }
 
   /// Fingers lifted: past [_swipeAt], the next agent (fingers gone left, as a page turns) or the previous
-  /// ([stepAgent]); either way the terminal springs back into place.
+  /// ([stepAgent]); either way the terminal springs back into place. Two fingers swiped down together
+  /// past [_swipeDownAt] close the current tab instead ([_closeTabByGesture]).
   void _endSwipe() {
     if (_swipeDx.abs() >= _swipeAt) widget.client.stepAgent(_swipeDx < 0 ? 1 : -1);
     if (_swipeDx != 0) setState(() => _swipeDx = 0);
+    if (_swipeDown && _swipeDy >= _swipeDownAt) _closeTabByGesture();
+    _swipeDown = false;
+    _swipeDy = 0;
+  }
+
+  /// Two fingers swiped down together close the current tab, undoable like its menu's Close tab. Never
+  /// with text selected: that gesture is for the selection, not the tab.
+  void _closeTabByGesture() {
+    if (_controller.selection != null) return;
+    final tabId = widget.client.selectedPane?.tabId;
+    if (tabId == null) return;
+    final client = widget.client;
+    final m = client.machine;
+    HapticFeedback.mediumImpact();
+    closeWithUndo(context, client, 'Tab closed', ['$m/$tabId'], () => client.closeTab(tabId, m));
   }
 
   /// Herdr holds the pane's history (see [PtyChannel.connect]), so dragging scrolls herdr's view a line
@@ -1206,6 +1236,9 @@ class _TerminalScreenState extends State<TerminalScreen> {
 
   /// Parks the box's text as the current pane's draft and brings back [key]'s.
   void _swapDraft(String? key) {
+    // A pane switch ends a history search: the query never becomes a draft.
+    _showingHistory = false;
+    _historyDraft = '';
     if (_draftKey != null) TerminalScreen._drafts[_draftKey!] = _message.text;
     TerminalScreen._drafts.removeWhere((_, text) => text.isEmpty);
     _draftKey = key;
@@ -1403,7 +1436,13 @@ class _TerminalScreenState extends State<TerminalScreen> {
         ? (workspace?.gitBranch?.replaceFirst('worktree/', '') ?? workspace?.displayName ?? '')
         : (workspace?.gitBranch ?? '');
 
-    return Scaffold(
+    return PopScope(
+      canPop: !_showingHistory,
+      onPopInvokedWithResult: (didPop, _) {
+        // System back closes the history search first, restoring the box's text.
+        if (!didPop && _showingHistory) _closeHistory();
+      },
+      child: Scaffold(
       appBar: AppBar(
         automaticallyImplyLeading: !widget.embedded,
         // Beside the back button; embedded, with none, the usual inset from the agents.
@@ -1894,8 +1933,104 @@ class _TerminalScreenState extends State<TerminalScreen> {
               Container(
                 color: background,
                 padding: const EdgeInsets.fromLTRB(4, 4, 4, 6),
-                child: Row(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
                   children: [
+                    // Recent messages stay above the pill, which doubles as their search box.
+                    if (_showingHistory && !client.keyBar)
+                      ValueListenableBuilder<TextEditingValue>(
+                        valueListenable: _message,
+                        builder: (context, val, _) {
+                          final messages = _filterHistory(_history, val.text);
+                          final commands = _filterHistory(_recentCommands, val.text);
+                          final empty = messages.isEmpty && commands.isEmpty;
+                          return ConstrainedBox(
+                            constraints: const BoxConstraints(maxHeight: 300),
+                            child: Padding(
+                              padding: const EdgeInsets.fromLTRB(4, 0, 4, 6),
+                              child: Material(
+                                color: scheme.surfaceContainerHigh,
+                                borderRadius: BorderRadius.circular(16),
+                                clipBehavior: Clip.antiAlias,
+                                child: Column(
+                                  mainAxisSize: MainAxisSize.min,
+                                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                                  children: [
+                                    Padding(
+                                      padding: const EdgeInsets.fromLTRB(16, 10, 8, 2),
+                                      child: Row(
+                                        children: [
+                                          Text('Recent messages',
+                                              style: Theme.of(context)
+                                                  .textTheme
+                                                  .titleSmall
+                                                  ?.copyWith(color: Theme.of(context).colorScheme.primary)),
+                                          const Spacer(),
+                                          IconButton(
+                                            tooltip: 'Close history',
+                                            iconSize: 20,
+                                            visualDensity: VisualDensity.compact,
+                                            icon: const Icon(Icons.close),
+                                            onPressed: _closeHistory,
+                                          ),
+                                        ],
+                                      ),
+                                    ),
+                                    if (commands.isNotEmpty)
+                                      Padding(
+                                        padding: const EdgeInsets.fromLTRB(12, 2, 12, 4),
+                                        child: Wrap(
+                                          spacing: 8,
+                                          runSpacing: 4,
+                                          children: [
+                                            for (final r in commands)
+                                              ActionChip(
+                                                backgroundColor: scheme.secondaryContainer,
+                                                side: BorderSide.none,
+                                                labelStyle: TextStyle(color: scheme.onSecondaryContainer),
+                                                label: Text(r),
+                                                onPressed: () => _sendMessage(r),
+                                              ),
+                                          ],
+                                        ),
+                                      ),
+                                    Flexible(
+                                      child: empty
+                                          ? Padding(
+                                              padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
+                                              child: Text(
+                                                _history.isEmpty && _recentCommands.isEmpty
+                                                    ? 'No recent messages yet'
+                                                    : 'No matches',
+                                                style: Theme.of(context)
+                                                    .textTheme
+                                                    .bodyMedium
+                                                    ?.copyWith(color: scheme.onSurfaceVariant),
+                                              ),
+                                            )
+                                          : ListView(
+                                              shrinkWrap: true,
+                                              children: [
+                                                for (final h in messages)
+                                                  ListTile(
+                                                    dense: true,
+                                                    leading: const Icon(Icons.history),
+                                                    title: Text(h,
+                                                        maxLines: 2, overflow: TextOverflow.ellipsis),
+                                                    onTap: () => _pickHistory(h),
+                                                  ),
+                                              ],
+                                            ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            ),
+                          );
+                        },
+                      ),
+                    Row(
+                      children: [
                     Theme(
                       data: onBackground,
                       child: client.keyBar
@@ -1911,7 +2046,19 @@ class _TerminalScreenState extends State<TerminalScreen> {
                           : IconButton(
                               tooltip: 'Control keys',
                               icon: const Icon(Icons.keyboard_command_key),
-                              onPressed: () => client.setKeyBar(true),
+                              onPressed: () {
+                                if (_showingHistory) _closeHistory();
+                                // Focus moves before the swap, in one frame, mirroring the message box
+                                // button: a keyboard that is up stays up, now into the terminal. The gate
+                                // relocks in the same block (see [_gateKeyboard]): split these apart and a
+                                // stray focus could summon the keyboard uninvited.
+                                if (MediaQuery.viewInsetsOf(context).bottom > 0) {
+                                  _termFocus.canRequestFocus = true;
+                                  _view.currentState?.requestKeyboard();
+                                  _termFocus.canRequestFocus = false;
+                                }
+                                client.setKeyBar(true);
+                              },
                             ),
                     ),
                     Expanded(
@@ -1928,10 +2075,16 @@ class _TerminalScreenState extends State<TerminalScreen> {
                               minLines: 1,
                               maxLines: 4,
                               textCapitalization: TextCapitalization.sentences,
-                              textInputAction: TextInputAction.newline,
+                              textInputAction: client.enterBehavior == EnterBehavior.send
+                                  ? TextInputAction.send
+                                  : TextInputAction.newline,
+                              onSubmitted: client.enterBehavior == EnterBehavior.send && !_showingHistory
+                                  ? (_) => _sendMessage()
+                                  : null,
                               // An M3 filled text field, pill-shaped like a search bar.
+                              // With the history panel open it is the panel's search box.
                               decoration: InputDecoration(
-                                hintText: 'Message terminal…',
+                                hintText: _showingHistory ? 'Search recent messages…' : 'Message terminal…',
                                 filled: true,
                                 fillColor: scheme.surfaceContainerHigh,
                                 isDense: true,
@@ -1940,16 +2093,28 @@ class _TerminalScreenState extends State<TerminalScreen> {
                                   borderRadius: BorderRadius.circular(24),
                                   borderSide: BorderSide.none,
                                 ),
-                                prefixIcon: IconButton(
-                                  tooltip: 'History and recent commands',
-                                  icon: const Icon(Icons.history),
-                                  onPressed: _showHistory,
-                                ),
-                                suffixIcon: IconButton(
-                                  tooltip: 'Attach image',
-                                  icon: const Icon(Icons.image_outlined),
-                                  onPressed: _attachImage,
-                                ),
+                                prefixIcon: _showingHistory
+                                    ? IconButton(
+                                        tooltip: 'Close history',
+                                        icon: const Icon(Icons.close),
+                                        onPressed: _closeHistory,
+                                      )
+                                    : IconButton(
+                                        tooltip: 'History and recent commands',
+                                        icon: const Icon(Icons.history),
+                                        onPressed: _toggleHistory,
+                                      ),
+                                suffixIcon: _showingHistory
+                                    ? IconButton(
+                                        tooltip: 'Clear search',
+                                        icon: const Icon(Icons.clear),
+                                        onPressed: _message.clear,
+                                      )
+                                    : IconButton(
+                                        tooltip: 'Attach image',
+                                        icon: const Icon(Icons.image_outlined),
+                                        onPressed: _attachImage,
+                                      ),
                               ),
                             ),
                     ),
@@ -1968,7 +2133,8 @@ class _TerminalScreenState extends State<TerminalScreen> {
                                 onPressed: _openKeyboard,
                               ),
                       ),
-                    if (!client.keyBar) ...[
+                    // While searching the pill filters; sending waits for a pick.
+                    if (!client.keyBar && !_showingHistory) ...[
                       const SizedBox(width: 6),
                       ValueListenableBuilder<TextEditingValue>(
                         valueListenable: _message,
@@ -1987,10 +2153,12 @@ class _TerminalScreenState extends State<TerminalScreen> {
                     ],
                   ],
                 ),
+                  ],
+                ),
               ),
           ],
         ),
       ),
-    );
+    ));
   }
 }

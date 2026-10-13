@@ -273,6 +273,52 @@ void main() {
       expect(client.selectedPaneId, 'w2:p4');
     });
 
+    testWidgets('Two fingers swiped down close the current tab, with Undo', (tester) async {
+      SharedPreferences.setMockInitialValues({'last_seen_changelog': changelog.first.$1});
+      const m = '100.1.2.3:7788';
+      final client = HerdrClientService()
+        ..setMachines([m], [])
+        ..switchMachine(m)
+        ..setSnapshotForTesting(twoWorkspaces())
+        ..setConnectedForTesting(m, true)
+        ..selectPane('w1:p1');
+      await tester.pumpWidget(MaterialApp(home: TerminalScreen(client: client)));
+      final at = tester.getCenter(find.byType(TerminalView));
+
+      // Both fingers move down together by [dy], then lift.
+      Future<void> swipeDown(double dy) async {
+        final a = await tester.startGesture(at - const Offset(0, 40));
+        final b = await tester.startGesture(at + const Offset(0, 40));
+        for (var i = 0; i < 10; i++) {
+          await a.moveBy(Offset(0, dy / 10));
+          await b.moveBy(Offset(0, dy / 10));
+          await tester.pump();
+        }
+        await a.up();
+        await b.up();
+        await tester.pump(const Duration(milliseconds: 200));
+      }
+
+      // Short of the threshold: nothing closes.
+      await swipeDown(40);
+      expect(find.text('Tab closed'), findsNothing);
+      expect(client.snapshot!.tabs.map((t) => t.id), contains('w1:t1'));
+
+      // Swiping up does nothing either.
+      await swipeDown(-120);
+      expect(find.text('Tab closed'), findsNothing);
+      expect(client.snapshot!.tabs.map((t) => t.id), contains('w1:t1'));
+
+      // Past the threshold: the current tab closes, with Undo.
+      await swipeDown(120);
+      expect(find.text('Tab closed'), findsOneWidget);
+      expect(client.snapshot!.tabs.map((t) => t.id), isNot(contains('w1:t1')));
+      await tester.tap(find.text('Undo'));
+      await tester.pump();
+      expect(client.snapshot!.tabs.map((t) => t.id), contains('w1:t1'));
+      await tester.pump(const Duration(seconds: 1)); // xterm's double-tap timer
+    });
+
     testWidgets('A tap on the terminal never shows the control keys nor the keyboard', (tester) async {
       SharedPreferences.setMockInitialValues({'last_seen_changelog': changelog.first.$1});
       final client = HerdrClientService()
