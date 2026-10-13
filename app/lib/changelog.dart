@@ -1,6 +1,13 @@
 /// Newest first. Shown once after an update; add an entry when bumping the version in pubspec.yaml.
 const changelog = <(String, List<String>)>[
   (
+    '1.14.3',
+    [
+      'Tapping the terminal no longer swaps in the control keys: it only clicks, and the bar is back to a CTRL label with the command-key button beside the message box.',
+      'The history sheet keeps your recent slash commands (/models…) for one-tap resend instead of fixed quick replies.',
+    ]
+  ),
+  (
     '1.14.2',
     [
       'The control keys bar shows ⌘ instead of a stale CTRL label.',
