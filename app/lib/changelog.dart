@@ -1,6 +1,16 @@
 /// Newest first. Shown once after an update; add an entry when bumping the version in pubspec.yaml.
 const changelog = <(String, List<String>)>[
   (
+    '1.13.0',
+    [
+      'Tapping the terminal opens the keyboard at once, with the control keys in place of the message box, and clicks in terminal apps that use the mouse.',
+      'The keyboard button shows or hides the keyboard beside the control keys; the message button returns to the message box.',
+      'The control keys scroll sideways when they don\'t fit, and a double-tap no longer selects a word.',
+      'Shift+Enter in the terminal adds a new line instead of sending.',
+      'A pane you come back to keeps its place in the history, unless its agent has moved on since.',
+    ]
+  ),
+  (
     '1.12.6',
     [
       'Nest each worktree under one parent in the drawer and fix open-worktree reload.',
