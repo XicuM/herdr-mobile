@@ -125,9 +125,17 @@ class PtyChannel {
   }
 
   /// Scrolls herdr's view of the pane through its history; positive [lines] go back in time.
-  void sendScroll(int lines) {
-    _channel?.sink
-        .add(jsonEncode({'type': 'terminal.scroll', 'direction': lines > 0 ? 'up' : 'down', 'lines': lines.abs()}));
+  /// [column] and [row] are 0-based screen cells under the gesture: herdr hands an
+  /// alternate-screen app the scroll as a mouse wheel there, so it reaches the widget
+  /// being scrolled (OpenCode only scrolls the widget under the wheel, unlike Claude).
+  void sendScroll(int lines, {int? column, int? row}) {
+    _channel?.sink.add(jsonEncode({
+      'type': 'terminal.scroll',
+      'direction': lines > 0 ? 'up' : 'down',
+      'lines': lines.abs(),
+      if (column != null) 'column': column,
+      if (row != null) 'row': row,
+    }));
   }
 
   /// A left click on a cell (0-based), which herdr hands to the pane only if its program asked for the mouse.

@@ -1166,6 +1166,14 @@ class HerdrClientService extends ChangeNotifier {
 
   Future<void> createTab(String workspaceId) => _create('create tab', '/api/tab', {'workspace_id': workspaceId});
 
+  /// Uploads image [bytes] to the active machine's bridge, which saves them where its agents run.
+  /// Returns the saved path for `@`-references, or null (already reported to [onError]).
+  Future<String?> uploadImage(List<int> bytes, String mime) async {
+    final res = await _request('upload image', 'POST', '/api/uploads',
+        body: {'mime': mime, 'data': base64Encode(bytes)});
+    return res is Map ? res['path'] as String? : null;
+  }
+
   Future<void> closeTab(String tabId, [String? m]) => _request('close tab', 'DELETE', '/api/tab/$tabId', on: m);
 
   /// Closes [paneId] on [m] (the active machine by default). herdr closes a tab with its last pane and a

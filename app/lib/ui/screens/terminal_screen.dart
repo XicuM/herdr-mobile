@@ -3,12 +3,14 @@ import 'dart:io';
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:file_selector/file_selector.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:xterm/xterm.dart';
 // ignore: implementation_imports
 import 'package:xterm/src/ui/palette_builder.dart'; // the palette xterm paints with, to resolve a cell's colour
 import '../../models/agent_status.dart';
 import '../../models/session.dart';
+import '../../services/attached_image.dart';
 import '../../services/herdr_client.dart';
 import '../../services/pty_channel.dart';
 import '../widgets/agent_avatar.dart';
@@ -48,9 +50,10 @@ class TerminalScreen extends StatefulWidget {
   static void clearDraftsForTesting() => _drafts.clear();
 
   // Where each pane left was scrolled back to ([_scrolledUp], [_scrolledLines]), by `machine/pane`, with its
-  // agent's `state_change_seq` at the last scroll. Restored only while that seq holds: the replay lands as
+  // agent's `state_change_seq` at the last scroll and the 0-based screen cell scrolled ([_scrollColumn],
+  // [_scrollRow]). Restored only while that seq holds: the replay lands as
   // far from the bottom as before, which shows other text once the pane has printed meanwhile.
-  static final _places = <String, (int, int, int?)>{};
+  static final _places = <String, (int, int, int?, int?, int?)>{};
 
   @override
   State<TerminalScreen> createState() => _TerminalScreenState();
@@ -77,6 +80,8 @@ class _TerminalScreenState extends State<TerminalScreen> {
   int _scrolledLines = 0; // the lines those scrolls carried, to scroll back there after a reattach
   String? _scrolledPane; // the pane (machine/pane) they were in
   int? _scrolledSeq; // its agent's `state_change_seq` at the last scroll
+  int? _scrollColumn; // 0-based screen cell under the last scroll, so herdr's wheel lands on the
+  int? _scrollRow; // widget scrolled (an alternate-screen app only scrolls the widget under the wheel)
   bool _left = false; // popped back to the agents, since the machine went off
 
   // Pinch-to-zoom, two-finger swipes between agents and history scrolling, tracked from raw pointers so
@@ -172,6 +177,14 @@ class _TerminalScreenState extends State<TerminalScreen> {
       return KeyEventResult.handled;
     }
     if (event is! KeyDownEvent) return KeyEventResult.ignored;
+    if (event.logicalKey == LogicalKeyboardKey.keyV) {
+      final isCtrl = HardwareKeyboard.instance.isControlPressed || HardwareKeyboard.instance.isMetaPressed;
+      // A pasted clipboard image attaches instead; text stays the field's own paste, which runs
+      // alongside (see [_pasteClipboardImage]). Desktop only: on phones images come through the
+      // attach button, whose picker reads them.
+      if (isCtrl && !Platform.isAndroid && !Platform.isIOS) _pasteClipboardImage();
+      return KeyEventResult.ignored;
+    }
     if (event.logicalKey == LogicalKeyboardKey.arrowUp) {
       if (_history.isNotEmpty) {
         if (_historyIndex == -1) _savedDraft = _message.text;
@@ -432,6 +445,65 @@ class _TerminalScreenState extends State<TerminalScreen> {
     if (text.trim().isEmpty) return;
     _history = [text, ..._history.where((h) => h != text)].take(30).toList();
     SharedPreferences.getInstance().then((p) => p.setStringList('message_history', _history));
+  }
+
+  /// Picks an image, uploads it to the active machine's bridge ([HerdrClientService.uploadImage]),
+  /// and puts its `@`-reference in the message box to review and send: the agent reads the file, and
+  /// any agent without file references just sees a path. The box's draft stays.
+  Future<void> _attachImage() async {
+    const images = XTypeGroup(label: 'images', extensions: ['png', 'jpg', 'jpeg', 'gif', 'webp']);
+    late final XFile? file;
+    try {
+      file = await openFile(acceptedTypeGroups: [images]);
+    } catch (e) {
+      return _imageError('Could not open the file picker ($e).');
+    }
+    if (file == null || !mounted) return; // picked nothing
+    late final Uint8List bytes;
+    late final String mime;
+    try {
+      (bytes, mime) = await AttachedImage.normalize(await file.readAsBytes());
+    } catch (e) {
+      return _imageError('Could not read that image ($e).');
+    }
+    final path = await widget.client.uploadImage(bytes, mime);
+    if (path == null || !mounted) return; // reported through onError
+    final cur = _message.text;
+    final next = cur.isEmpty ? '@$path ' : '${cur.endsWith(' ') ? cur : '$cur '}@$path ';
+    _message.value = TextEditingValue(text: next, selection: TextSelection.collapsed(offset: next.length));
+  }
+
+  void _imageError(String message) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(message)));
+  }
+
+  bool _pastingImage = false; // a clipboard-image paste in flight; repeat Ctrl+V waits
+
+  /// Pastes a clipboard image, if one is there, as an `@`-reference like [_attachImage] but
+  /// without the picker. Only runs when the field has no text to paste, so the two never
+  /// double-insert; disconnected, there is nothing to upload to, and the field pastes alone.
+  void _pasteClipboardImage() {
+    if (_pastingImage || !widget.client.connected) return;
+    _pastingImage = true;
+    () async {
+      try {
+        final clip = await Clipboard.getData(Clipboard.kTextPlain);
+        if (clip?.text?.isNotEmpty ?? false) return; // text: the field pastes it
+        final bytes = await AttachedImage.readClipboardImage();
+        if (bytes == null || !mounted) return; // no image (or no tool): nothing to paste
+        final (image, mime) = await AttachedImage.normalize(bytes);
+        final path = await widget.client.uploadImage(image, mime);
+        if (path == null || !mounted) return; // reported through onError
+        final cur = _message.text;
+        final next = cur.isEmpty ? '@$path ' : '${cur.endsWith(' ') ? cur : '$cur '}@$path ';
+        _message.value = TextEditingValue(text: next, selection: TextSelection.collapsed(offset: next.length));
+      } catch (e) {
+        _imageError('Could not paste that image ($e).');
+      } finally {
+        _pastingImage = false;
+      }
+    }();
   }
 
   /// Quick replies, sent as soon as picked, and earlier messages, which go in the message box to edit or send.
@@ -719,7 +791,7 @@ class _TerminalScreenState extends State<TerminalScreen> {
     if (_controller.selection != null) _controller.clearSelection();
     if (_scrolledUp == 0) return;
     for (var i = 0; i < 2 * _scrolledUp; i++) {
-      _ptyChannel?.sendScroll(-65535);
+      _ptyChannel?.sendScroll(-65535, column: _scrollColumn, row: _scrollRow);
     }
     setState(() => _scrolledUp = _scrolledLines = 0);
   }
@@ -1058,14 +1130,14 @@ class _TerminalScreenState extends State<TerminalScreen> {
       _scrollRest = 0;
       return;
     }
-    _scrollBy(e.delta.dy);
+    _scrollBy(e.delta.dy, e.position);
   }
 
   /// A mouse wheel scrolls herdr's view like a drag does, and so does a desktop touchpad's two-finger pan
   /// up or down; sideways, it swipes between agents as two fingers on a phone do. A pan keeps the axis
   /// it first moves along.
   void _scrollSignal(PointerEvent e) {
-    if (e is PointerScrollEvent) _scrollBy(-e.scrollDelta.dy);
+    if (e is PointerScrollEvent) _scrollBy(-e.scrollDelta.dy, e.position);
     if (e is PointerPanZoomStartEvent) {
       _padPan = Offset.zero;
       _padAxis = null;
@@ -1075,20 +1147,40 @@ class _TerminalScreenState extends State<TerminalScreen> {
     _padPan += e.panDelta;
     if (_padAxis == null && _padPan.distance > kTouchSlop) {
       _padAxis = _padPan.dx.abs() > _padPan.dy.abs() ? Axis.horizontal : Axis.vertical;
-      if (_padAxis == Axis.vertical) return _scrollBy(_padPan.dy);
+      if (_padAxis == Axis.vertical) return _scrollBy(_padPan.dy, e.position);
     }
-    if (_padAxis == Axis.vertical) _scrollBy(e.panDelta.dy);
+    if (_padAxis == Axis.vertical) _scrollBy(e.panDelta.dy, e.position);
     if (_padAxis == Axis.horizontal) _swipe(_padPan.dx);
   }
 
-  /// Scrolls by [dy] pixels, positive toward older history.
-  void _scrollBy(double dy) {
+  /// The 0-based screen cell under [global], or null when the terminal has no size yet.
+  (int, int)? _cellAt(Offset global) {
+    final render = _view.currentState?.renderTerminal;
+    if (render == null || !render.hasSize || _terminal.viewWidth <= 0 || _terminal.viewHeight <= 0) return null;
+    final cell = render.getCellOffset(render.globalToLocal(global));
+    // xterm counts rows from the buffer's top; herdr, from the screen's (see [_onTap]).
+    final top = _terminal.buffer.height - _terminal.viewHeight;
+    return (
+      cell.x.clamp(0, _terminal.viewWidth - 1),
+      (cell.y - top).clamp(0, _terminal.viewHeight - 1),
+    );
+  }
+
+  /// Scrolls by [dy] pixels, positive toward older history. [at] is where the gesture is, so herdr's
+  /// wheel lands on the widget scrolled; without it the wheel lands top-left, where OpenCode has
+  /// nothing scrollable and the scroll does nothing.
+  void _scrollBy(double dy, [Offset? at]) {
     if (_controller.selection != null) _controller.clearSelection(); // it would stay on rows whose text moves
+    final cell = at == null ? null : _cellAt(at);
+    if (cell != null) {
+      _scrollColumn = cell.$1;
+      _scrollRow = cell.$2;
+    }
     final lineHeight = widget.client.fontSize * 1.1; // TerminalStyle height is 1.1
     _scrollRest += dy;
     final lines = _scrollRest ~/ lineHeight;
     if (lines == 0) return;
-    _ptyChannel?.sendScroll(lines);
+    _ptyChannel?.sendScroll(lines, column: _scrollColumn, row: _scrollRow);
     _scrollRest -= lines * lineHeight;
     // Counts scrolls, not lines: an app on the alternate screen moves a wheel tick per scroll, however
     // many lines it carries (see [_toLive]). Herdr stops at the bottom, so the count does too; it may
@@ -1164,6 +1256,8 @@ class _TerminalScreenState extends State<TerminalScreen> {
       _scrolledUp = kept ? place.$1 : 0;
       _scrolledLines = kept ? place.$2 : 0;
       _scrolledSeq = kept ? place.$3 : null;
+      _scrollColumn = kept ? place.$4 : null;
+      _scrollRow = kept ? place.$5 : null;
     }
     _ptyChannel = PtyChannel(
       machine: client.machine,
@@ -1172,10 +1266,12 @@ class _TerminalScreenState extends State<TerminalScreen> {
       headers: headers,
       // Herdr shows a freshly attached pane live, also after a lost connection, so scroll back to where
       // it was: as many scrolls as went up (an app on the alternate screen counts each as one wheel tick,
-      // see [_toLive]), sharing the lines they carried (herdr's own scrollback counts those).
+      // see [_toLive]), sharing the lines they carried (herdr's own scrollback counts those), at the cell
+      // scrolled so the wheel lands on the same widget.
       onAttach: () {
         for (var i = 0; i < _scrolledUp; i++) {
-          _ptyChannel?.sendScroll((_scrolledLines / _scrolledUp).ceil());
+          _ptyChannel?.sendScroll((_scrolledLines / _scrolledUp).ceil(),
+              column: _scrollColumn, row: _scrollRow);
         }
       },
     );
@@ -1186,7 +1282,9 @@ class _TerminalScreenState extends State<TerminalScreen> {
 
   /// Keeps where the pane on screen is scrolled to, for when it's shown again.
   void _parkPlace() {
-    if (_scrolledPane != null && _scrolledUp > 0) TerminalScreen._places[_scrolledPane!] = (_scrolledUp, _scrolledLines, _scrolledSeq);
+    if (_scrolledPane != null && _scrolledUp > 0) {
+      TerminalScreen._places[_scrolledPane!] = (_scrolledUp, _scrolledLines, _scrolledSeq, _scrollColumn, _scrollRow);
+    }
   }
 
   /// Marks the screen stale once the pane has been off for a second, so an ordinary attach never flashes it.
@@ -1445,6 +1543,7 @@ class _TerminalScreenState extends State<TerminalScreen> {
                                     onAcceptWithDetails: (d) => client.moveTab(d.data, t.id),
                                     builder: (context, over, _) {
                                       final tabAgent = _tabAgent(t);
+                                      final summary = _tabSummary(t);
                                       final label = Padding(
                                         padding: const EdgeInsets.symmetric(horizontal: 8),
                                         child: Row(
@@ -1453,7 +1552,7 @@ class _TerminalScreenState extends State<TerminalScreen> {
                                             const SizedBox(width: 6),
                                             Expanded(
                                               child: Text(
-                                                _tabSummary(t),
+                                                summary,
                                                 maxLines: 1,
                                                 overflow: TextOverflow.ellipsis,
                                                 style: Theme.of(context).textTheme.labelMedium?.copyWith(
@@ -1489,7 +1588,12 @@ class _TerminalScreenState extends State<TerminalScreen> {
                                               child: label,
                                             ),
                                           ),
-                                          child: Container(
+                                          // The full line on hover (manual: hover still shows, touch doesn't fight the hold menu).
+                                          child: Tooltip(
+                                            message: summary,
+                                            triggerMode: TooltipTriggerMode.manual,
+                                            waitDuration: const Duration(milliseconds: 500),
+                                            child: Container(
                                               key: j == i ? _currentTab : null,
                                               width: 168,
                                               decoration: over.isNotEmpty
@@ -1503,6 +1607,7 @@ class _TerminalScreenState extends State<TerminalScreen> {
                                                 child: label,
                                               ),
                                             ),
+                                          ),
                                         ),
                                       );
                                     },
@@ -1719,10 +1824,10 @@ class _TerminalScreenState extends State<TerminalScreen> {
                       ],
                     ),
             ),
-            // Two places to type, in the terminal's background: the message box, or the terminal itself with the
-            // control keys in the box's place. The keyboard button, always on the left, types into the terminal: from
-            // the box it brings the keys and the keyboard, beside the keys it shows or hides the keyboard. The button on
-            // the right sends the message, or goes back to the box. A keyboard that is up stays up across the swap.
+            // Two places to type: the message box, or the terminal itself with the control keys in the
+            // box's place. The box leads with the control keys' button, which brings the keys without
+            // the keyboard; the keys lead with the box's button back, and end with the keyboard's,
+            // which shows or hides it. A keyboard that is up stays up across the swap.
             if (!client.hideMessageTerminal)
               Container(
                 color: background,
@@ -1731,16 +1836,30 @@ class _TerminalScreenState extends State<TerminalScreen> {
                   children: [
                     Theme(
                       data: onBackground,
-                      child: client.keyBar && _termFocus.hasFocus && MediaQuery.viewInsetsOf(context).bottom > 0
+                      child: client.keyBar
                           ? IconButton(
-                              tooltip: 'Hide keyboard',
-                              icon: const Icon(Icons.keyboard_hide_outlined),
-                              onPressed: _termFocus.unfocus,
+                              tooltip: 'Message box',
+                              icon: const Icon(Icons.chat_bubble_outline),
+                              onPressed: () {
+                                // Focus moves before the swap, in one frame.
+                                if (MediaQuery.viewInsetsOf(context).bottom > 0) _messageFocus.requestFocus();
+                                client.setKeyBar(false);
+                              },
                             )
                           : IconButton(
-                              tooltip: 'Keyboard',
-                              icon: const Icon(Icons.keyboard_outlined),
-                              onPressed: _typeInTerminal,
+                              tooltip: 'Control keys',
+                              // Text like the control keys' own CTRL key, not a keycap icon.
+                              icon: Builder(
+                                builder: (context) => Text(
+                                  'CTRL',
+                                  style: TextStyle(
+                                    color: Theme.of(context).iconTheme.color,
+                                    fontWeight: FontWeight.bold,
+                                    fontSize: 15,
+                                  ),
+                                ),
+                              ),
+                              onPressed: () => client.setKeyBar(true),
                             ),
                     ),
                     Expanded(
@@ -1774,21 +1893,28 @@ class _TerminalScreenState extends State<TerminalScreen> {
                                   icon: const Icon(Icons.history),
                                   onPressed: _showHistory,
                                 ),
+                                suffixIcon: IconButton(
+                                  tooltip: 'Attach image',
+                                  icon: const Icon(Icons.image_outlined),
+                                  onPressed: _attachImage,
+                                ),
                               ),
                             ),
                     ),
                     if (client.keyBar)
                       Theme(
                         data: onBackground,
-                        child: IconButton(
-                          tooltip: 'Message box',
-                          icon: const Icon(Icons.chat_bubble_outline),
-                          onPressed: () {
-                            // Focus moves before the swap, in one frame.
-                            if (MediaQuery.viewInsetsOf(context).bottom > 0) _messageFocus.requestFocus();
-                            client.setKeyBar(false);
-                          },
-                        ),
+                        child: _termFocus.hasFocus && MediaQuery.viewInsetsOf(context).bottom > 0
+                            ? IconButton(
+                                tooltip: 'Hide keyboard',
+                                icon: const Icon(Icons.keyboard_hide_outlined),
+                                onPressed: _termFocus.unfocus,
+                              )
+                            : IconButton(
+                                tooltip: 'Keyboard',
+                                icon: const Icon(Icons.keyboard_outlined),
+                                onPressed: _typeInTerminal,
+                              ),
                       ),
                     if (!client.keyBar) ...[
                       const SizedBox(width: 6),

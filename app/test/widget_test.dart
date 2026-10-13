@@ -408,8 +408,8 @@ void main() {
       await tester.tap(inBar('db'));
       expect(client.selectedPaneId, 'w1:p3');
 
-      // The keyboard button swaps the message box for the control keys, and the message box button back.
-      await tester.tap(find.byTooltip('Keyboard'));
+      // The control keys' button swaps the message box for the control keys, and the message box button back.
+      await tester.tap(find.byTooltip('Control keys'));
       await tester.pump();
       expect(find.byType(TextField), findsNothing);
       expect(find.text('ESC'), findsOneWidget);
@@ -1535,14 +1535,14 @@ void main() {
       await tester.pumpWidget(MaterialApp(home: TerminalScreen(client: client)));
       await tester.pump(const Duration(milliseconds: 300));
       expect(find.byType(TextField), findsNothing);
-      expect(find.byTooltip('Keyboard'), findsNothing);
+      expect(find.byTooltip('Control keys'), findsNothing);
 
       // Toggle back in client
       client.setHideMessageTerminal(false);
       await tester.pumpWidget(MaterialApp(home: TerminalScreen(client: client)));
       await tester.pump(const Duration(milliseconds: 300));
       expect(find.byType(TextField), findsOneWidget);
-      expect(find.byTooltip('Keyboard'), findsOneWidget);
+      expect(find.byTooltip('Control keys'), findsOneWidget);
     });
 
     testWidgets('SettingsScreen displays notification options when alerts are enabled', (tester) async {
@@ -1978,6 +1978,88 @@ void main() {
       await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
       await tester.pump();
       expect(find.text('first command'), findsNothing);
+    });
+
+    testWidgets('Ctrl+V with an empty clipboard pastes nothing', (tester) async {
+      SharedPreferences.setMockInitialValues({});
+      final client = HerdrClientService();
+      final snap = SessionSnapshot.fromJson({
+        'version': '0.9.3',
+        'protocol': 22,
+        'focused_workspace_id': 'w1',
+        'focused_tab_id': 'w1:t1',
+        'focused_pane_id': 'w1:p1',
+        'workspaces': [
+          {'workspace_id': 'w1', 'number': 1, 'label': 'main', 'active_tab_id': 'w1:t1', 'agent_status': 'idle'},
+        ],
+        'tabs': [
+          {'tab_id': 'w1:t1', 'workspace_id': 'w1', 'number': 1, 'label': 'Tab 1', 'agent_status': 'idle'},
+        ],
+        'panes': [
+          {'pane_id': 'w1:p1', 'workspace_id': 'w1', 'tab_id': 'w1:t1', 'focused': true, 'agent_status': 'idle', 'terminal_title': ''},
+        ],
+        'agents': [],
+      });
+      client.setSnapshotForTesting(snap);
+      client.selectPane('w1:p1');
+
+      await tester.pumpWidget(MaterialApp(home: TerminalScreen(client: client)));
+      await tester.pump(const Duration(milliseconds: 300));
+      await tester.tap(find.byType(TextField));
+      await tester.pump();
+
+      // No text clipboard and (in tests) no connection: the field's own paste finds nothing,
+      // and the image path bails before touching the clipboard tools. No error shows.
+      await tester.sendKeyDownEvent(LogicalKeyboardKey.controlLeft);
+      await tester.sendKeyEvent(LogicalKeyboardKey.keyV);
+      await tester.sendKeyUpEvent(LogicalKeyboardKey.controlLeft);
+      await tester.pump();
+      await tester.pump(const Duration(seconds: 1));
+      expect(tester.widget<TextField>(find.byType(TextField)).controller?.text ?? '', isEmpty);
+      expect(find.byType(SnackBar), findsNothing);
+    });
+
+    testWidgets('Ctrl+V with clipboard text pastes the text once', (tester) async {
+      SharedPreferences.setMockInitialValues({});
+      tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(SystemChannels.platform, (call) async {
+        if (call.method == 'Clipboard.getData') return {'text': 'hello'};
+        return null;
+      });
+      final client = HerdrClientService();
+      final snap = SessionSnapshot.fromJson({
+        'version': '0.9.3',
+        'protocol': 22,
+        'focused_workspace_id': 'w1',
+        'focused_tab_id': 'w1:t1',
+        'focused_pane_id': 'w1:p1',
+        'workspaces': [
+          {'workspace_id': 'w1', 'number': 1, 'label': 'main', 'active_tab_id': 'w1:t1', 'agent_status': 'idle'},
+        ],
+        'tabs': [
+          {'tab_id': 'w1:t1', 'workspace_id': 'w1', 'number': 1, 'label': 'Tab 1', 'agent_status': 'idle'},
+        ],
+        'panes': [
+          {'pane_id': 'w1:p1', 'workspace_id': 'w1', 'tab_id': 'w1:t1', 'focused': true, 'agent_status': 'idle', 'terminal_title': ''},
+        ],
+        'agents': [],
+      });
+      client.setSnapshotForTesting(snap);
+      client.selectPane('w1:p1');
+
+      await tester.pumpWidget(MaterialApp(home: TerminalScreen(client: client)));
+      await tester.pump(const Duration(milliseconds: 300));
+      await tester.tap(find.byType(TextField));
+      await tester.pump();
+
+      // Text wins: the field pastes it, and the image path stands down (no @-reference, no error).
+      await tester.sendKeyDownEvent(LogicalKeyboardKey.controlLeft);
+      await tester.sendKeyEvent(LogicalKeyboardKey.keyV);
+      await tester.sendKeyUpEvent(LogicalKeyboardKey.controlLeft);
+      await tester.pump();
+      await tester.pump(const Duration(seconds: 1));
+      expect(tester.widget<TextField>(find.byType(TextField)).controller?.text, 'hello');
+      expect(find.text('@'), findsNothing);
+      expect(find.byType(SnackBar), findsNothing);
     });
 
     testWidgets('Shift+Enter in message TextField inserts newline, Enter sends message', (tester) async {
