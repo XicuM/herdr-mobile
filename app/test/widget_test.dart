@@ -273,7 +273,7 @@ void main() {
       expect(client.selectedPaneId, 'w2:p4');
     });
 
-    testWidgets('A tap on the terminal shows the control keys, never the keyboard', (tester) async {
+    testWidgets('A tap on the terminal never shows the control keys nor the keyboard', (tester) async {
       SharedPreferences.setMockInitialValues({'last_seen_changelog': changelog.first.$1});
       final client = HerdrClientService()
         ..setMachines(['100.1.2.3:7788'], [])
@@ -300,12 +300,20 @@ void main() {
       await tester.pump(const Duration(milliseconds: 400));
       expect(tester.testTextInput.isVisible, isFalse);
 
-      // A tap brings up the control keys in the message box's place, but never the keyboard.
+      // A tap sends a click to the pane but leaves the message box alone, and never the keyboard.
       await tester.tap(terminal);
       await tester.pump();
       expect(tester.testTextInput.isVisible, isFalse);
+      expect(client.keyBar, isFalse);
+      expect(find.text('ESC'), findsNothing);
+      expect(find.byType(TextField), findsOneWidget);
+
+      // The control keys come only from their button.
+      await tester.tap(find.byTooltip('Control keys'));
+      await tester.pump();
       expect(client.keyBar, isTrue);
       expect(find.text('ESC'), findsOneWidget);
+      expect(find.text('CTRL'), findsOneWidget);
       expect(find.byType(TextField), findsNothing);
 
       // Only the keyboard button beside the keys opens it.
@@ -2161,7 +2169,9 @@ void main() {
       final terminalView = find.byType(TerminalView);
       await tester.tap(terminalView);
       await tester.pump(const Duration(milliseconds: 350));
-      // A tap brings up the keys but never the keyboard: open it from its button.
+      // A tap never brings up the keys nor the keyboard: open the keys from their button.
+      await tester.tap(find.byTooltip('Control keys'));
+      await tester.pump(const Duration(milliseconds: 350));
       await tester.tap(find.byTooltip('Keyboard'));
       await tester.pump(const Duration(milliseconds: 350));
 

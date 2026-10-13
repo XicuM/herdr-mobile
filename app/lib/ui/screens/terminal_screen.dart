@@ -404,7 +404,7 @@ class _TerminalScreenState extends State<TerminalScreen> {
     return true;
   }
 
-  /// Everything typed or tapped reaches the pane here, with an armed ⌘ (control) applied once. Typing while
+  /// Everything typed or tapped reaches the pane here, with an armed CTRL applied once. Typing while
   /// scrolled back returns to the live screen first, so you see what you type.
   void _send(String data) {
     _toLive();
@@ -1094,8 +1094,6 @@ class _TerminalScreenState extends State<TerminalScreen> {
   }
 
   /// A tap (or a left click) is a click for the pane's program, which herdr drops unless it asked for the mouse.
-  /// Herdr doesn't say which panes do, so a finger's tap also brings up the control keys, but never the soft
-  /// keyboard: typing is what the keys are for, and the keyboard button beside them opens it when wanted.
   /// A tap that clears a selection does only that. xterm selects a word on a double-tap, which isn't wanted
   /// here, so its second tap clears that once the gesture arena has run (which is after this, at the lift).
   void _onTap(PointerUpEvent e) {
@@ -1109,12 +1107,6 @@ class _TerminalScreenState extends State<TerminalScreen> {
     // xterm counts rows from the buffer's top; herdr, from the screen's.
     final top = _terminal.buffer.height - _terminal.viewHeight;
     _ptyChannel?.sendClick(cell.x, (cell.y - top).clamp(0, _terminal.viewHeight - 1));
-    if (e.kind == PointerDeviceKind.touch) _showKeyBar();
-  }
-
-  /// Brings up the control keys in the message box's place, leaving the soft keyboard put away.
-  void _showKeyBar() {
-    if (!widget.client.keyBar) widget.client.setKeyBar(true);
   }
 
   /// Opens the soft keyboard into the terminal, from the keyboard button beside the control keys.
@@ -1917,17 +1909,7 @@ class _TerminalScreenState extends State<TerminalScreen> {
                             )
                           : IconButton(
                               tooltip: 'Control keys',
-                              // Text like the control keys' own ⌘ key, not a keycap icon.
-                              icon: Builder(
-                                builder: (context) => Text(
-                                  '⌘',
-                                  style: TextStyle(
-                                    color: Theme.of(context).iconTheme.color,
-                                    fontWeight: FontWeight.bold,
-                                    fontSize: 20,
-                                  ),
-                                ),
-                              ),
+                              icon: const Icon(Icons.keyboard_command_key),
                               onPressed: () => client.setKeyBar(true),
                             ),
                     ),

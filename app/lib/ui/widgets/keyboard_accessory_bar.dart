@@ -3,7 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:xterm/xterm.dart';
 
-/// The keys a phone keyboard can't type. ⌘ is owned by the screen so it also applies to typed keys.
+/// The keys a phone keyboard can't type. CTRL is owned by the screen so it also applies to typed keys.
 class KeyboardAccessoryBar extends StatefulWidget {
   final bool ctrl;
   final VoidCallback onCtrl;
@@ -31,7 +31,7 @@ class _KeyboardAccessoryBarState extends State<KeyboardAccessoryBar> {
     super.dispose();
   }
 
-  /// M3 tonal buttons, [width] wide and 48 dp tall like the message box they replace. ⌘ turns filled while
+  /// M3 tonal buttons, [width] wide and 48 dp tall like the message box they replace. CTRL turns filled while
   /// armed; ^C uses the error container. [repeat] keys fire again every 60 ms while held.
   Widget _key(double width, String label, VoidCallback onTap,
       {bool repeat = false, bool active = false, bool danger = false}) {
@@ -83,7 +83,7 @@ class _KeyboardAccessoryBarState extends State<KeyboardAccessoryBar> {
             _key(width, '^C', () => w.onText('\x03'), danger: true),
             _key(width, 'TAB', () => w.onKey(TerminalKey.tab)),
             _key(width, '⇧TAB', () => w.onKey(TerminalKey.tab, shift: true)),
-            _key(width, '⌘', w.onCtrl, active: w.ctrl),
+            _key(width, 'CTRL', w.onCtrl, active: w.ctrl),
             _key(width, '←', () => w.onKey(TerminalKey.arrowLeft), repeat: true),
             _key(width, '↓', () => w.onKey(TerminalKey.arrowDown), repeat: true),
             _key(width, '↑', () => w.onKey(TerminalKey.arrowUp), repeat: true),
