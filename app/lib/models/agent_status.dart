@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 enum AgentStatus {
   working(Color(0xFFF9E2AF), 'Working…'), // yellow
   blocked(Color(0xFFF38BA8), 'Needs you'), // red
+  monitoring(Color(0xFF89DCEB), 'Monitoring…'), // sky: idle at the prompt but waiting on background monitors
   done(Color(0xFFA6E3A1), 'Done'), // green
   idle(Color(0xFF6C7086), 'Idle'), // overlay grey
   unknown(Color(0xFF6C7086), ''); // no agent: idle's grey, but the dot is hollow

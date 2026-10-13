@@ -186,6 +186,10 @@ class AgentModel {
   final String paneId;
   final String status;
 
+  /// True when the bridge saw background monitors running in the pane while
+  /// herdr calls it `idle`: the agent is waiting on a result, not idle.
+  final bool monitoring;
+
   /// Bumped by herdr each time the agent completes work, whether or not the pane was viewed.
   final int? completionSeq;
 
@@ -199,6 +203,7 @@ class AgentModel {
     required this.name,
     required this.paneId,
     required this.status,
+    this.monitoring = false,
     this.completionSeq,
     this.stateChangeSeq,
     this.usage,
@@ -210,11 +215,16 @@ class AgentModel {
       name: json['agent'] ?? json['name'] ?? '',
       paneId: json['pane_id'] ?? '',
       status: json['status'] ?? json['agent_status'] ?? 'unknown',
+      monitoring: json['monitoring'] == true,
       completionSeq: json['completion_seq'],
       stateChangeSeq: json['state_change_seq'],
       usage: json['usage'] is Map<String, dynamic> ? AgentUsage.fromJson(json['usage'] as Map<String, dynamic>) : null,
     );
   }
+
+  /// What the agents list shows: `monitoring` while herdr says `idle` but the
+  /// bridge saw background monitors running. Any other herdr status wins.
+  String get displayStatus => status == 'idle' && monitoring ? 'monitoring' : status;
 }
 
 class AgentUsage {

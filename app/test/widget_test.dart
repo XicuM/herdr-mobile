@@ -1205,6 +1205,22 @@ void main() {
       expect(AgentModel.fromJson({'agent': 'opencode', 'name': 'scrollprobe', 'pane_id': 'p'}).name, 'opencode');
     });
 
+    test('Monitoring shows instead of idle while background monitors run', () {
+      final idle = AgentModel.fromJson({'agent': 'claude', 'pane_id': 'p', 'status': 'idle'});
+      expect(idle.monitoring, isFalse);
+      expect(idle.displayStatus, 'idle');
+      final waiting =
+          AgentModel.fromJson({'agent': 'claude', 'pane_id': 'p', 'status': 'idle', 'monitoring': true});
+      expect(waiting.monitoring, isTrue);
+      expect(waiting.displayStatus, 'monitoring');
+      expect(AgentStatus.fromString(waiting.displayStatus), AgentStatus.monitoring);
+      expect(AgentStatus.monitoring.label, 'Monitoring…');
+      // Any other herdr status wins over the monitoring flag.
+      final working =
+          AgentModel.fromJson({'agent': 'claude', 'pane_id': 'p', 'status': 'working', 'monitoring': true});
+      expect(working.displayStatus, 'working');
+    });
+
     testWidgets('Agent avatar shows status ring and no StatusDot on AgentsHomeScreen', (tester) async {
       SharedPreferences.setMockInitialValues({'last_seen_changelog': changelog.first.$1});
       final client = HerdrClientService()

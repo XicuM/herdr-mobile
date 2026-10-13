@@ -12,7 +12,7 @@ import 'settings_screen.dart';
 import 'terminal_screen.dart';
 
 /// Most urgent first; any other status after these.
-const _urgency = ['blocked', 'working', 'done', 'idle'];
+const _urgency = ['blocked', 'working', 'monitoring', 'done', 'idle'];
 
 /// The home screen, like a chat list: every agent on every connected machine, most urgent first and
 /// within that most recently changed first. Each row shows, as its terminal's top bar does, the summary
@@ -445,7 +445,7 @@ class _AgentsHomeScreenState extends State<AgentsHomeScreen> {
             rows.add((m, s, a, pane[a.paneId]));
           }
         }
-        int rank(AgentModel a) => switch (_urgency.indexOf(a.status)) { -1 => _urgency.length, final i => i };
+        int rank(AgentModel a) => switch (_urgency.indexOf(a.displayStatus)) { -1 => _urgency.length, final i => i };
         DateTime at(String m, AgentModel a) => client.changedAt(a.paneId, m) ?? DateTime(0);
         // Those with no time (there before the app saw them change) by herdr's seq, one counter for all its panes.
         rows.sort((x, y) => rank(x.$3) != rank(y.$3)
@@ -474,7 +474,7 @@ class _AgentsHomeScreenState extends State<AgentsHomeScreen> {
               r.$3.name,
               client.nameOf(r.$1),
               if (r.$4 != null) r.$2.placeOf(r.$4!),
-              AgentStatus.fromString(r.$3.status).label,
+              AgentStatus.fromString(r.$3.displayStatus).label,
               if (TerminalScreen.hasDraft(r.$3.paneId, r.$1)) 'Draft',
             ]))
               r
@@ -871,7 +871,7 @@ class _AgentsHomeScreenState extends State<AgentsHomeScreen> {
     final (machine, snapshot, agent, pane) = row;
     final theme = Theme.of(context);
     final scheme = theme.colorScheme;
-    final status = AgentStatus.fromString(agent.status);
+    final status = AgentStatus.fromString(agent.displayStatus);
     final needsYou = status == AgentStatus.blocked;
     final hasDraft = TerminalScreen.hasDraft(agent.paneId, machine);
     final statusLabel = hasDraft ? 'Draft' : status.label;
@@ -941,7 +941,7 @@ class _AgentsHomeScreenState extends State<AgentsHomeScreen> {
                     child: Icon(Icons.check, color: scheme.onPrimary),
                   ),
                 )
-              : AgentAvatar(name: agent.name, status: agent.status),
+              : AgentAvatar(name: agent.name, status: agent.displayStatus),
         ),
         // Bold while it needs you, like an unread chat.
         title: Text(title,
