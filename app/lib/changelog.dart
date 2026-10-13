@@ -1,6 +1,12 @@
 /// Newest first. Shown once after an update; add an entry when bumping the version in pubspec.yaml.
 const changelog = <(String, List<String>)>[
   (
+    '1.14.0',
+    [
+      'Attach images from the message box: they upload to the bridge and drop an @-reference in to review and send.',
+    ]
+  ),
+  (
     '1.13.1',
     [
       'An agent waiting on background monitors now shows sky-blue Monitoring… instead of Idle in the agents list.',
