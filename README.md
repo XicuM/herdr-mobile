@@ -1,6 +1,10 @@
 # 🐮 Herdr Mobile
 
 <p align="center">
+  <img src="docs/cover.png" alt="Herdr Mobile Cover" width="100%" />
+</p>
+
+<p align="center">
   <strong>Pocket command center for your AI coding agents.</strong><br>
   Monitor, prompt, and control your AI agents from anywhere with <a href="https://herdr.dev">Herdr</a>.
 </p>
@@ -15,15 +19,12 @@
 
 ---
 
-## 📸 Screenshots
-
 <p align="center">
-  <img src="docs/screenshots/agents_home.png" width="30%" alt="Agents Home Feed" />
-  <img src="docs/screenshots/terminal_view.png" width="30%" alt="Interactive Terminal" />
-  <img src="docs/screenshots/workspaces_drawer.png" width="30%" alt="Workspaces & Tabs" />
+  <img src="docs/screenshots/agents_home.png" width="24%" alt="Agents Home Feed" />
+  <img src="docs/screenshots/terminal_view.png" width="24%" alt="Interactive Terminal" />
+  <img src="docs/screenshots/workspaces_drawer.png" width="24%" alt="Workspaces & Tabs" />
+  <img src="docs/screenshots/machines_panel.png" width="24%" alt="Machines Panel" />
 </p>
-
-> *Place your screenshots inside [`docs/screenshots/`](docs/screenshots/) (`agents_home.png`, `terminal_view.png`, `workspaces_drawer.png`) to update the previews above.*
 
 ---
 
