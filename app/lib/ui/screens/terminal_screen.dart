@@ -18,9 +18,6 @@ import '../widgets/keyboard_accessory_bar.dart';
 import '../widgets/machines.dart';
 import '../widgets/workspaces.dart';
 
-/// Offered below the message history; picking one sends it straight away.
-const _quickReplies = ['yes', 'no', 'continue', '/clear', '/exit'];
-
 class TerminalScreen extends StatefulWidget {
   final HerdrClientService client;
 
@@ -77,6 +74,7 @@ class _TerminalScreenState extends State<TerminalScreen> {
   late final AppLifecycleListener _lifecycle;
   bool _ctrl = false;
   List<String> _history = []; // sent messages, newest first, shared by every pane
+  List<String> _recentCommands = []; // sent slash commands (`/models`…), newest first, for one-tap resend
   String? _draftKey; // the pane whose draft is in the message box
   int _scrolledUp = 0; // scrolls back into the pane's history; 0 is live
   int _scrolledLines = 0; // the lines those scrolls carried, to scroll back there after a reattach
@@ -135,7 +133,10 @@ class _TerminalScreenState extends State<TerminalScreen> {
     _lifecycle = AppLifecycleListener(onStateChange: (_) => _connectTerminal());
     _connectTerminal();
     if (widget.client.selectedPaneId case final paneId?) _swapDraft('${widget.client.machine}/$paneId');
-    SharedPreferences.getInstance().then((p) => _history = p.getStringList('message_history') ?? []);
+    SharedPreferences.getInstance().then((p) {
+      _history = p.getStringList('message_history') ?? [];
+      _recentCommands = p.getStringList('recent_commands') ?? [];
+    });
   }
 
   KeyEventResult _onTermKeyEvent(FocusNode node, KeyEvent event) {
@@ -424,9 +425,9 @@ class _TerminalScreenState extends State<TerminalScreen> {
   }
 
   /// Sends the message box as one paste (so multi-line text doesn't submit line by line), then Enter.
-  /// An empty box just sends Enter. A [quickReply] is sent in its place, leaving the box and history be.
-  void _sendMessage([String? quickReply]) {
-    final text = quickReply ?? _message.text;
+  /// An empty box just sends Enter. A [command] is sent in its place, leaving the box and history be.
+  void _sendMessage([String? command]) {
+    final text = command ?? _message.text;
     if (_ptyChannel == null || !widget.client.connected) return;
     _toLive();
     final channel = _ptyChannel;
@@ -442,11 +443,19 @@ class _TerminalScreenState extends State<TerminalScreen> {
     }
     _historyIndex = -1;
     _savedDraft = '';
-    if (quickReply != null) return;
+    final trimmed = text.trim();
+    if (trimmed.startsWith('/')) _rememberCommand(trimmed);
+    if (command != null) return;
     _message.clear();
-    if (text.trim().isEmpty) return;
+    if (trimmed.isEmpty) return;
     _history = [text, ..._history.where((h) => h != text)].take(30).toList();
     SharedPreferences.getInstance().then((p) => p.setStringList('message_history', _history));
+  }
+
+  /// Keeps the latest sent slash commands (`/models`…) for one-tap resend, newest first.
+  void _rememberCommand(String text) {
+    _recentCommands = [text, ..._recentCommands.where((c) => c != text)].take(8).toList();
+    SharedPreferences.getInstance().then((p) => p.setStringList('recent_commands', _recentCommands));
   }
 
   /// Picks an image, uploads it to the active machine's bridge ([HerdrClientService.uploadImage]),
@@ -508,7 +517,7 @@ class _TerminalScreenState extends State<TerminalScreen> {
     }();
   }
 
-  /// Quick replies, sent as soon as picked, and earlier messages, which go in the message box to edit or send.
+  /// Recent slash commands, sent as soon as picked, and earlier messages, which go in the message box to edit or send.
   void _showHistory() {
     void pick(String text) {
       _historyIndex = -1;
@@ -518,52 +527,59 @@ class _TerminalScreenState extends State<TerminalScreen> {
 
     showModalBottomSheet(
       context: context,
-      builder: (_) => SafeArea(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Flexible(
-              child: ListView(
-                shrinkWrap: true,
-                children: [
-                  // Headed like the other sheets.
-                  Padding(
-                    padding: const EdgeInsets.fromLTRB(16, 0, 16, 10),
-                    child: Text('Recent messages',
-                        style: Theme.of(context)
-                            .textTheme
-                            .titleSmall
-                            ?.copyWith(color: Theme.of(context).colorScheme.primary)),
+      builder: (sheetContext) {
+        // Toned like the machine pill, to read as shortcuts rather than content.
+        final scheme = Theme.of(sheetContext).colorScheme;
+        return SafeArea(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Flexible(
+                child: ListView(
+                  shrinkWrap: true,
+                  children: [
+                    // Headed like the other sheets.
+                    Padding(
+                      padding: const EdgeInsets.fromLTRB(16, 0, 16, 10),
+                      child: Text('Recent messages',
+                          style: Theme.of(context)
+                              .textTheme
+                              .titleSmall
+                              ?.copyWith(color: Theme.of(context).colorScheme.primary)),
+                    ),
+                    for (final h in _history)
+                      ListTile(
+                        leading: const Icon(Icons.history),
+                        title: Text(h, maxLines: 2, overflow: TextOverflow.ellipsis),
+                        onTap: () => pick(h),
+                      ),
+                  ],
+                ),
+              ),
+              // Pinned under the history, nearest the thumb. Hidden until a slash command has been sent.
+              if (_recentCommands.isNotEmpty)
+                Padding(
+                  padding: const EdgeInsets.all(12),
+                  child: Wrap(
+                    spacing: 8,
+                    children: [
+                      for (final r in _recentCommands)
+                        ActionChip(
+                          backgroundColor: scheme.secondaryContainer,
+                          side: BorderSide.none,
+                          labelStyle: TextStyle(color: scheme.onSecondaryContainer),
+                          label: Text(r),
+                          onPressed: () {
+                            Navigator.pop(context);
+                            _sendMessage(r);
+                          },
+                        ),
+                    ],
                   ),
-                  for (final h in _history)
-                    ListTile(
-                      leading: const Icon(Icons.history),
-                      title: Text(h, maxLines: 2, overflow: TextOverflow.ellipsis),
-                      onTap: () => pick(h),
-                    ),
-                ],
-              ),
-            ),
-            // Pinned under the history, nearest the thumb.
-            Padding(
-              padding: const EdgeInsets.all(12),
-              child: Wrap(
-                spacing: 8,
-                children: [
-                  for (final r in _quickReplies)
-                    ActionChip(
-                      label: Text(r),
-                      onPressed: () {
-                        Navigator.pop(context);
-                        _sendMessage(r);
-                      },
-                    ),
-                ],
-              ),
-            ),
-          ],
-        ),
-      ),
+                ),
+            ],
+          );
+        },
     );
   }
 
@@ -1942,7 +1958,7 @@ class _TerminalScreenState extends State<TerminalScreen> {
                                   borderSide: BorderSide.none,
                                 ),
                                 prefixIcon: IconButton(
-                                  tooltip: 'History and quick replies',
+                                  tooltip: 'History and recent commands',
                                   icon: const Icon(Icons.history),
                                   onPressed: _showHistory,
                                 ),

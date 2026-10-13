@@ -1926,7 +1926,7 @@ void main() {
       await tester.pumpWidget(MaterialApp(home: TerminalScreen(client: client)));
       await tester.pump(const Duration(milliseconds: 300));
 
-      await tester.tap(find.byTooltip('History and quick replies'));
+      await tester.tap(find.byTooltip('History and recent commands'));
       await tester.pumpAndSettle();
 
       expect(find.text('Recent messages'), findsOneWidget);
