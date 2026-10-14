@@ -125,10 +125,11 @@ jobs:
       - name: Checkout Code
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
-      # Flutter publishes no SDK archive for Linux on arm, so both take the same release from git.
+      # Flutter publishes no SDK archive for Linux on arm, so both take the same release from git. It's the
+      # Flutter that generated app/linux (the APK's 3.24 is too old for its runner), not the APK's.
       - name: Set up Flutter
         run: |
-          git clone --depth 1 --branch 3.24.5 https://github.com/flutter/flutter.git "$RUNNER_TEMP/flutter"
+          git clone --depth 1 --branch 3.47.6 https://github.com/flutter/flutter.git "$RUNNER_TEMP/flutter"
           echo "$RUNNER_TEMP/flutter/bin" >> "$GITHUB_PATH"
 
       - name: Install Linux Build Dependencies
