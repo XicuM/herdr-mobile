@@ -1965,43 +1965,13 @@ class _TerminalScreenState extends State<TerminalScreen> {
                                   crossAxisAlignment: CrossAxisAlignment.stretch,
                                   children: [
                                     Padding(
-                                      padding: const EdgeInsets.fromLTRB(16, 10, 8, 2),
-                                      child: Row(
-                                        children: [
-                                          Text('Recent messages',
-                                              style: Theme.of(context)
-                                                  .textTheme
-                                                  .titleSmall
-                                                  ?.copyWith(color: Theme.of(context).colorScheme.primary)),
-                                          const Spacer(),
-                                          IconButton(
-                                            tooltip: 'Close history',
-                                            iconSize: 20,
-                                            visualDensity: VisualDensity.compact,
-                                            icon: const Icon(Icons.close),
-                                            onPressed: _closeHistory,
-                                          ),
-                                        ],
-                                      ),
+                                      padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
+                                      child: Text('Recent messages',
+                                          style: Theme.of(context)
+                                              .textTheme
+                                              .titleSmall
+                                              ?.copyWith(color: Theme.of(context).colorScheme.primary)),
                                     ),
-                                    if (commands.isNotEmpty)
-                                      Padding(
-                                        padding: const EdgeInsets.fromLTRB(12, 2, 12, 4),
-                                        child: Wrap(
-                                          spacing: 8,
-                                          runSpacing: 4,
-                                          children: [
-                                            for (final r in commands)
-                                              ActionChip(
-                                                backgroundColor: scheme.secondaryContainer,
-                                                side: BorderSide.none,
-                                                labelStyle: TextStyle(color: scheme.onSecondaryContainer),
-                                                label: Text(r),
-                                                onPressed: () => _sendMessage(r),
-                                              ),
-                                          ],
-                                        ),
-                                      ),
                                     Flexible(
                                       child: empty
                                           ? Padding(
@@ -2030,6 +2000,24 @@ class _TerminalScreenState extends State<TerminalScreen> {
                                               ],
                                             ),
                                     ),
+                                    if (commands.isNotEmpty)
+                                      Padding(
+                                        padding: const EdgeInsets.fromLTRB(12, 4, 12, 10),
+                                        child: Wrap(
+                                          spacing: 8,
+                                          runSpacing: 4,
+                                          children: [
+                                            for (final r in commands)
+                                              ActionChip(
+                                                backgroundColor: scheme.secondaryContainer,
+                                                side: BorderSide.none,
+                                                labelStyle: TextStyle(color: scheme.onSecondaryContainer),
+                                                label: Text(r),
+                                                onPressed: () => _sendMessage(r),
+                                              ),
+                                          ],
+                                        ),
+                                      ),
                                   ],
                                 ),
                               ),
@@ -2113,11 +2101,7 @@ class _TerminalScreenState extends State<TerminalScreen> {
                                         onPressed: _toggleHistory,
                                       ),
                                 suffixIcon: _showingHistory
-                                    ? IconButton(
-                                        tooltip: 'Clear search',
-                                        icon: const Icon(Icons.clear),
-                                        onPressed: _message.clear,
-                                      )
+                                    ? null
                                     : IconButton(
                                         tooltip: 'Attach image',
                                         icon: const Icon(Icons.image_outlined),
