@@ -630,7 +630,7 @@ class _TerminalScreenState extends State<TerminalScreen> {
     showModalBottomSheet(
       context: context,
       // Sized to its content: the default caps a sheet at 9/16 of the screen, which cuts an agent with several
-      // limits (Antigravity's four) off at its edge, its last card flush against it with no hint there's more.
+      // limits (Antigravity's Gemini + Claude/GPT tiers) off at its edge, its last card flush against it with no hint there's more.
       isScrollControlled: true,
       useSafeArea: true,
       builder: (context) {
@@ -638,7 +638,10 @@ class _TerminalScreenState extends State<TerminalScreen> {
         final scheme = theme.colorScheme;
         final title = agent?.name.isNotEmpty == true ? agent!.name : 'Agent';
         final tier = usage?.tierLabel;
-        final limits = usage?.limits ?? [];
+        // Primary (Gemini) quotas first; secondary tiers (Claude/GPT sharing
+        // the Antigravity plan) after, still visible but out of the headline.
+        final limits = [...(usage?.limits ?? [])]
+          ..sort((a, b) => (a.isPrimary ? 0 : 1).compareTo(b.isPrimary ? 0 : 1));
 
         return SafeArea(
           child: SingleChildScrollView(
@@ -665,8 +668,17 @@ class _TerminalScreenState extends State<TerminalScreen> {
                 ),
                 const SizedBox(height: 16),
                 if (limits.isNotEmpty) ...[
-                  for (final limit in limits) ...[
+                  for (var i = 0; i < limits.length; i++) ...[
+                    if (i > 0 && !limits[i].isPrimary && limits[i - 1].isPrimary)
+                      Padding(
+                        padding: const EdgeInsets.only(top: 8),
+                        child: Text(
+                          'Other models',
+                          style: theme.textTheme.bodySmall?.copyWith(color: scheme.onSurfaceVariant),
+                        ),
+                      ),
                     Builder(builder: (context) {
+                      final limit = limits[i];
                       final leftPct = ((1.0 - limit.percent).clamp(0.0, 1.0) * 100).round();
                       final usedPct = (limit.percent.clamp(0.0, 1.0) * 100).round();
                       final statusColor = _quotaColor(scheme, limit.percent);

@@ -1887,6 +1887,32 @@ void main() {
       expect(agent.usage!.todayPrompts, equals(645));
     });
 
+    test('AgentUsage headline ignores secondary Claude/GPT tiers', () {
+      final usage = AgentUsage.fromJson({
+        'tier_label': 'Gemini 3.7 Flash',
+        'limits': [
+          {'label': 'Session (5-hour)', 'percent': 0.4, 'primary': true},
+          {'label': 'Weekly (7-day)', 'percent': 0.3, 'primary': true},
+          {'label': 'Claude Models Session', 'percent': 1.0, 'primary': false},
+          {'label': 'GPT Models Weekly', 'percent': 1.0, 'primary': false},
+        ],
+      });
+      expect(usage.limits.length, equals(4));
+      expect(usage.highestPercent, equals(0.4));
+
+      // Old bridges send no `primary` flag: infer it from the label.
+      final legacy = AgentUsage.fromJson({
+        'tier_label': 'Gemini 3.7 Flash',
+        'limits': [
+          {'label': 'Session (5-hour)', 'percent': 0.4},
+          {'label': 'Claude Models Session', 'percent': 1.0},
+        ],
+      });
+      expect(legacy.limits[0].isPrimary, isTrue);
+      expect(legacy.limits[1].isPrimary, isFalse);
+      expect(legacy.highestPercent, equals(0.4));
+    });
+
     testWidgets('TerminalScreen message box has quota bolt button that opens usage sheet', (tester) async {
       final client = HerdrClientService();
       final snap = SessionSnapshot.fromJson({

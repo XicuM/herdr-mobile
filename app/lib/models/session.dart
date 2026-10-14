@@ -246,10 +246,15 @@ class AgentUsage {
     this.todayPrompts,
   });
 
-  /// The highest utilization percentage among active limits (0.0 to 1.0), or null if no limits.
+  /// The highest utilization percentage among the primary (Gemini) limits, or
+  /// null if no limits. Secondary tiers (Claude/GPT sharing the Antigravity
+  /// plan) are still listed in the usage sheet but never drive this number;
+  /// when nothing is tagged primary (older bridges), all limits count.
   double? get highestPercent {
     if (limits.isEmpty) return null;
-    return limits.map((l) => l.percent).reduce((a, b) => a > b ? a : b);
+    final primary = limits.where((l) => l.isPrimary).toList();
+    final counted = primary.isNotEmpty ? primary : limits;
+    return counted.map((l) => l.percent).reduce((a, b) => a > b ? a : b);
   }
 
   factory AgentUsage.fromJson(Map<String, dynamic> json) {
@@ -269,19 +274,34 @@ class UsageLimit {
   final double percent;
   final String? resetsAt;
 
+  /// False for non-Gemini Antigravity tiers (Claude/GPT): shown in the usage
+  /// sheet but excluded from [AgentUsage.highestPercent].
+  final bool isPrimary;
+
   UsageLimit({
     required this.label,
     required this.percent,
     this.resetsAt,
+    this.isPrimary = true,
   });
+
+  /// Labels of the secondary tiers sharing an Antigravity plan. Kept in sync
+  /// with the bridge's `antigravity_is_secondary` for limits from old bridges
+  /// that carry no `primary` flag.
+  static bool isPrimaryLabel(String label) {
+    final lower = label.toLowerCase();
+    return !['claude', 'anthropic', 'gpt', 'openai', 'codex'].any(lower.contains);
+  }
 
   factory UsageLimit.fromJson(Map<String, dynamic> json) {
     var p = (json['percent'] as num?)?.toDouble() ?? 0.0;
     if (p > 1.0) p = p / 100.0;
+    final label = json['label'] ?? json['title'] ?? 'Quota';
     return UsageLimit(
-      label: json['label'] ?? json['title'] ?? 'Quota',
+      label: label,
       percent: p.clamp(0.0, 1.0),
       resetsAt: json['resets_at'] ?? json['resetsAt'],
+      isPrimary: json['primary'] is bool ? json['primary'] as bool : isPrimaryLabel(label),
     );
   }
 }
