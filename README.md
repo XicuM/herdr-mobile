@@ -10,7 +10,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/herdr-dev/herdr-mobile/releases"><img src="https://img.shields.io/github/v/release/herdr-dev/herdr-mobile?color=blue&label=release" alt="Release"></a>
+  <a href="https://github.com/XicuM/herdr-mobile/releases"><img src="https://img.shields.io/github/v/release/XicuM/herdr-mobile?color=blue&label=release" alt="Release"></a>
   <img src="https://img.shields.io/badge/Flutter-3.24+-02569B?logo=flutter&logoColor=white" alt="Flutter">
   <img src="https://img.shields.io/badge/Rust-2021-DEA584?logo=rust&logoColor=white" alt="Rust">
   <img src="https://img.shields.io/badge/Tailscale-Ready-4E73DF?logo=tailscale&logoColor=white" alt="Tailscale">
