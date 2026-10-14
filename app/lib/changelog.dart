@@ -1,6 +1,13 @@
 /// Newest first. Shown once after an update; add an entry when bumping the version in pubspec.yaml.
 const changelog = <(String, List<String>)>[
   (
+    '1.15.1',
+    [
+      'The recent-messages panel has a single close button, and its slash commands sit at the bottom.',
+      'Antigravity\'s quota counts only Gemini: its Claude and GPT tiers are listed under "Other models" in the usage sheet.',
+    ]
+  ),
+  (
     '1.15.0',
     [
       'Worktrees: one dialog makes a new branch (from the main checkout or the worktree you\'re in) and opens the existing ones.',
