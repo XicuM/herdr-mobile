@@ -79,7 +79,7 @@ Run the automated installer from the repository root:
 
 ## 📱 Mobile App Setup
 
-1. Grab the latest APK from the [**Releases**](https://github.com/herdr-dev/herdr-mobile/releases) page.
+1. Grab the latest APK from the [**Releases**](https://github.com/XicuM/herdr-mobile/releases) page (a Linux desktop build, `herdr-mobile-linux-{x86_64,aarch64}.tar.gz`, is there too).
 2. Open the app, tap the **Machines** icon (top right) ➔ **Add Bridge**.
 3. Enter:
    - **Host / IP**: Your Tailscale IP (e.g. `100.x.y.z` or MagicDNS name)

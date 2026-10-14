@@ -29,7 +29,7 @@ flutter test test/widget_test.dart --plain-name "SessionSnapshot parses correctl
 flutter analyze                               # flutter_lints via analysis_options.yaml
 flutter build apk --release
 ```
-CI (`.github/workflows/build-apk.yml`) runs on every push to main, on `v*` tags and by hand: `flutter build apk --release` on Flutter 3.24.x / JDK 17, plus `cargo build --release` for the bridge on native ubuntu-22.04 x86_64 and arm runners. On a tag it attaches the APK and `herdr-bridge-linux-{x86_64,aarch64}` to the GitHub release. No tests run. Keep Flutter/Gradle/AGP versions compatible with 3.24.x (a newer local Flutter flags `ReorderableListView.onReorder` as deprecated; its replacement isn't in 3.24). Recent commits were spent fixing CI build breakage.
+CI (`.github/workflows/build-apk.yml`) runs on every push to main, on `v*` tags and by hand: `flutter build apk --release` on Flutter 3.24.x / JDK 17, plus `cargo build --release` for the bridge on native ubuntu-22.04 x86_64 and arm runners. It also builds the Linux desktop app on both runners (Flutter 3.24.5 cloned from git, since there's no arm SDK archive) as `herdr-mobile-linux-{x86_64,aarch64}.tar.gz`. On a tag it attaches the APK, `herdr-bridge-linux-{x86_64,aarch64}` and those tarballs to the GitHub release. No tests run. Keep Flutter/Gradle/AGP versions compatible with 3.24.x (a newer local Flutter flags `ReorderableListView.onReorder` as deprecated; its replacement isn't in 3.24). Recent commits were spent fixing CI build breakage.
 
 ## Architecture
 

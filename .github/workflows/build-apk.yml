@@ -1,4 +1,4 @@
-name: Build Android APK
+name: Build
 
 on:
   push:
@@ -106,3 +106,52 @@ jobs:
         uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
         with:
           files: herdr-bridge-linux-${{ matrix.arch }}
+
+  linux:
+    strategy:
+      matrix:
+        include:
+          - runner: ubuntu-22.04
+            arch: x86_64
+            flutter_arch: x64
+          - runner: ubuntu-22.04-arm
+            arch: aarch64
+            flutter_arch: arm64
+    runs-on: ${{ matrix.runner }}
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      # Flutter publishes no SDK archive for Linux on arm, so both take the same release from git.
+      - name: Set up Flutter
+        run: |
+          git clone --depth 1 --branch 3.24.5 https://github.com/flutter/flutter.git "$RUNNER_TEMP/flutter"
+          echo "$RUNNER_TEMP/flutter/bin" >> "$GITHUB_PATH"
+
+      - name: Install Linux Build Dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang cmake ninja-build pkg-config libgtk-3-dev liblzma-dev libstdc++-12-dev
+
+      - name: Build Linux App
+        run: |
+          cd app
+          flutter --version
+          flutter build linux --release
+          tar -C build/linux/${{ matrix.flutter_arch }}/release --transform 's,^bundle,herdr-mobile,' \
+            -czf ../herdr-mobile-linux-${{ matrix.arch }}.tar.gz bundle
+
+      - name: Upload Linux App Artifact
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: herdr-mobile-linux-${{ matrix.arch }}
+          path: herdr-mobile-linux-${{ matrix.arch }}.tar.gz
+
+      - name: Publish Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
+        with:
+          files: herdr-mobile-linux-${{ matrix.arch }}.tar.gz

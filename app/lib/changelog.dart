@@ -1,6 +1,16 @@
 /// Newest first. Shown once after an update; add an entry when bumping the version in pubspec.yaml.
 const changelog = <(String, List<String>)>[
   (
+    '1.15.0',
+    [
+      'Worktrees: one dialog makes a new branch (from the main checkout or the worktree you\'re in) and opens the existing ones.',
+      'A worktree can be closed, keeping its checkout to open again, or deleted; one with uncommitted changes asks before deleting them.',
+      'Errors from herdr read as its message instead of raw JSON.',
+      'An agent on a machine reached over SSH shows its usage too.',
+      'A Linux desktop build, for x86_64 and arm64, comes with each release.',
+    ]
+  ),
+  (
     '1.14.4',
     [
       'Recent messages now stay above the message box, which filters them as you type: tap one to edit and send, or a /command to resend it at once.',
