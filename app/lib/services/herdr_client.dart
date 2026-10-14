@@ -1133,8 +1133,9 @@ class HerdrClientService extends ChangeNotifier {
   /// Sends one request to [on]'s bridge (the active machine's by default), then refreshes that machine's snapshot (also on
   /// failure, which may have changed something, or undoes [moveTab]'s or [moveWorkspaces]'s local reorder). Failures go
   /// to [onError] as "Could not [what]". Returns the decoded response, or null on failure.
+  /// [refused], when given, gets the body of a refusal in place of [onError].
   Future<dynamic> _request(String what, String method, String path,
-      {Map<String, dynamic>? body, Map<String, String>? query, String? on}) async {
+      {Map<String, dynamic>? body, Map<String, String>? query, String? on, void Function(String)? refused}) async {
     final m = on ?? machine;
     dynamic result;
     try {
@@ -1149,7 +1150,11 @@ class HerdrClientService extends ChangeNotifier {
       result = res.body.isEmpty ? null : jsonDecode(res.body);
     } catch (e) {
       debugPrint('$method $m$path failed: $e');
-      onError?.call('Could not $what: ${e is SocketException || e is TimeoutException ? _networkError(parentOf(m) ?? m, e) : _parseError(e)}');
+      if (refused != null && e is String) {
+        refused(e);
+      } else {
+        onError?.call('Could not $what: ${e is SocketException || e is TimeoutException ? _networkError(parentOf(m) ?? m, e) : _parseError(e)}');
+      }
     }
     await _fetchSnapshotHttp(m);
     return result;
@@ -1166,7 +1171,9 @@ class HerdrClientService extends ChangeNotifier {
 
   String _parseError(dynamic e) {
     try {
-      final data = jsonDecode(e.toString());
+      // The bridge words herdr's own errors as "Herdr error response: {code, message}".
+      final text = e.toString();
+      final data = jsonDecode(text.substring(text.indexOf('{')));
       if (data is Map && data['message'] != null) return data['message'].toString();
       if (data is Map && data['error'] != null) {
         if (data['error'] is Map && data['error']['message'] != null) {
@@ -1222,10 +1229,20 @@ class HerdrClientService extends ChangeNotifier {
 
   Future<void> createWorkspace() => _create('create workspace', '/api/workspace', {});
 
-  Future<void> deleteWorkspace(String workspaceId, {bool removeWorktree = false, bool force = false, String? on}) {
+  /// Closes a workspace, or with [removeWorktree] deletes a linked worktree's checkout too, which herdr
+  /// refuses while it has changes unless [force]d; [dirty] gets herdr's reason then.
+  Future<void> deleteWorkspace(String workspaceId,
+      {bool removeWorktree = false, bool force = false, String? on, void Function(String)? dirty}) {
+    final what = removeWorktree ? 'delete worktree' : 'delete workspace';
     final query = {if (removeWorktree) 'remove_worktree': 'true', if (force) 'force': 'true'};
-    return _request('delete workspace', 'DELETE', '/api/workspace/$workspaceId',
-        query: query.isEmpty ? null : query, on: on);
+    return _request(what, 'DELETE', '/api/workspace/$workspaceId',
+        query: query.isEmpty ? null : query,
+        on: on,
+        refused: dirty == null
+            ? null
+            : (body) => body.contains('dirty_worktree_requires_force')
+                ? dirty(_parseError(body))
+                : onError?.call('Could not $what: ${_parseError(body)}'));
   }
 
   Future<void> renameWorkspace(String workspaceId, String label) =>
@@ -1246,13 +1263,11 @@ class HerdrClientService extends ChangeNotifier {
         body: {'workspace_ids': ids, 'before_workspace_id': beforeId});
   }
 
-  Future<void> createWorktree(String workspaceId, String branch, {String? base, String? path, String? label}) =>
+  Future<void> createWorktree(String workspaceId, String branch, {String? base}) =>
       _create('create worktree', '/api/worktree', {
         'workspace_id': _getMainWorkspaceId(workspaceId),
         'branch': branch,
         if (base != null && base.isNotEmpty) 'base': base,
-        if (path != null && path.isNotEmpty) 'path': path,
-        if (label != null && label.isNotEmpty) 'label': label,
       });
 
   Future<List<Map<String, dynamic>>> listWorktrees(String workspaceId) async {

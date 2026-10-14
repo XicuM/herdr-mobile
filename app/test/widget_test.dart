@@ -486,16 +486,14 @@ void main() {
         await tester.pump();
         await tester.pump(const Duration(seconds: 1)); // the Connecting spinner never settles
         expect(find.text('Rename'), findsOneWidget);
-        expect(find.text('New worktree'), findsOneWidget);
-        expect(find.text('Open worktree'), findsOneWidget);
+        expect(find.text('Worktrees'), findsOneWidget);
         expect(find.text('Delete'), findsOneWidget);
       } else {
         await tester.tap(inBar('backend'));
         await tester.pump();
         await tester.pump(const Duration(seconds: 1)); // the Connecting spinner never settles
         expect(find.text('Rename'), findsOneWidget);
-        expect(find.text('New worktree'), findsOneWidget);
-        expect(find.text('Open worktree'), findsOneWidget);
+        expect(find.text('Worktrees'), findsOneWidget);
         expect(find.text('Delete'), findsOneWidget);
       }
     });
@@ -596,7 +594,7 @@ void main() {
       expect(find.text('Move up'), findsNothing); // it's the first
       expect(find.text('Move down'), findsOneWidget);
       expect(find.text('Rename'), findsOneWidget);
-      expect(find.text('New worktree'), findsOneWidget);
+      expect(find.text('Worktrees'), findsOneWidget);
       await tester.tapAt(const Offset(10, 10)); // dismiss the menu
       await settle();
 
@@ -1752,6 +1750,11 @@ void main() {
       expect(repoInSheet, findsOneWidget);
       expect(branchInSheet, findsOneWidget);
       expect(tester.getTopLeft(branchInSheet).dy, greaterThan(tester.getTopLeft(repoInSheet).dy));
+
+      // A worktree can be closed, keeping its checkout, apart from being deleted.
+      expect(find.text('Close'), findsOneWidget);
+      expect(find.text('Delete worktree'), findsOneWidget);
+      expect(find.text('Delete'), findsNothing);
     });
 
     testWidgets('Ctrl + and Ctrl - change terminal zoom on Linux/desktop', (tester) async {

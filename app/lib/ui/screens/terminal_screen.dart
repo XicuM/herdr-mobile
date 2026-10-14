@@ -1429,12 +1429,8 @@ class _TerminalScreenState extends State<TerminalScreen> {
     }
 
     final isWorktree = workspace?.isLinkedWorktree ?? false;
-    final mainRepo = isWorktree ? snapshot?.mainOf(workspace?.repoKey) : null;
-    final title =
-        (isWorktree ? mainRepo?.displayName : workspace?.displayName) ?? workspace?.displayName ?? 'workspace';
-    final branch = isWorktree
-        ? (workspace?.gitBranch?.replaceFirst('worktree/', '') ?? workspace?.displayName ?? '')
-        : (workspace?.gitBranch ?? '');
+    final title = workspace == null ? 'workspace' : snapshot?.titleOf(workspace) ?? workspace.displayName;
+    final branch = workspace?.branchName ?? '';
 
     return PopScope(
       canPop: !_showingHistory,

@@ -53,6 +53,9 @@ class SessionSnapshot {
     return workspaces.where((w) => !w.isLinkedWorktree && w.repoKey == repoKey).firstOrNull;
   }
 
+  /// What a workspace's header calls it: a linked worktree by its repository's workspace, under its [WorkspaceModel.branchName].
+  String titleOf(WorkspaceModel ws) => (ws.isLinkedWorktree ? mainOf(ws.repoKey)?.displayName : null) ?? ws.displayName;
+
   /// One block per top-level workspace, so a block drags with its worktrees: each linked worktree
   /// nests under its repo's main workspace ([mainOf]); one whose repo has no open main workspace
   /// stands alone. Every workspace appears exactly once, even when several workspaces share a repo.
@@ -102,6 +105,9 @@ class WorkspaceModel {
     }
     return label.isNotEmpty ? label : 'workspace $number';
   }
+
+  /// The checked-out branch; a linked worktree's is its [displayName].
+  String? get branchName => isLinkedWorktree ? displayName : gitBranch;
 
   factory WorkspaceModel.fromJson(Map<String, dynamic> json) {
     // The bridge leaves the branch out outside a git repo or on a detached HEAD; an empty one counts as none too.

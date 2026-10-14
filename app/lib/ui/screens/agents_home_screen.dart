@@ -830,16 +830,12 @@ class _AgentsHomeScreenState extends State<AgentsHomeScreen> {
                 leading: StatusDot(ws.agentStatus, size: 10),
                 minLeadingWidth: 10,
                 title: Text(
-                  ws.isLinkedWorktree ? (s.mainOf(ws.repoKey)?.displayName ?? ws.displayName) : ws.displayName,
+                  s.titleOf(ws),
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                 ),
                 subtitle: Text(
-                  sub(m, [
-                    ws.isLinkedWorktree
-                        ? (ws.gitBranch?.replaceFirst('worktree/', '') ?? ws.displayName)
-                        : ws.gitBranch
-                  ]),
+                  sub(m, [ws.branchName]),
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                 ),
