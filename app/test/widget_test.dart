@@ -476,26 +476,12 @@ void main() {
       await tester.pump();
       expect(find.byType(TextField), findsOneWidget);
 
-      // On Linux, tapping the header does not open the workspace menu; right-clicking opens the context menu.
-      if (Platform.isLinux) {
-        await tester.tap(inBar('backend'));
-        await tester.pump();
-        expect(find.text('Rename'), findsNothing);
-
-        await tester.tap(inBar('backend'), buttons: kSecondaryMouseButton);
-        await tester.pump();
-        await tester.pump(const Duration(seconds: 1)); // the Connecting spinner never settles
-        expect(find.text('Rename'), findsOneWidget);
-        expect(find.text('Worktrees'), findsOneWidget);
-        expect(find.text('Delete'), findsOneWidget);
-      } else {
-        await tester.tap(inBar('backend'));
-        await tester.pump();
-        await tester.pump(const Duration(seconds: 1)); // the Connecting spinner never settles
-        expect(find.text('Rename'), findsOneWidget);
-        expect(find.text('Worktrees'), findsOneWidget);
-        expect(find.text('Delete'), findsOneWidget);
-      }
+      // The header only names the workspace: its actions are in the workspaces panel.
+      await tester.tap(inBar('backend'));
+      await tester.tap(inBar('backend'), buttons: kSecondaryMouseButton);
+      await tester.pump();
+      await tester.pump(const Duration(seconds: 1)); // the Connecting spinner never settles
+      expect(find.text('Rename'), findsNothing);
     });
 
     test('Editing a machine renames it and moves it in place', () {
@@ -591,10 +577,12 @@ void main() {
       await tester.longPress(find.descendant(of: find.byType(WorkspaceList), matching: find.text('backend')));
       await settle();
       expect(find.byType(TerminalScreen), findsNothing); // the hold isn't a tap
-      expect(find.text('Move up'), findsNothing); // it's the first
-      expect(find.text('Move down'), findsOneWidget);
-      expect(find.text('Rename'), findsOneWidget);
-      expect(find.text('Worktrees'), findsOneWidget);
+      // Herdr's sidebar menu for a git workspace with no worktrees open.
+      for (final item in ['Rename', 'Close', 'New worktree', 'Open worktree…']) {
+        expect(find.text(item), findsOneWidget);
+      }
+      expect(find.text('Close group'), findsNothing);
+      expect(find.text('Delete worktree checkout'), findsNothing);
       await tester.tapAt(const Offset(10, 10)); // dismiss the menu
       await settle();
 
@@ -1678,9 +1666,9 @@ void main() {
           {
             'workspace_id': 'w2',
             'number': 2,
-            'label': 'worktree-feat-login',
+            'label': 'worktree-feat-login', // herdr names the checkout after the branch
             'active_tab_id': 'w2:t1',
-            'git_branch': 'feat-login',
+            'git_branch': 'worktree/feat-login',
             'worktree': {
               'repo_key': 'repo-1',
               'is_linked_worktree': true,
@@ -1736,25 +1724,37 @@ void main() {
       // Branch is vertically below the repo name
       expect(tester.getTopLeft(branchInBar).dy, greaterThan(tester.getTopLeft(repoInBar).dy));
 
-      // showWorkspaceActions shows repo and branch without worktree tag
-      showWorkspaceActions(tester.element(appBarFinder), client, snap.workspaces[1]);
+      // Its menu, as Herdr's sidebar has it: closed apart from its checkout being deleted; no worktree of a worktree.
+      showWorkspaceContextMenu(tester.element(appBarFinder), client, snap.workspaces[1], Offset.zero);
       await tester.pump();
       await tester.pump(const Duration(milliseconds: 300));
+      for (final item in ['Rename', 'Close', 'Delete worktree checkout']) {
+        expect(find.text(item), findsOneWidget);
+      }
+      expect(find.text('New worktree'), findsNothing);
+      Navigator.pop(tester.element(find.text('Rename'))); // dismiss the menu
+      await tester.pump();
+      await tester.pump(const Duration(seconds: 1));
+      expect(find.text('Delete worktree checkout'), findsNothing);
 
-      final sheetHeader = find.byType(ListTile).first;
-      final chipInSheet = find.descendant(of: sheetHeader, matching: find.text('worktree'));
-      final repoInSheet = find.descendant(of: sheetHeader, matching: find.text('herdr-mobile'));
-      final branchInSheet = find.descendant(of: sheetHeader, matching: find.text('feat-login'));
+      // The repository's workspace, with that worktree open, closes with it.
+      showWorkspaceContextMenu(tester.element(appBarFinder), client, snap.workspaces[0], Offset.zero);
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 300));
+      expect(find.text('Close group'), findsOneWidget);
+      expect(find.text('Close'), findsNothing);
+    });
 
-      expect(chipInSheet, findsNothing);
-      expect(repoInSheet, findsOneWidget);
-      expect(branchInSheet, findsOneWidget);
-      expect(tester.getTopLeft(branchInSheet).dy, greaterThan(tester.getTopLeft(repoInSheet).dy));
-
-      // A worktree can be closed, keeping its checkout, apart from being deleted.
-      expect(find.text('Close'), findsOneWidget);
-      expect(find.text('Delete worktree'), findsOneWidget);
-      expect(find.text('Delete'), findsNothing);
+    test('A worktree shows its branch until renamed, then its name', () {
+      WorkspaceModel tree(String label) => WorkspaceModel.fromJson({
+            'workspace_id': 'w2',
+            'label': label,
+            'git_branch': 'worktree/feat-login',
+            'worktree': {'repo_key': 'r', 'is_linked_worktree': true},
+          });
+      expect(tree('worktree-feat-login').displayName, 'feat-login');
+      expect(tree('login work').displayName, 'login work');
+      expect(tree('login work').branchName, 'feat-login');
     });
 
     testWidgets('Ctrl + and Ctrl - change terminal zoom on Linux/desktop', (tester) async {

@@ -53,8 +53,9 @@ class SessionSnapshot {
     return workspaces.where((w) => !w.isLinkedWorktree && w.repoKey == repoKey).firstOrNull;
   }
 
-  /// What a workspace's header calls it: a linked worktree by its repository's workspace, under its [WorkspaceModel.branchName].
-  String titleOf(WorkspaceModel ws) => (ws.isLinkedWorktree ? mainOf(ws.repoKey)?.displayName : null) ?? ws.displayName;
+  /// What a workspace's header calls it, over its [WorkspaceModel.branchName]: a linked worktree not renamed
+  /// by its repository's workspace.
+  String titleOf(WorkspaceModel ws) => (ws.named ? null : mainOf(ws.repoKey)?.displayName) ?? ws.displayName;
 
   /// One block per top-level workspace, so a block drags with its worktrees: each linked worktree
   /// nests under its repo's main workspace ([mainOf]); one whose repo has no open main workspace
@@ -98,16 +99,22 @@ class WorkspaceModel {
     this.gitBranch,
   });
 
-  /// Name as Herdr's sidebar shows it: worktrees by branch, minus Herdr's `worktree/` prefix.
-  String get displayName {
-    if (isLinkedWorktree) {
-      return gitBranch?.replaceFirst('worktree/', '') ?? label.replaceFirst('worktree-', '');
-    }
-    return label.isNotEmpty ? label : 'workspace $number';
-  }
+  /// Name as Herdr's sidebar shows it: its label (the name it was given, else its checkout folder's), but a
+  /// linked worktree not renamed by its branch, minus Herdr's `worktree/` prefix. herdr names a new worktree's
+  /// checkout folder after its branch (`branch_to_path_slug`), so a label that is still that slug wasn't given.
+  String get displayName => named ? (label.isNotEmpty ? label : 'workspace $number') : branchName!;
 
-  /// The checked-out branch; a linked worktree's is its [displayName].
-  String? get branchName => isLinkedWorktree ? displayName : gitBranch;
+  /// Whether it shows its label: anything but a linked worktree still named after its branch.
+  bool get named => !isLinkedWorktree || gitBranch == null || label != _slug(gitBranch!);
+
+  /// The checked-out branch, minus Herdr's `worktree/` prefix in a linked worktree.
+  String? get branchName => isLinkedWorktree ? gitBranch?.replaceFirst('worktree/', '') : gitBranch;
+
+  /// herdr's `branch_to_path_slug`: lowercase alphanumerics, every other run one `-`, trimmed of them.
+  static String _slug(String branch) {
+    final slug = branch.toLowerCase().replaceAll(RegExp(r'[^a-z0-9]+'), '-').replaceAll(RegExp(r'^-+|-+$'), '');
+    return slug.isEmpty ? 'worktree' : slug;
+  }
 
   factory WorkspaceModel.fromJson(Map<String, dynamic> json) {
     // The bridge leaves the branch out outside a git repo or on a detached HEAD; an empty one counts as none too.

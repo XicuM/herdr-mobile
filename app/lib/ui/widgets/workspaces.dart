@@ -8,8 +8,8 @@ import '../../services/herdr_client.dart';
 
 /// The home screen's drawer, modelled on Herdr's sidebar: each connected machine's workspaces in herdr's order,
 /// with linked worktrees nested, under its name and a + for a new one. Tap one to open its terminal ([open]);
-/// hold it and lift for its actions and Move up/down (or right-click), hold it and drag to reorder it (with its
-/// worktrees). herdr keeps the order, so the desktop follows.
+/// hold it and lift for its actions (or right-click), hold it and drag to reorder it (with its worktrees).
+/// herdr keeps the order, so the desktop follows.
 class WorkspaceList extends StatelessWidget {
   final HerdrClientService client;
   final VoidCallback open;
@@ -29,10 +29,9 @@ class WorkspaceList extends StatelessWidget {
       action();
     }
 
-    // [up] and [down] move it, when it can go that way; [drag] is its index to long-press and drag it by.
-    Widget row(String m, WorkspaceModel ws, {double indent = 0, VoidCallback? up, VoidCallback? down, int? drag}) {
-      void menu(Offset p) =>
-          at(m, () => showWorkspaceContextMenu(context, client, ws, p, onShow: open, onUp: up, onDown: down));
+    // [drag] is its index to long-press and drag it by.
+    Widget row(String m, WorkspaceModel ws, {double indent = 0, int? drag}) {
+      void menu(Offset p) => at(m, () => showWorkspaceContextMenu(context, client, ws, p, onShow: open));
       final tile = HoldMenu(
           key: ValueKey('$m/${ws.id}'),
           onMenu: menu,
@@ -88,7 +87,7 @@ class WorkspaceList extends StatelessWidget {
 
   /// One machine's workspaces, one block per top-level workspace so it is dragged with its worktrees.
   Widget _machine(String m,
-      Widget Function(String, WorkspaceModel, {double indent, VoidCallback? up, VoidCallback? down, int? drag}) row,
+      Widget Function(String, WorkspaceModel, {double indent, int? drag}) row,
       void Function(String, VoidCallback) at) {
     final blocks = client.snapshotOf(m)!.worktreeBlocks;
     // Indices as ReorderableListView gives them: [to] counts in the order before the move.
@@ -110,10 +109,7 @@ class WorkspaceList extends StatelessWidget {
           Column(
             key: ValueKey('$m/${block.first.id}'),
             children: [
-              row(m, block.first,
-                  up: i > 0 ? () => moveBlock(i, i - 1) : null,
-                  down: i + 1 < blocks.length ? () => moveBlock(i, i + 2) : null,
-                  drag: blocks.length < 2 ? null : i),
+              row(m, block.first, drag: blocks.length < 2 ? null : i),
               // The worktrees reorder among themselves, staying under their workspace.
               Builder(builder: (context) {
                 final trees = block.sublist(1);
@@ -133,11 +129,7 @@ class WorkspaceList extends StatelessWidget {
                   onReorder: moveTree,
                   children: [
                     for (final (j, ws) in trees.indexed)
-                      row(m, ws,
-                          indent: 24,
-                          up: j > 0 ? () => moveTree(j, j - 1) : null,
-                          down: j + 1 < trees.length ? () => moveTree(j, j + 2) : null,
-                          drag: trees.length < 2 ? null : j),
+                      row(m, ws, indent: 24, drag: trees.length < 2 ? null : j),
                   ],
                 );
               }),
@@ -148,167 +140,76 @@ class WorkspaceList extends StatelessWidget {
   }
 }
  
-/// A workspace's menu, from a right-click or a hold in the drawer or search ([HoldMenu]): Move up and down (given [onUp], [onDown]), Rename,
-/// Worktrees, and Delete, or for a linked worktree Close and Delete worktree.
+/// A workspace's menu, from a hold or a right-click in the drawer or search ([HoldMenu]), as Herdr's sidebar has it:
+/// Rename and Close; Close group for a repository's main workspace with its linked worktrees open (herdr closes
+/// them together); New worktree and Open worktree for a git workspace that isn't a linked worktree; and Delete
+/// worktree checkout for one that is. [onShow] runs once a new or opened worktree is selected, to show it.
 Future<void> showWorkspaceContextMenu(
   BuildContext context,
   HerdrClientService client,
   WorkspaceModel ws,
   Offset at, {
   VoidCallback? onShow,
-  VoidCallback? onDelete,
-  VoidCallback? onUp,
-  VoidCallback? onDown,
 }) async {
   final scheme = Theme.of(context).colorScheme;
+  final m = client.machine;
+  final group = [
+    if (!ws.isLinkedWorktree && ws.repoKey != null)
+      ...?client.snapshotOf(m)?.workspaces.where((w) => w.repoKey == ws.repoKey),
+  ];
+  final isGit = ws.repoKey != null || ws.gitBranch != null;
+  PopupMenuItem<String> item(String value, IconData icon, String text, [Color? color]) => PopupMenuItem(
+      value: value,
+      child: ListTile(
+          leading: Icon(icon, color: color), title: Text(text, style: color == null ? null : TextStyle(color: color))));
   final picked = await showMenu<String>(
     context: context,
     position: RelativeRect.fromLTRB(at.dx, at.dy, at.dx, at.dy),
     items: [
-      if (onUp != null)
-        const PopupMenuItem(value: 'up', child: ListTile(leading: Icon(Icons.arrow_upward), title: Text('Move up'))),
-      if (onDown != null)
-        const PopupMenuItem(
-            value: 'down', child: ListTile(leading: Icon(Icons.arrow_downward), title: Text('Move down'))),
-      const PopupMenuItem(
-        value: 'rename',
-        child: ListTile(leading: Icon(Icons.edit_outlined), title: Text('Rename')),
-      ),
-      if (ws.repoKey != null || ws.gitBranch != null)
-        const PopupMenuItem(
-          value: 'worktrees',
-          child: ListTile(leading: Icon(Icons.call_split), title: Text('Worktrees')),
-        ),
-      if (ws.isLinkedWorktree)
-        const PopupMenuItem(value: 'close', child: ListTile(leading: Icon(Icons.close), title: Text('Close'))),
-      PopupMenuItem(
-        value: 'delete',
-        child: ListTile(
-          leading: Icon(Icons.delete_outline, color: scheme.error),
-          title: Text(ws.isLinkedWorktree ? 'Delete worktree' : 'Delete', style: TextStyle(color: scheme.error)),
-        ),
-      ),
+      item('rename', Icons.edit_outlined, 'Rename'),
+      group.length > 1 ? item('group', Icons.close, 'Close group') : item('close', Icons.close, 'Close'),
+      if (isGit && !ws.isLinkedWorktree) ...[
+        item('new', Icons.add, 'New worktree'),
+        item('open', Icons.call_split, 'Open worktree…'),
+      ],
+      if (ws.isLinkedWorktree) item('delete', Icons.delete_outline, 'Delete worktree checkout', scheme.error),
     ],
   );
   if (picked == null || !context.mounted) return;
   switch (picked) {
-    case 'up':
-      onUp?.call();
-    case 'down':
-      onDown?.call();
     case 'rename':
-      final name = await prompt(context, 'Rename workspace', 'Workspace name',
-          initial: ws.label.isNotEmpty ? ws.label : ws.displayName);
+      final name = await prompt(context, 'Rename workspace', 'Workspace name', initial: ws.displayName);
       if (name != null) client.renameWorkspace(ws.id, name);
-    case 'worktrees':
-      _worktrees(context, client, ws, onShow);
     case 'close':
-      _delete(context, client, ws, remove: false);
-      onDelete?.call();
+      closeWithUndo(context, client, 'Workspace closed', ['$m/${ws.id}'],
+          () => client.deleteWorkspace(ws.id, on: m));
+    case 'group':
+      closeWithUndo(context, client, '${group.length} workspaces closed', [for (final w in group) '$m/${w.id}'],
+          () => client.deleteWorkspace(ws.id, closeGroup: true, on: m));
+    case 'new':
+      final branch = await prompt(context, 'New worktree', 'Branch', hint: 'e.g. feat/my-feature');
+      if (branch != null) client.createWorktree(ws.id, branch).then((_) => onShow?.call());
+    case 'open':
+      _openWorktree(context, client, ws, onShow);
     case 'delete':
-      _delete(context, client, ws, remove: ws.isLinkedWorktree);
-      onDelete?.call();
+      _deleteCheckout(context, client, ws);
   }
 }
 
-/// The workspace's actions, on the active machine: from the terminal's top bar, as a chat's header opens
-/// its info. [onShow] runs once a new or opened worktree is selected,
-/// to show it; [onDelete] once the workspace is closed or deleted, to leave its terminal.
-void showWorkspaceActions(BuildContext context, HerdrClientService client, WorkspaceModel ws,
-    {VoidCallback? onShow, VoidCallback? onDelete}) {
-  final theme = Theme.of(context);
-  final error = theme.colorScheme.error;
-  final scheme = theme.colorScheme;
-  showModalBottomSheet(
-    context: context,
-    builder: (sheetContext) {
-      void run(VoidCallback action) {
-        Navigator.pop(sheetContext);
-        action();
-      }
-
-      final title = (client.snapshotOf(client.machine) ?? client.snapshot)?.titleOf(ws) ?? ws.displayName;
-      final branch = ws.branchName;
-
-      return SafeArea(
-        child: ListView(
-          shrinkWrap: true,
-          children: [
-            ListTile(
-              title: Text(
-                title,
-                style: Theme.of(sheetContext).textTheme.titleMedium,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-              ),
-              subtitle: (branch != null && branch.isNotEmpty)
-                  ? Text(
-                      branch,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style:
-                          Theme.of(sheetContext).textTheme.bodySmall?.copyWith(color: scheme.onSurfaceVariant),
-                    )
-                  : null,
-            ),
-            const Divider(),
-            ListTile(
-              leading: const Icon(Icons.edit_outlined),
-              title: const Text('Rename'),
-              onTap: () => run(() async {
-                final name = await prompt(context, 'Rename workspace', 'Workspace name',
-                    initial: ws.label.isNotEmpty ? ws.label : ws.displayName);
-                if (name != null) client.renameWorkspace(ws.id, name);
-              }),
-            ),
-            if (ws.repoKey != null || ws.gitBranch != null)
-              ListTile(
-                leading: const Icon(Icons.call_split),
-                title: const Text('Worktrees'),
-                onTap: () => run(() => _worktrees(context, client, ws, onShow)),
-              ),
-            if (ws.isLinkedWorktree)
-              ListTile(
-                leading: const Icon(Icons.close),
-                title: const Text('Close'),
-                subtitle: const Text('Keeps its checkout, to open again'),
-                onTap: () => run(() {
-                  _delete(context, client, ws, remove: false);
-                  onDelete?.call();
-                }),
-              ),
-            ListTile(
-              iconColor: error,
-              textColor: error,
-              leading: const Icon(Icons.delete_outline),
-              title: Text(ws.isLinkedWorktree ? 'Delete worktree' : 'Delete'),
-              onTap: () => run(() {
-                _delete(context, client, ws, remove: ws.isLinkedWorktree);
-                onDelete?.call();
-              }),
-            ),
-          ],
-        ),
-      );
-    },
-  );
-}
-
-/// Closes [ws], on the active machine, unless undone; with [remove], its linked worktree's checkout goes too.
-/// herdr won't delete a checkout with changes, so that is asked about once it has refused.
-void _delete(BuildContext context, HerdrClientService client, WorkspaceModel ws, {required bool remove}) {
+/// Deletes [ws]'s linked worktree checkout (`git worktree remove`; its branch stays) unless undone, closing its
+/// workspace. herdr won't delete a checkout with changes, so that is asked about once it has refused.
+void _deleteCheckout(BuildContext context, HerdrClientService client, WorkspaceModel ws) {
   final m = client.machine;
   final navigator = Navigator.of(context, rootNavigator: true); // still there once this screen has gone
-  final message = remove ? 'Worktree deleted' : (ws.isLinkedWorktree ? 'Workspace closed' : 'Workspace deleted');
-  closeWithUndo(context, client, message, ['$m/${ws.id}'], () {
-    return client.deleteWorkspace(ws.id, removeWorktree: remove, on: m, dirty: (reason) async {
+  closeWithUndo(context, client, 'Worktree deleted', ['$m/${ws.id}'], () {
+    return client.deleteWorkspace(ws.id, removeWorktree: true, on: m, dirty: (reason) async {
       if (!navigator.mounted) return;
       final error = Theme.of(navigator.context).colorScheme.error;
       final sure = await showDialog<bool>(
         context: navigator.context,
         builder: (dialogContext) => AlertDialog(
           title: Text('Delete ${ws.displayName} anyway?'),
-          content: Text('$reason\n\nIts changes will be lost.'),
+          content: Text('$reason\n\nDirty or untracked files will be permanently deleted. The branch is kept.'),
           actions: [
             TextButton(onPressed: () => Navigator.pop(dialogContext), child: const Text('Keep')),
             TextButton(
@@ -482,103 +383,57 @@ Future<String?> prompt(BuildContext context, String title, String label, {String
   return trimmed.isEmpty ? null : trimmed;
 }
 
-/// [ws]'s repository's worktrees: a new branch to make one, from the main checkout's branch or, in a linked
-/// worktree, from its own, and those there are, to open (or show, when open already).
-void _worktrees(BuildContext context, HerdrClientService client, WorkspaceModel ws, VoidCallback? onShow) {
+/// The linked worktrees of [ws]'s repository (as `git worktree list` has them, less what herdr can't open),
+/// to open one, or show it when it's open already.
+void _openWorktree(BuildContext context, HerdrClientService client, WorkspaceModel ws, VoidCallback? onShow) {
   // Hoisted, so a rebuild (e.g. a snapshot landing while the dialog is open) can't restart it
   // back into its spinner: a FutureBuilder with an inline future loads forever then.
   final worktrees = client.listWorktrees(ws.id);
-  final mainBranch = client.snapshot?.mainOf(ws.repoKey)?.branchName;
-  final ownBranch = ws.isLinkedWorktree ? ws.gitBranch : null;
-  final branch = TextEditingController();
-  String? base = ownBranch;
   showDialog(
     context: context,
-    builder: (dialogContext) {
-      void create() {
-        final name = branch.text.trim();
-        if (name.isEmpty) return;
-        Navigator.pop(dialogContext);
-        client.createWorktree(ws.id, name, base: base).then((_) => onShow?.call());
-      }
-
-      return FutureBuilder<List<Map<String, dynamic>>>(
-        future: worktrees,
-        builder: (_, result) {
-          final list = result.data ?? [];
-          return AlertDialog(
-            title: const Text('Worktrees'),
-            contentPadding: const EdgeInsets.symmetric(vertical: 16),
-            content: SizedBox(
-              width: double.maxFinite,
-              child: ListView(
-                shrinkWrap: true,
-                children: [
-                  Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 24),
-                    child: TextField(
-                      controller: branch,
-                      decoration: InputDecoration(
-                        labelText: 'New branch',
-                        hintText: 'e.g. feat/my-feature',
-                        border: const OutlineInputBorder(),
-                        suffixIcon: IconButton(tooltip: 'Create', icon: const Icon(Icons.add), onPressed: create),
+    builder: (dialogContext) => FutureBuilder<List<Map<String, dynamic>>>(
+      future: worktrees,
+      builder: (_, result) {
+        final list = [
+          for (final wt in result.data ?? <Map<String, dynamic>>[])
+            if (wt['is_linked_worktree'] == true && wt['is_bare'] != true && wt['is_prunable'] != true) wt
+        ];
+        return AlertDialog(
+          title: const Text('Open worktree'),
+          contentPadding: const EdgeInsets.symmetric(vertical: 16),
+          content: SizedBox(
+            width: double.maxFinite,
+            child: result.connectionState == ConnectionState.waiting
+                ? const SizedBox(height: 100, child: Center(child: CircularProgressIndicator()))
+                : list.isEmpty
+                    ? const Padding(padding: EdgeInsets.symmetric(horizontal: 24), child: Text('No worktrees yet'))
+                    : ListView(
+                        shrinkWrap: true,
+                        children: [
+                          for (final wt in list)
+                            ListTile(
+                              contentPadding: const EdgeInsets.symmetric(horizontal: 24),
+                              leading: const Icon(Icons.call_split),
+                              title: Text((wt['branch']?.toString() ?? 'detached').replaceFirst('worktree/', '')),
+                              subtitle: Text(wt['open_workspace_id'] != null ? 'Open' : wt['path'].toString(),
+                                  overflow: TextOverflow.ellipsis),
+                              onTap: () async {
+                                Navigator.pop(dialogContext);
+                                final open = wt['open_workspace_id'];
+                                if (open is String) {
+                                  client.selectWorkspace(open);
+                                } else {
+                                  await client.openWorktree(ws.id, wt['path'].toString());
+                                }
+                                onShow?.call();
+                              },
+                            ),
+                        ],
                       ),
-                      onSubmitted: (_) => create(),
-                    ),
-                  ),
-                  if (ownBranch != null && mainBranch != null && ownBranch != mainBranch)
-                    StatefulBuilder(
-                      builder: (context, setState) => Padding(
-                        padding: const EdgeInsets.fromLTRB(24, 8, 24, 0),
-                        child: Wrap(
-                          spacing: 8,
-                          crossAxisAlignment: WrapCrossAlignment.center,
-                          children: [
-                            const Text('From'),
-                            for (final (label, value) in [(mainBranch, null), (ws.branchName!, ownBranch)])
-                              ChoiceChip(
-                                label: Text(label),
-                                selected: base == value,
-                                onSelected: (_) => setState(() => base = value),
-                              ),
-                          ],
-                        ),
-                      ),
-                    ),
-                  const SizedBox(height: 8),
-                  if (result.connectionState == ConnectionState.waiting)
-                    const SizedBox(height: 100, child: Center(child: CircularProgressIndicator()))
-                  else
-                    for (final wt in list)
-                      ListTile(
-                        contentPadding: const EdgeInsets.symmetric(horizontal: 24),
-                        leading: const Icon(Icons.call_split),
-                        title: Text((wt['branch']?.toString() ?? wt['label']?.toString() ?? 'unknown')
-                            .replaceFirst('worktree/', '')),
-                        subtitle: Text(
-                          wt['open_workspace_id'] != null ? 'Open' : (wt['path']?.toString() ?? ''),
-                          overflow: TextOverflow.ellipsis,
-                        ),
-                        onTap: () async {
-                          Navigator.pop(dialogContext);
-                          final open = wt['open_workspace_id'];
-                          if (open is String) {
-                            client.selectWorkspace(open);
-                          } else {
-                            await client.openWorktree(ws.id,
-                                branch: wt['branch']?.toString(), path: wt['path']?.toString());
-                          }
-                          onShow?.call();
-                        },
-                      ),
-                ],
-              ),
-            ),
-            actions: [TextButton(onPressed: () => Navigator.pop(dialogContext), child: const Text('Cancel'))],
-          );
-        },
-      );
-    },
+          ),
+          actions: [TextButton(onPressed: () => Navigator.pop(dialogContext), child: const Text('Cancel'))],
+        );
+      },
+    ),
   );
 }

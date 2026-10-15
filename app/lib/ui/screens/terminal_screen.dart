@@ -1459,72 +1459,53 @@ class _TerminalScreenState extends State<TerminalScreen> {
         notificationPredicate: (_) => false,
         // A step above the terminal's surface, so the current tab stands out joined to the terminal.
         backgroundColor: scheme.surfaceContainerHigh,
-        // The workspace header: on mobile, tapping opens the workspace actions sheet;
-        // on Linux, tapping does nothing and right-clicking opens the context menu.
-        title: GestureDetector(
-          onSecondaryTapUp: workspace == null
-              ? null
-              : (d) => showWorkspaceContextMenu(
-                    context,
-                    client,
-                    workspace,
-                    d.globalPosition,
-                    onDelete: widget.embedded ? null : () => Navigator.maybePop(context),
-                  ),
-          child: InkWell(
-            borderRadius: BorderRadius.circular(8),
-            onTap: (Platform.isLinux || workspace == null)
-                ? null
-                : () => showWorkspaceActions(context, client, workspace,
-                    onDelete: widget.embedded ? null : () => Navigator.maybePop(context)),
-            child: Padding(
-              padding: const EdgeInsets.symmetric(vertical: 4),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Text(
-                    title,
-                    style: Theme.of(context).textTheme.titleMedium,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                  ),
-                  if (isWorktree || branch.isNotEmpty)
-                    Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        if (isWorktree) ...[
-                          Container(
-                            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
-                            decoration: BoxDecoration(
-                              color: scheme.secondaryContainer,
-                              borderRadius: BorderRadius.circular(4),
-                            ),
-                            child: Text(
-                              'worktree',
-                              style: Theme.of(context).textTheme.labelSmall?.copyWith(
-                                    color: scheme.onSecondaryContainer,
-                                    fontSize: 10,
-                                    fontWeight: FontWeight.w500,
-                                  ),
-                            ),
-                          ),
-                          if (branch.isNotEmpty) const SizedBox(width: 6),
-                        ],
-                        if (branch.isNotEmpty)
-                          Flexible(
-                            child: Text(
-                              branch,
-                              style: Theme.of(context).textTheme.bodySmall?.copyWith(color: scheme.onSurfaceVariant),
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                            ),
-                          ),
-                      ],
-                    ),
-                ],
+        // The workspace's name and branch; its actions are in the workspaces panel.
+        title: Padding(
+          padding: const EdgeInsets.symmetric(vertical: 4),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(
+                title,
+                style: Theme.of(context).textTheme.titleMedium,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
               ),
-            ),
+              if (isWorktree || branch.isNotEmpty)
+                Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    if (isWorktree) ...[
+                      Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
+                        decoration: BoxDecoration(
+                          color: scheme.secondaryContainer,
+                          borderRadius: BorderRadius.circular(4),
+                        ),
+                        child: Text(
+                          'worktree',
+                          style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                                color: scheme.onSecondaryContainer,
+                                fontSize: 10,
+                                fontWeight: FontWeight.w500,
+                              ),
+                        ),
+                      ),
+                      if (branch.isNotEmpty) const SizedBox(width: 6),
+                    ],
+                    if (branch.isNotEmpty)
+                      Flexible(
+                        child: Text(
+                          branch,
+                          style: Theme.of(context).textTheme.bodySmall?.copyWith(color: scheme.onSurfaceVariant),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ),
+                  ],
+                ),
+            ],
           ),
         ),
         actions: [

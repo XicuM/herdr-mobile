@@ -602,12 +602,6 @@ class HerdrClientService extends ChangeNotifier {
       };
 
   /// Resolves a workspace ID to the ID of its main repository workspace if it's a linked worktree.
-  String _getMainWorkspaceId(String workspaceId) {
-    final ws = snapshot?.workspaces.where((w) => w.id == workspaceId).firstOrNull;
-    if (ws == null || !ws.isLinkedWorktree) return workspaceId;
-    return snapshot?.mainOf(ws.repoKey)?.id ?? workspaceId;
-  }
-
   void removeMachine(String m) {
     _forget([m, ..._machines.where((x) => parentOf(x) == m)]);
     if (_machines.contains(machine)) return notifyListeners();
@@ -1229,12 +1223,17 @@ class HerdrClientService extends ChangeNotifier {
 
   Future<void> createWorkspace() => _create('create workspace', '/api/workspace', {});
 
-  /// Closes a workspace, or with [removeWorktree] deletes a linked worktree's checkout too, which herdr
-  /// refuses while it has changes unless [force]d; [dirty] gets herdr's reason then.
+  /// Closes a workspace, or with [closeGroup] a repository's main workspace with its linked worktrees' (herdr
+  /// refuses to close it alone), or with [removeWorktree] deletes a linked worktree's checkout, which herdr
+  /// refuses while it has changes unless [force]d; [dirty] gets herdr's reason then. A checkout's branch stays.
   Future<void> deleteWorkspace(String workspaceId,
-      {bool removeWorktree = false, bool force = false, String? on, void Function(String)? dirty}) {
-    final what = removeWorktree ? 'delete worktree' : 'delete workspace';
-    final query = {if (removeWorktree) 'remove_worktree': 'true', if (force) 'force': 'true'};
+      {bool closeGroup = false, bool removeWorktree = false, bool force = false, String? on, void Function(String)? dirty}) {
+    final what = removeWorktree ? 'delete worktree' : 'close workspace';
+    final query = {
+      if (closeGroup) 'close_group': 'true',
+      if (removeWorktree) 'remove_worktree': 'true',
+      if (force) 'force': 'true',
+    };
     return _request(what, 'DELETE', '/api/workspace/$workspaceId',
         query: query.isEmpty ? null : query,
         on: on,
@@ -1263,25 +1262,19 @@ class HerdrClientService extends ChangeNotifier {
         body: {'workspace_ids': ids, 'before_workspace_id': beforeId});
   }
 
-  Future<void> createWorktree(String workspaceId, String branch, {String? base}) =>
-      _create('create worktree', '/api/worktree', {
-        'workspace_id': _getMainWorkspaceId(workspaceId),
-        'branch': branch,
-        if (base != null && base.isNotEmpty) 'base': base,
-      });
+  /// A new worktree of a repository's main workspace, on [branch] (checked out if it exists, else made from
+  /// the main checkout's HEAD).
+  Future<void> createWorktree(String workspaceId, String branch) =>
+      _create('create worktree', '/api/worktree', {'workspace_id': workspaceId, 'branch': branch});
 
   Future<List<Map<String, dynamic>>> listWorktrees(String workspaceId) async {
-    final res = await _request('list worktrees', 'GET', '/api/worktree', query: {'workspace_id': _getMainWorkspaceId(workspaceId)});
+    final res = await _request('list worktrees', 'GET', '/api/worktree', query: {'workspace_id': workspaceId});
     return ((res is Map ? res['worktrees'] : null) as List<dynamic>? ?? []).cast<Map<String, dynamic>>();
   }
 
-  Future<void> openWorktree(String workspaceId, {String? branch, String? path}) {
-    final usePath = path != null && path.isNotEmpty;
-    return _create('open worktree', '/api/worktree/open', {
-      'workspace_id': _getMainWorkspaceId(workspaceId),
-      if (usePath) 'path': path else if (branch != null && branch.isNotEmpty) 'branch': branch,
-    });
-  }
+  /// Opens the worktree checked out at [path] in a workspace of its own, next to its repository's main [workspaceId].
+  Future<void> openWorktree(String workspaceId, String path) =>
+      _create('open worktree', '/api/worktree/open', {'workspace_id': workspaceId, 'path': path});
 
   @override
   void dispose() {
