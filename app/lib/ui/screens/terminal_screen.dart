@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
@@ -57,7 +58,16 @@ class TerminalScreen extends StatefulWidget {
 }
 
 class _TerminalScreenState extends State<TerminalScreen> {
-  final _terminal = Terminal();
+  // OSC 52 (`52;c;<base64>`): the pane asks for text on the clipboard, as a program over ssh does. A `?`
+  // payload asks to read it back, which is not answered. Over 1 MB of text (base64 is 4/3 of that) is dropped.
+  final _terminal = Terminal(onPrivateOSC: (code, args) {
+    if (code != '52' || args.length < 2 || args.last == '?' || args.last.length > 1400000) return;
+    try {
+      Clipboard.setData(ClipboardData(text: utf8.decode(base64.decode(args.last), allowMalformed: true)));
+    } on FormatException {
+      return; // not base64
+    }
+  });
   final _controller = TerminalController();
   final _view = GlobalKey<TerminalViewState>();
   final _message = TextEditingController();
