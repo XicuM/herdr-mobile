@@ -1,6 +1,15 @@
 /// Newest first. Shown once after an update; add an entry when bumping the version in pubspec.yaml.
 const changelog = <(String, List<String>)>[
   (
+    '1.16.0',
+    [
+      'The workspaces menu mirrors herdr\'s own sidebar: rename, close or close group, new/open worktree, and delete worktree checkout.',
+      'A pane herdr couldn\'t restore shows why in place of the terminal, and the open tab\'s menu can clear it.',
+      'Copying in a pane puts the text on the clipboard (OSC 52).',
+      'Unreachable SSH machines say why, and say to run herdr machine reconnect when SSH wants a password or MFA.',
+    ]
+  ),
+  (
     '1.15.1',
     [
       'The recent-messages panel has a single close button, and its slash commands sit at the bottom.',
