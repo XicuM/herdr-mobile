@@ -168,6 +168,10 @@ class PaneModel {
   final String terminalTitle;
   final String agentStatus;
 
+  /// Why herdr couldn't bring the pane back after a restart (its folder is gone, its shell won't start):
+  /// it has no terminal to show until that is fixed.
+  final String? restoreError;
+
   PaneModel({
     required this.id,
     required this.workspaceId,
@@ -175,6 +179,7 @@ class PaneModel {
     required this.focused,
     required this.terminalTitle,
     required this.agentStatus,
+    this.restoreError,
   });
 
   factory PaneModel.fromJson(Map<String, dynamic> json) {
@@ -190,6 +195,7 @@ class PaneModel {
       focused: json['focused'] ?? false,
       terminalTitle: title == 'Claude Code' || cwd.isNotEmpty && title == cwd.split('/').last ? '' : title,
       agentStatus: json['agent_status'] ?? 'unknown',
+      restoreError: json['restore_error'],
     );
   }
 }
@@ -203,7 +209,8 @@ class AgentModel {
   /// herdr calls it `idle`: the agent is waiting on a result, not idle.
   final bool monitoring;
 
-  /// Bumped by herdr each time the agent completes work, whether or not the pane was viewed.
+  /// While idle after completing work (not after an interrupt), the `state_change_seq` of that change, so it
+  /// rises with each completion whether or not the pane was viewed; null otherwise.
   final int? completionSeq;
 
   /// Bumped by herdr each time the agent's status changes.

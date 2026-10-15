@@ -869,7 +869,7 @@ class _TerminalScreenState extends State<TerminalScreen> {
     return tab.displayName;
   }
 
-  /// A tab's menu, from a hold or a right-click ([HoldMenu]): open it (when it isn't), move it, or close it.
+  /// A tab's menu, from a hold or a right-click ([HoldMenu]): open it (or clear it, when it is), move it, or close it.
   Future<void> _showTabMenu(Offset at, TabModel tab, List<TabModel> tabs, int index) async {
     final client = widget.client;
     final scheme = Theme.of(context).colorScheme;
@@ -878,7 +878,10 @@ class _TerminalScreenState extends State<TerminalScreen> {
       position: RelativeRect.fromLTRB(at.dx, at.dy, at.dx, at.dy),
       items: [
         if (tab.id != client.selectedPane?.tabId)
-          const PopupMenuItem(value: 'open', child: ListTile(leading: Icon(Icons.tab), title: Text('Open tab'))),
+          const PopupMenuItem(value: 'open', child: ListTile(leading: Icon(Icons.tab), title: Text('Open tab')))
+        else
+          const PopupMenuItem(
+              value: 'clear', child: ListTile(leading: Icon(Icons.cleaning_services_outlined), title: Text('Clear'))),
         if (index > 0)
           const PopupMenuItem(
               value: 'left', child: ListTile(leading: Icon(Icons.arrow_back), title: Text('Move left'))),
@@ -898,6 +901,10 @@ class _TerminalScreenState extends State<TerminalScreen> {
     switch (picked) {
       case 'open':
         client.selectTab(tab.id);
+      case 'clear':
+        // The history scrolled back into goes, so the screen is live again.
+        _toLive();
+        client.clearPane(client.selectedPaneId!);
       case 'left':
         if (index > 0) client.moveTab(tab.id, tabs[index - 1].id);
       case 'right':
@@ -1294,9 +1301,10 @@ class _TerminalScreenState extends State<TerminalScreen> {
     final pty = _ptyChannel;
     final state = WidgetsBinding.instance.lifecycleState;
     if (paneId == null ||
+        client.selectedPane?.restoreError != null ||
         client.isDisconnected ||
         (state != null && state != AppLifecycleState.resumed && state != AppLifecycleState.inactive)) {
-      // Machine switched, disconnected, or app in background: detach
+      // Machine switched, disconnected, pane not restored, or app in background: detach
       pty?.dispose();
       _ptyChannel = null;
       return;
@@ -1442,6 +1450,11 @@ class _TerminalScreenState extends State<TerminalScreen> {
     final currentUsage = currentAgent?.usage;
     final workspace = snapshot?.workspaces.where((w) => w.id == pane?.workspaceId).firstOrNull;
     final connecting = client.machines.isNotEmpty && !client.connected && !client.isDisconnected;
+    final unavailable = client.errorOf(client.machine) != null && snapshot == null
+        ? (Icons.cloud_off, "Can't reach ${client.nameOf(client.machine)}", client.errorOf(client.machine)!)
+        : pane?.restoreError != null
+            ? (Icons.restore_page_outlined, "Couldn't restore this pane", pane!.restoreError!)
+            : null;
     if (pane?.tabId != _shownTabId) {
       _shownTabId = pane?.tabId;
       WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -1738,20 +1751,20 @@ class _TerminalScreenState extends State<TerminalScreen> {
                 ),
               ),
             Expanded(
-              // Connected to its bridge, which can't show it: e.g. a machine it reaches over SSH is down.
-              child: client.errorOf(client.machine) != null && snapshot == null
+              // Connected to its bridge, which can't show it (e.g. a machine it reaches over SSH is down), or
+              // herdr couldn't restore the pane, which then has no terminal.
+              child: unavailable != null
                   ? Center(
                       child: Padding(
                         padding: const EdgeInsets.all(24),
                         child: Column(
                           mainAxisSize: MainAxisSize.min,
                           children: [
-                            Icon(Icons.cloud_off, size: 48, color: scheme.onSurfaceVariant),
+                            Icon(unavailable.$1, size: 48, color: scheme.onSurfaceVariant),
                             const SizedBox(height: 12),
-                            Text("Can't reach ${client.nameOf(client.machine)}",
-                                style: Theme.of(context).textTheme.titleMedium),
+                            Text(unavailable.$2, style: Theme.of(context).textTheme.titleMedium),
                             const SizedBox(height: 8),
-                            Text(client.errorOf(client.machine)!,
+                            Text(unavailable.$3,
                                 textAlign: TextAlign.center, style: TextStyle(color: scheme.onSurfaceVariant)),
                           ],
                         ),

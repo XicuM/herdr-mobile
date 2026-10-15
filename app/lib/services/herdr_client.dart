@@ -1191,6 +1191,9 @@ class HerdrClientService extends ChangeNotifier {
 
   Future<void> closeTab(String tabId, [String? m]) => _request('close tab', 'DELETE', '/api/tab/$tabId', on: m);
 
+  /// Clears [paneId]'s screen and scrollback, keeping its prompt line (`pane.clear`; full-screen apps are left alone).
+  Future<void> clearPane(String paneId) => _request('clear pane', 'POST', '/api/pane/clear', body: {'pane_id': paneId});
+
   /// Closes [paneId] on [m] (the active machine by default). herdr closes a tab with its last pane and a
   /// workspace with its last tab, so when this is the workspace's only pane it first opens a new tab
   /// there, leaving the workspace with a shell.
