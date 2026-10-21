@@ -155,6 +155,13 @@ class _TerminalScreenState extends State<TerminalScreen> {
   }
 
   KeyEventResult _onTermKeyEvent(FocusNode node, KeyEvent event) {
+    // Whether Control is down only because the desktop put it there, as Omarchy's SUPER+C does:
+    // it reaches the pane as a Ctrl+C whose Control key event was synthesized, with no Control
+    // key pressed. A real Ctrl+C always has its own Control keydown first.
+    if (event.logicalKey == LogicalKeyboardKey.controlLeft ||
+        event.logicalKey == LogicalKeyboardKey.controlRight) {
+      _controlSynthesized = event is KeyDownEvent && event.synthesized;
+    }
     if (event is! KeyDownEvent && event is! KeyRepeatEvent) return KeyEventResult.ignored;
     if (event is KeyDownEvent &&
         event.logicalKey == LogicalKeyboardKey.keyV &&
@@ -165,6 +172,23 @@ class _TerminalScreenState extends State<TerminalScreen> {
       // doesn't ask the clipboard again ([_pasteIntoTerminal]).
       _pasteIntoTerminal();
       return KeyEventResult.handled;
+    }
+    // Ctrl+C copies a selection, as in VS Code's terminal. Omarchy's SUPER+C arrives as a
+    // synthesized Ctrl+C, so a copy gesture must copy or do nothing, never reach the pane as an
+    // interrupt. A real Ctrl+C, with a Control key of its own, still interrupts.
+    final isCopyChord = event.logicalKey == LogicalKeyboardKey.keyC &&
+        (event.character == '\x03' ||
+            HardwareKeyboard.instance.isControlPressed ||
+            HardwareKeyboard.instance.isMetaPressed);
+    if (isCopyChord) {
+      if (_controller.selection != null) {
+        _copySelection();
+        return KeyEventResult.handled;
+      }
+      // Nothing selected: a copy gesture does nothing, so that it can never interrupt the pane.
+      if (_controlSynthesized || HardwareKeyboard.instance.isMetaPressed) {
+        return KeyEventResult.handled;
+      }
     }
     if (event.logicalKey == LogicalKeyboardKey.enter || event.logicalKey == LogicalKeyboardKey.numpadEnter) {
       final isShift = HardwareKeyboard.instance.isShiftPressed ||
@@ -180,6 +204,10 @@ class _TerminalScreenState extends State<TerminalScreen> {
     }
     return KeyEventResult.ignored;
   }
+
+  // Set by the Control key events above: true when Control is down because the desktop
+  // synthesized it, as Omarchy's universal copy does, rather than because a key was pressed.
+  bool _controlSynthesized = false;
 
   KeyEventResult _onMessageKeyEvent(FocusNode node, KeyEvent event) {
     if (event is! KeyDownEvent && event is! KeyRepeatEvent) return KeyEventResult.ignored;

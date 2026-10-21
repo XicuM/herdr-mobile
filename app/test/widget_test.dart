@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:ui' as ui;
 import 'dart:io';
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
@@ -17,6 +18,23 @@ import 'package:herdr_mobile/ui/widgets/agent_avatar.dart';
 import 'package:herdr_mobile/ui/widgets/machines.dart';
 import 'package:herdr_mobile/ui/widgets/workspaces.dart';
 import 'package:xterm/xterm.dart';
+
+// The desktop's synthesized Control keydown, as Omarchy's SUPER+C delivers it: no Control key was
+// pressed, so the embedder makes the key event itself.
+Future<void> sendSynthesizedControl(WidgetTester tester) async {
+  // The deprecated key-data entry point is the only way to hand the framework a synthesized
+  // event, as the engine's embedder does for a modifier the desktop put down.
+  // ignore: deprecated_member_use
+  ServicesBinding.instance.keyEventManager.handleKeyData(ui.KeyData(
+    timeStamp: Duration.zero,
+    type: ui.KeyEventType.down,
+    logical: LogicalKeyboardKey.controlLeft.keyId,
+    physical: PhysicalKeyboardKey.controlLeft.usbHidUsage,
+    character: null,
+    synthesized: true,
+  ));
+  await tester.pump();
+}
 
 void main() {
   group('Herdr Mobile Models Test', () {
@@ -2260,6 +2278,107 @@ void main() {
       expect(typed, isEmpty);
       await tester.sendKeyEvent(LogicalKeyboardKey.enter);
       expect(typed, ['\r']);
+    });
+
+    testWidgets('Ctrl+C copies the terminal selection, and only without one does xterm see it', (tester) async {
+      SharedPreferences.setMockInitialValues({'last_seen_changelog': changelog.first.$1});
+      String? copied;
+      tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(SystemChannels.platform, (call) async {
+        if (call.method == 'Clipboard.setData') copied = (call.arguments as Map)['text'] as String;
+        return null;
+      });
+      final client = HerdrClientService()
+        ..setMachines(['100.1.2.3:7788'], [])
+        ..setSnapshotForTesting(twoWorkspaces())
+        ..selectPane('w1:p1');
+      await tester.pumpWidget(MaterialApp(home: TerminalScreen(client: client)));
+      await tester.pump(const Duration(milliseconds: 300));
+      // The terminal's focus, as its keyboard button gives it. A pointer-down would gate that away
+      // ([_gateKeyboard]), so the selection is made through the controller instead of a press.
+      tester.state<TerminalViewState>(find.byType(TerminalView)).requestKeyboard();
+      await tester.pump();
+
+      final view = tester.widget<TerminalView>(find.byType(TerminalView));
+      final typed = <String>[];
+      view.terminal.write('hello brave new world');
+      await tester.pump();
+      view.terminal.onOutput = typed.add;
+      final buffer = view.terminal.buffer;
+      view.controller!.setSelection(
+        buffer.createAnchorFromOffset(const CellOffset(0, 0)),
+        buffer.createAnchorFromOffset(const CellOffset(5, 0)),
+      );
+      await tester.pump();
+      expect(find.text('Copy'), findsOneWidget);
+
+      // Omarchy's Super+C arrives as a synthesized Ctrl+C: a selection copies, as in VS Code.
+      await tester.sendKeyDownEvent(LogicalKeyboardKey.controlLeft);
+      await tester.sendKeyEvent(LogicalKeyboardKey.keyC);
+      await tester.sendKeyUpEvent(LogicalKeyboardKey.controlLeft);
+      await tester.pump();
+      expect(copied, 'hello');
+      expect(typed, isEmpty);
+
+      // With nothing selected it stays xterm's interrupt.
+      await tester.sendKeyDownEvent(LogicalKeyboardKey.controlLeft);
+      await tester.sendKeyEvent(LogicalKeyboardKey.keyC);
+      await tester.sendKeyUpEvent(LogicalKeyboardKey.controlLeft);
+      await tester.pump();
+      expect(typed, ['\x03']);
+      await tester.pump(const Duration(seconds: 1));
+    });
+
+    testWidgets("Omarchy's Super+C never interrupts the pane", (tester) async {
+      SharedPreferences.setMockInitialValues({'last_seen_changelog': changelog.first.$1});
+      final client = HerdrClientService()
+        ..setMachines(['100.1.2.3:7788'], [])
+        ..setSnapshotForTesting(twoWorkspaces())
+        ..selectPane('w1:p1');
+      await tester.pumpWidget(MaterialApp(home: TerminalScreen(client: client)));
+      await tester.pump(const Duration(milliseconds: 300));
+      tester.state<TerminalViewState>(find.byType(TerminalView)).requestKeyboard();
+      await tester.pump();
+
+      final view = tester.widget<TerminalView>(find.byType(TerminalView));
+      final typed = <String>[];
+      view.terminal.write('hello brave new world');
+      await tester.pump();
+      view.terminal.onOutput = typed.add;
+
+      // Omarchy's Super+C arrives as a Ctrl+C whose Control key event the desktop synthesized,
+      // since no Control key was pressed. With nothing selected that must stay a no-op rather
+      // than reaching the pane as an interrupt.
+      await sendSynthesizedControl(tester);
+      await tester.sendKeyDownEvent(LogicalKeyboardKey.keyC, character: 'c');
+      await tester.pump();
+      expect(typed, isEmpty);
+
+      // With a selection it copies, like the real Ctrl+C.
+      String? copied;
+      tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(SystemChannels.platform, (call) async {
+        if (call.method == 'Clipboard.setData') copied = (call.arguments as Map)['text'] as String;
+        return null;
+      });
+      final buffer = view.terminal.buffer;
+      view.controller!.setSelection(
+        buffer.createAnchorFromOffset(const CellOffset(0, 0)),
+        buffer.createAnchorFromOffset(const CellOffset(5, 0)),
+      );
+      await tester.pump();
+      await tester.sendKeyDownEvent(LogicalKeyboardKey.keyC, character: 'c');
+      await tester.pump();
+      expect(copied, 'hello');
+      expect(typed, isEmpty);
+
+      // A real Ctrl+C, whose own Control key is pressed, still interrupts.
+      await tester.sendKeyUpEvent(LogicalKeyboardKey.keyC);
+      await tester.sendKeyUpEvent(LogicalKeyboardKey.controlLeft);
+      await tester.pump();
+      await tester.sendKeyDownEvent(LogicalKeyboardKey.controlLeft);
+      await tester.sendKeyDownEvent(LogicalKeyboardKey.keyC, character: 'c');
+      await tester.pump();
+      expect(typed, ['\x03']);
+      await tester.pump(const Duration(seconds: 1));
     });
 
     testWidgets('Send button is not made larger when multiline', (tester) async {
