@@ -20,13 +20,12 @@ Terminal-first mobile companion app for [Herdr](https://herdr.dev).
 ### 2. Configure & Run
 From your development machine:
 ```bash
-cd app
 flutter pub get
 flutter run
 ```
 
 ### 3. Connect to Herdr
-1. On each computer running Herdr, start the bridge (`deploy/install.sh` sets it up as a service); it listens on the computer's Tailscale IP, port 7788.
+1. On each computer running Herdr, start the bridge ([herdr-bridge](https://github.com/XicuM/herdr-bridge)'s `deploy/install.sh` sets it up as a service); it listens on the computer's Tailscale IP, port 7788.
 2. Open the app on your phone and tap **Add a machine**.
 3. Enter the computer's Tailscale IP or MagicDNS name (add `:port` if it isn't 7788), optionally a name, and tap **Add & connect**.
 4. Allow notifications and background use when asked. The app stays connected in the background (shown as an ongoing notification) and alerts you when an agent needs you or finishes.

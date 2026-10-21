@@ -32,7 +32,6 @@ jobs:
 
       - name: Install Dependencies
         run: |
-          cd app
           flutter pub get
 
       # Every release must carry the same key, or Android won't install it over the last one. A tag
@@ -55,7 +54,6 @@ jobs:
           ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
           ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
         run: |
-          cd app
           flutter build apk --release
           # The certificate the APK carries, to check it stays the same from release to release.
           keytool -printcert -jarfile build/app/outputs/flutter-apk/app-release.apk | grep SHA256
@@ -64,13 +62,13 @@ jobs:
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: herdr-mobile-apk
-          path: app/build/app/outputs/flutter-apk/app-release.apk
+          path: build/app/outputs/flutter-apk/app-release.apk
 
       - name: Publish Release
         if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
         with:
-          files: app/build/app/outputs/flutter-apk/app-release.apk
+          files: build/app/outputs/flutter-apk/app-release.apk
           generate_release_notes: true
 
   linux:
@@ -92,7 +90,7 @@ jobs:
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
       # Flutter publishes no SDK archive for Linux on arm, so both take the same release from git. It's the
-      # Flutter that generated app/linux (the APK's 3.24 is too old for its runner), not the APK's.
+      # Flutter that generated linux/ (the APK's 3.24 is too old for its runner), not the APK's.
       - name: Set up Flutter
         run: |
           git clone --depth 1 --branch 3.47.6 https://github.com/flutter/flutter.git "$RUNNER_TEMP/flutter"
@@ -105,11 +103,10 @@ jobs:
 
       - name: Build Linux App
         run: |
-          cd app
           flutter --version
           flutter build linux --release
           tar -C build/linux/${{ matrix.flutter_arch }}/release --transform 's,^bundle,herdr-mobile,' \
-            -czf ../herdr-mobile-linux-${{ matrix.arch }}.tar.gz bundle
+            -czf herdr-mobile-linux-${{ matrix.arch }}.tar.gz bundle
 
       - name: Upload Linux App Artifact
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4

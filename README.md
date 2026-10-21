@@ -51,7 +51,7 @@
 
 Herdr Mobile is composed of two minimal, zero-bloat pieces:
 1. **[herdr-bridge](https://github.com/XicuM/herdr-bridge)**: A lightweight companion daemon written in Rust (Axum + Tokio), in its own repository. Connects to Herdr's local IPC socket (`herdr.sock`), multiplexes remote machines over SSH, and streams real-time state and PTY sessions over authenticated WebSockets.
-2. **`app/`**: A native Android Flutter client powered by `xterm.dart` and Material 3 design, delivering smooth terminal interaction and instant alerts.
+2. **This repository**: A native Android Flutter client powered by `xterm.dart` and Material 3 design, delivering smooth terminal interaction and instant alerts.
 
 ---
 
