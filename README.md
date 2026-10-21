@@ -91,3 +91,9 @@ Service management, logs and the bridge's Obsidian features are covered in the [
 
 - **Bridge**: now in [herdr-bridge](https://github.com/XicuM/herdr-bridge).
 - **Mobile App**: `flutter analyze`, `flutter test`, `flutter run`
+
+---
+
+## License
+
+[GPL-3.0-or-later](LICENSE)
