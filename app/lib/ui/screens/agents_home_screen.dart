@@ -834,8 +834,13 @@ class _AgentsHomeScreenState extends State<AgentsHomeScreen> {
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                 ),
-                subtitle: Text(
-                  sub(m, [ws.branchName]),
+                // The branch's ↑↓ go right after it, before the machine.
+                subtitle: Text.rich(
+                  TextSpan(children: [
+                    TextSpan(text: ws.branchName ?? ''),
+                    ...aheadBehind(ws),
+                    TextSpan(text: ws.branchName == null || sub(m, []).isEmpty ? sub(m, []) : ' · ${sub(m, [])}'),
+                  ]),
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                 ),

@@ -1643,7 +1643,7 @@ void main() {
       expect(client.muted, isEmpty);
     });
 
-    testWidgets('In a worktree, top bar shows main repo name on top and worktree chip before branch on bottom',
+    testWidgets('In a worktree, top bar shows server label and worktree chip before branch',
         (tester) async {
       SharedPreferences.setMockInitialValues({'last_seen_changelog': changelog.first.$1});
       final client = HerdrClientService()
@@ -1707,10 +1707,10 @@ void main() {
       await tester.pumpWidget(MaterialApp(home: TerminalScreen(client: client)));
       await tester.pump(const Duration(milliseconds: 300));
 
-      // Terminal AppBar should show main repo name 'herdr-mobile' on top and 'worktree' chip before branch 'feat-login' on bottom
+      // The server label is authoritative even when it matches the checkout folder.
       final appBarFinder = find.byType(AppBar);
       final chipInBar = find.descendant(of: appBarFinder, matching: find.text('worktree'));
-      final repoInBar = find.descendant(of: appBarFinder, matching: find.text('herdr-mobile'));
+      final repoInBar = find.descendant(of: appBarFinder, matching: find.text('worktree-feat-login'));
       final branchInBar = find.descendant(of: appBarFinder, matching: find.text('feat-login'));
 
       expect(chipInBar, findsOneWidget);
@@ -1745,14 +1745,14 @@ void main() {
       expect(find.text('Close'), findsNothing);
     });
 
-    test('A worktree shows its branch until renamed, then its name', () {
+    test('A worktree preserves server labels even when they match a branch slug', () {
       WorkspaceModel tree(String label) => WorkspaceModel.fromJson({
             'workspace_id': 'w2',
             'label': label,
             'git_branch': 'worktree/feat-login',
             'worktree': {'repo_key': 'r', 'is_linked_worktree': true},
           });
-      expect(tree('worktree-feat-login').displayName, 'feat-login');
+      expect(tree('worktree-feat-login').displayName, 'worktree-feat-login');
       expect(tree('login work').displayName, 'login work');
       expect(tree('login work').branchName, 'feat-login');
     });

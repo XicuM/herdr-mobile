@@ -1519,8 +1519,8 @@ class _TerminalScreenState extends State<TerminalScreen> {
                     ],
                     if (branch.isNotEmpty)
                       Flexible(
-                        child: Text(
-                          branch,
+                        child: Text.rich(
+                          TextSpan(text: branch, children: aheadBehind(workspace!)),
                           style: Theme.of(context).textTheme.bodySmall?.copyWith(color: scheme.onSurfaceVariant),
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,

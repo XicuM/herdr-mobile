@@ -1157,11 +1157,12 @@ class HerdrClientService extends ChangeNotifier {
 
   /// POSTs to a route that creates a tab or workspace, then shows its root pane, unless another
   /// machine was put on screen meanwhile.
-  Future<void> _create(String what, String path, Map<String, dynamic> body) async {
-    final m = machine;
-    final res = await _request(what, 'POST', path, body: body);
+  Future<bool> _create(String what, String path, Map<String, dynamic> body, {String? on}) async {
+    final m = on ?? machine;
+    final res = await _request(what, 'POST', path, body: body, on: m);
     final paneId = res is Map ? (res['root_pane']?['pane_id']) : null;
     if (paneId is String && m == machine) selectPane(paneId);
+    return paneId is String && m == machine;
   }
 
   String _parseError(dynamic e) {
@@ -1248,8 +1249,8 @@ class HerdrClientService extends ChangeNotifier {
                 : onError?.call('Could not $what: ${_parseError(body)}'));
   }
 
-  Future<void> renameWorkspace(String workspaceId, String label) =>
-      _request('rename workspace', 'POST', '/api/workspace/$workspaceId/rename', body: {'label': label});
+  Future<void> renameWorkspace(String workspaceId, String label, {String? on}) =>
+      _request('rename workspace', 'POST', '/api/workspace/$workspaceId/rename', body: {'label': label}, on: on);
 
   /// Moves [ids] (a workspace and its linked worktrees) before [beforeId], or to the end when null.
   /// Reorders the local snapshot first so the list doesn't jump back while the request runs.
@@ -1268,17 +1269,18 @@ class HerdrClientService extends ChangeNotifier {
 
   /// A new worktree of a repository's main workspace, on [branch] (checked out if it exists, else made from
   /// the main checkout's HEAD).
-  Future<void> createWorktree(String workspaceId, String branch) =>
-      _create('create worktree', '/api/worktree', {'workspace_id': workspaceId, 'branch': branch});
+  Future<bool> createWorktree(String workspaceId, String branch, {String? on}) =>
+      _create('create worktree', '/api/worktree', {'workspace_id': workspaceId, 'branch': branch}, on: on);
 
-  Future<List<Map<String, dynamic>>> listWorktrees(String workspaceId) async {
-    final res = await _request('list worktrees', 'GET', '/api/worktree', query: {'workspace_id': workspaceId});
+  Future<List<Map<String, dynamic>>?> listWorktrees(String workspaceId, {String? on}) async {
+    final res = await _request('list worktrees', 'GET', '/api/worktree', query: {'workspace_id': workspaceId}, on: on);
+    if (res == null) return null;
     return ((res is Map ? res['worktrees'] : null) as List<dynamic>? ?? []).cast<Map<String, dynamic>>();
   }
 
   /// Opens the worktree checked out at [path] in a workspace of its own, next to its repository's main [workspaceId].
-  Future<void> openWorktree(String workspaceId, String path) =>
-      _create('open worktree', '/api/worktree/open', {'workspace_id': workspaceId, 'path': path});
+  Future<bool> openWorktree(String workspaceId, String path, {String? on}) =>
+      _create('open worktree', '/api/worktree/open', {'workspace_id': workspaceId, 'path': path}, on: on);
 
   @override
   void dispose() {

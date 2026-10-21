@@ -6,6 +6,20 @@ import '../../models/session.dart';
 import '../../models/agent_status.dart';
 import '../../services/herdr_client.dart';
 
+/// What follows a workspace's branch, as in Herdr's sidebar: ↑ the commits to push in green, ↓ the commits to
+/// pull in red; nothing when level with its upstream or without one.
+List<InlineSpan> aheadBehind(WorkspaceModel ws) {
+  InlineSpan count(IconData icon, int n, Color color) => TextSpan(children: [
+        const TextSpan(text: ' '),
+        WidgetSpan(alignment: PlaceholderAlignment.middle, child: Icon(icon, size: 12, color: color)),
+        TextSpan(text: '$n', style: TextStyle(color: color)),
+      ]);
+  return [
+    if ((ws.gitAhead ?? 0) > 0) count(Icons.north, ws.gitAhead!, Colors.green),
+    if ((ws.gitBehind ?? 0) > 0) count(Icons.south, ws.gitBehind!, Colors.red),
+  ];
+}
+
 /// The home screen's drawer, modelled on Herdr's sidebar: each connected machine's workspaces in herdr's order,
 /// with linked worktrees nested, under its name and a + for a new one. Tap one to open its terminal ([open]);
 /// hold it and lift for its actions (or right-click), hold it and drag to reorder it (with its worktrees).
@@ -13,6 +27,9 @@ import '../../services/herdr_client.dart';
 class WorkspaceList extends StatelessWidget {
   final HerdrClientService client;
   final VoidCallback open;
+
+  /// `machine/workspace` of the workspaces whose worktrees are hidden; static so it outlives the drawer.
+  static final collapsed = ValueNotifier<Set<String>>({});
 
   const WorkspaceList({super.key, required this.client, required this.open});
 
@@ -30,65 +47,69 @@ class WorkspaceList extends StatelessWidget {
     }
 
     // [drag] is its index to long-press and drag it by.
-    Widget row(String m, WorkspaceModel ws, {double indent = 0, int? drag}) {
+    Widget row(String m, WorkspaceModel ws, {double indent = 0, int? drag, Widget? trailing}) {
       void menu(Offset p) => at(m, () => showWorkspaceContextMenu(context, client, ws, p, onShow: open));
       final tile = HoldMenu(
-          key: ValueKey('$m/${ws.id}'),
-          onMenu: menu,
-          child: ListTile(
-            key: ValueKey('$m/${ws.id}-tile'),
-            contentPadding: EdgeInsets.only(left: 16 + indent, right: 8),
-            leading: StatusDot(ws.agentStatus, size: 10),
-            minLeadingWidth: 10,
-            title: Text(ws.displayName, maxLines: 1, overflow: TextOverflow.ellipsis),
-            subtitle: ws.isLinkedWorktree || ws.gitBranch == null ? null : Text(ws.gitBranch!, maxLines: 1),
-            onTap: () => at(m, () {
-              client.selectWorkspace(ws.id);
-              open();
-            }),
-          ),
-        );
+        key: ValueKey('$m/${ws.id}'),
+        onMenu: menu,
+        child: ListTile(
+          key: ValueKey('$m/${ws.id}-tile'),
+          contentPadding: EdgeInsets.only(left: 16 + indent, right: 8),
+          leading: StatusDot(ws.agentStatus, size: 10),
+          minLeadingWidth: 10,
+          trailing: trailing,
+          title: Text(ws.displayName, maxLines: 1, overflow: TextOverflow.ellipsis),
+          subtitle: ws.isLinkedWorktree || ws.gitBranch == null
+              ? null
+              : Text.rich(TextSpan(text: ws.gitBranch, children: aheadBehind(ws)), maxLines: 1),
+          onTap: () => at(m, () {
+            client.selectWorkspace(ws.id);
+            open();
+          }),
+        ),
+      );
       return drag == null ? tile : ReorderableDelayedDragStartListener(key: tile.key, index: drag, child: tile);
     }
 
-    return ListView(
-      padding: const EdgeInsets.only(bottom: 16),
-      children: [
-        for (final m in on) ...[
-          // The machine's name, with its + for a new workspace there, opened once herdr has made it.
-          Padding(
-            padding: const EdgeInsets.fromLTRB(16, 8, 4, 0),
-            child: Row(
+    return ValueListenableBuilder<Set<String>>(
+        valueListenable: collapsed,
+        builder: (context, hidden, _) => ListView(
+              padding: const EdgeInsets.only(bottom: 16),
               children: [
-                Expanded(
-                  child: Text(client.nameOf(m),
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: Theme.of(context).textTheme.titleSmall?.copyWith(color: scheme.primary)),
-                ),
-                IconButton(
-                  tooltip: 'New workspace on ${client.nameOf(m)}',
-                  color: scheme.primary,
-                  icon: const Icon(Icons.add),
-                  onPressed: () => at(m, () async {
-                    final before = client.selectedPaneId;
-                    await client.createWorkspace();
-                    if (client.selectedPaneId != before) open();
-                  }),
-                ),
+                for (final m in on) ...[
+                  // The machine's name, with its + for a new workspace there, opened once herdr has made it.
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(16, 8, 4, 0),
+                    child: Row(
+                      children: [
+                        Expanded(
+                          child: Text(client.nameOf(m),
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: Theme.of(context).textTheme.titleSmall?.copyWith(color: scheme.primary)),
+                        ),
+                        IconButton(
+                          tooltip: 'New workspace on ${client.nameOf(m)}',
+                          color: scheme.primary,
+                          icon: const Icon(Icons.add),
+                          onPressed: () => at(m, () async {
+                            final before = client.selectedPaneId;
+                            await client.createWorkspace();
+                            if (client.selectedPaneId != before) open();
+                          }),
+                        ),
+                      ],
+                    ),
+                  ),
+                  _machine(m, row, at, hidden),
+                ],
               ],
-            ),
-          ),
-          _machine(m, row, at),
-        ],
-      ],
-    );
+            ));
   }
 
   /// One machine's workspaces, one block per top-level workspace so it is dragged with its worktrees.
-  Widget _machine(String m,
-      Widget Function(String, WorkspaceModel, {double indent, int? drag}) row,
-      void Function(String, VoidCallback) at) {
+  Widget _machine(String m, Widget Function(String, WorkspaceModel, {double indent, int? drag, Widget? trailing}) row,
+      void Function(String, VoidCallback) at, Set<String> hidden) {
     final blocks = client.snapshotOf(m)!.worktreeBlocks;
     // Indices as ReorderableListView gives them: [to] counts in the order before the move.
     void moveBlock(int from, int to) {
@@ -109,37 +130,49 @@ class WorkspaceList extends StatelessWidget {
           Column(
             key: ValueKey('$m/${block.first.id}'),
             children: [
-              row(m, block.first, drag: blocks.length < 2 ? null : i),
+              row(m, block.first,
+                  drag: blocks.length < 2 ? null : i,
+                  trailing: block.length < 2
+                      ? null
+                      : IconButton(
+                          tooltip: hidden.contains('$m/${block.first.id}') ? 'Show worktrees' : 'Hide worktrees',
+                          icon: Icon(hidden.contains('$m/${block.first.id}') ? Icons.expand_more : Icons.expand_less),
+                          onPressed: () => collapsed.value = {
+                            for (final k in hidden)
+                              if (k != '$m/${block.first.id}') k,
+                            if (!hidden.contains('$m/${block.first.id}')) '$m/${block.first.id}',
+                          },
+                        )),
               // The worktrees reorder among themselves, staying under their workspace.
-              Builder(builder: (context) {
-                final trees = block.sublist(1);
-                void moveTree(int from, int to) {
-                  if (to > from) to--;
-                  if (to == from) return;
-                  final rest = [...trees];
-                  final moved = rest.removeAt(from);
-                  final after = i + 1 < blocks.length ? blocks[i + 1].first.id : null;
-                  at(m, () => client.moveWorkspaces([moved.id], to < rest.length ? rest[to].id : after));
-                }
+              if (!hidden.contains('$m/${block.first.id}'))
+                Builder(builder: (context) {
+                  final trees = block.sublist(1);
+                  void moveTree(int from, int to) {
+                    if (to > from) to--;
+                    if (to == from) return;
+                    final rest = [...trees];
+                    final moved = rest.removeAt(from);
+                    final after = i + 1 < blocks.length ? blocks[i + 1].first.id : null;
+                    at(m, () => client.moveWorkspaces([moved.id], to < rest.length ? rest[to].id : after));
+                  }
 
-                return ReorderableListView(
-                  shrinkWrap: true,
-                  physics: const NeverScrollableScrollPhysics(),
-                  buildDefaultDragHandles: false,
-                  onReorder: moveTree,
-                  children: [
-                    for (final (j, ws) in trees.indexed)
-                      row(m, ws, indent: 24, drag: trees.length < 2 ? null : j),
-                  ],
-                );
-              }),
+                  return ReorderableListView(
+                    shrinkWrap: true,
+                    physics: const NeverScrollableScrollPhysics(),
+                    buildDefaultDragHandles: false,
+                    onReorder: moveTree,
+                    children: [
+                      for (final (j, ws) in trees.indexed) row(m, ws, indent: 24, drag: trees.length < 2 ? null : j),
+                    ],
+                  );
+                }),
             ],
           ),
       ],
     );
   }
 }
- 
+
 /// A workspace's menu, from a hold or a right-click in the drawer or search ([HoldMenu]), as Herdr's sidebar has it:
 /// Rename and Close; Close group for a repository's main workspace with its linked worktrees open (herdr closes
 /// them together); New worktree and Open worktree for a git workspace that isn't a linked worktree; and Delete
@@ -157,6 +190,7 @@ Future<void> showWorkspaceContextMenu(
     if (!ws.isLinkedWorktree && ws.repoKey != null)
       ...?client.snapshotOf(m)?.workspaces.where((w) => w.repoKey == ws.repoKey),
   ];
+  final hasChildren = group.any((w) => w.isLinkedWorktree);
   final isGit = ws.repoKey != null || ws.gitBranch != null;
   PopupMenuItem<String> item(String value, IconData icon, String text, [Color? color]) => PopupMenuItem(
       value: value,
@@ -167,7 +201,7 @@ Future<void> showWorkspaceContextMenu(
     position: RelativeRect.fromLTRB(at.dx, at.dy, at.dx, at.dy),
     items: [
       item('rename', Icons.edit_outlined, 'Rename'),
-      group.length > 1 ? item('group', Icons.close, 'Close group') : item('close', Icons.close, 'Close'),
+      hasChildren ? item('group', Icons.close, 'Close group') : item('close', Icons.close, 'Close'),
       if (isGit && !ws.isLinkedWorktree) ...[
         item('new', Icons.add, 'New worktree'),
         item('open', Icons.call_split, 'Open worktree…'),
@@ -178,28 +212,28 @@ Future<void> showWorkspaceContextMenu(
   if (picked == null || !context.mounted) return;
   switch (picked) {
     case 'rename':
-      final name = await prompt(context, 'Rename workspace', 'Workspace name', initial: ws.displayName);
-      if (name != null) client.renameWorkspace(ws.id, name);
+      final name = await prompt(context, 'Rename workspace', 'Workspace name', initial: ws.label);
+      if (name != null) await client.renameWorkspace(ws.id, name, on: m);
     case 'close':
-      closeWithUndo(context, client, 'Workspace closed', ['$m/${ws.id}'],
-          () => client.deleteWorkspace(ws.id, on: m));
+      closeWithUndo(context, client, 'Workspace closed', ['$m/${ws.id}'], () => client.deleteWorkspace(ws.id, on: m));
     case 'group':
       closeWithUndo(context, client, '${group.length} workspaces closed', [for (final w in group) '$m/${w.id}'],
           () => client.deleteWorkspace(ws.id, closeGroup: true, on: m));
     case 'new':
       final branch = await prompt(context, 'New worktree', 'Branch', hint: 'e.g. feat/my-feature');
-      if (branch != null) client.createWorktree(ws.id, branch).then((_) => onShow?.call());
+      if (branch != null && await client.createWorktree(ws.id, branch, on: m) && context.mounted) {
+        onShow?.call();
+      }
     case 'open':
-      _openWorktree(context, client, ws, onShow);
+      _openWorktree(context, client, ws, m, onShow);
     case 'delete':
-      _deleteCheckout(context, client, ws);
+      _deleteCheckout(context, client, ws, m);
   }
 }
 
 /// Deletes [ws]'s linked worktree checkout (`git worktree remove`; its branch stays) unless undone, closing its
 /// workspace. herdr won't delete a checkout with changes, so that is asked about once it has refused.
-void _deleteCheckout(BuildContext context, HerdrClientService client, WorkspaceModel ws) {
-  final m = client.machine;
+void _deleteCheckout(BuildContext context, HerdrClientService client, WorkspaceModel ws, String m) {
   final navigator = Navigator.of(context, rootNavigator: true); // still there once this screen has gone
   closeWithUndo(context, client, 'Worktree deleted', ['$m/${ws.id}'], () {
     return client.deleteWorkspace(ws.id, removeWorktree: true, on: m, dirty: (reason) async {
@@ -385,18 +419,18 @@ Future<String?> prompt(BuildContext context, String title, String label, {String
 
 /// The linked worktrees of [ws]'s repository (as `git worktree list` has them, less what herdr can't open),
 /// to open one, or show it when it's open already.
-void _openWorktree(BuildContext context, HerdrClientService client, WorkspaceModel ws, VoidCallback? onShow) {
+void _openWorktree(BuildContext context, HerdrClientService client, WorkspaceModel ws, String m, VoidCallback? onShow) {
   // Hoisted, so a rebuild (e.g. a snapshot landing while the dialog is open) can't restart it
   // back into its spinner: a FutureBuilder with an inline future loads forever then.
-  final worktrees = client.listWorktrees(ws.id);
+  final worktrees = client.listWorktrees(ws.id, on: m);
   showDialog(
     context: context,
-    builder: (dialogContext) => FutureBuilder<List<Map<String, dynamic>>>(
+    builder: (dialogContext) => FutureBuilder<List<Map<String, dynamic>>?>(
       future: worktrees,
       builder: (_, result) {
         final list = [
           for (final wt in result.data ?? <Map<String, dynamic>>[])
-            if (wt['is_linked_worktree'] == true && wt['is_bare'] != true && wt['is_prunable'] != true) wt
+            if (wt['is_bare'] != true && wt['is_prunable'] != true) wt
         ];
         return AlertDialog(
           title: const Text('Open worktree'),
@@ -405,31 +439,35 @@ void _openWorktree(BuildContext context, HerdrClientService client, WorkspaceMod
             width: double.maxFinite,
             child: result.connectionState == ConnectionState.waiting
                 ? const SizedBox(height: 100, child: Center(child: CircularProgressIndicator()))
-                : list.isEmpty
-                    ? const Padding(padding: EdgeInsets.symmetric(horizontal: 24), child: Text('No worktrees yet'))
-                    : ListView(
-                        shrinkWrap: true,
-                        children: [
-                          for (final wt in list)
-                            ListTile(
-                              contentPadding: const EdgeInsets.symmetric(horizontal: 24),
-                              leading: const Icon(Icons.call_split),
-                              title: Text((wt['branch']?.toString() ?? 'detached').replaceFirst('worktree/', '')),
-                              subtitle: Text(wt['open_workspace_id'] != null ? 'Open' : wt['path'].toString(),
-                                  overflow: TextOverflow.ellipsis),
-                              onTap: () async {
-                                Navigator.pop(dialogContext);
-                                final open = wt['open_workspace_id'];
-                                if (open is String) {
-                                  client.selectWorkspace(open);
-                                } else {
-                                  await client.openWorktree(ws.id, wt['path'].toString());
-                                }
-                                onShow?.call();
-                              },
-                            ),
-                        ],
-                      ),
+                : result.hasError || result.data == null
+                    ? const Padding(
+                        padding: EdgeInsets.symmetric(horizontal: 24), child: Text('Could not load worktrees'))
+                    : list.isEmpty
+                        ? const Padding(padding: EdgeInsets.symmetric(horizontal: 24), child: Text('No worktrees yet'))
+                        : ListView(
+                            shrinkWrap: true,
+                            children: [
+                              for (final wt in list)
+                                ListTile(
+                                  contentPadding: const EdgeInsets.symmetric(horizontal: 24),
+                                  leading: const Icon(Icons.call_split),
+                                  title: Text(wt['branch']?.toString() ?? wt['label']?.toString() ?? 'detached'),
+                                  subtitle: Text(wt['open_workspace_id'] != null ? 'Open' : wt['path'].toString(),
+                                      overflow: TextOverflow.ellipsis),
+                                  onTap: () async {
+                                    Navigator.pop(dialogContext);
+                                    final open = wt['open_workspace_id'];
+                                    if (open is String) {
+                                      if (client.machine != m) return;
+                                      client.selectWorkspace(open);
+                                    } else {
+                                      if (!await client.openWorktree(ws.id, wt['path'].toString(), on: m)) return;
+                                    }
+                                    onShow?.call();
+                                  },
+                                ),
+                            ],
+                          ),
           ),
           actions: [TextButton(onPressed: () => Navigator.pop(dialogContext), child: const Text('Cancel'))],
         );
