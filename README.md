@@ -119,6 +119,8 @@ launchctl list | grep dev.herdr.bridge        # macOS
 # Start manually in foreground with debug logs
 RUST_LOG=herdr_bridge=debug herdr-bridge --port 7788
 ```
+
+The bridge also serves this machine's Obsidian vaults to the [Obsidian plugin](https://github.com/XicuM/herdr-obsidian) on a phone: a phone vault syncs with the vault of the same name in Obsidian's vault list here (`~/.config/obsidian/obsidian.json`). Nothing to configure.
 </details>
 
 ---
