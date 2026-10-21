@@ -1,5 +1,4 @@
 # Rust
-bridge/target/
 **/*.rs.bk
 
 # Flutter & Dart
@@ -17,7 +16,6 @@ app/build/
 app/.packages
 app/.pub/
 app/.pub-cache/
-deploy/artifacts/
 
 # OS / Editor
 .DS_Store

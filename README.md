@@ -50,30 +50,14 @@
 ```
 
 Herdr Mobile is composed of two minimal, zero-bloat pieces:
-1. **`bridge/`**: A lightweight companion daemon written in Rust (Axum + Tokio). Connects to Herdr's local IPC socket (`herdr.sock`), multiplexes remote machines over SSH, and streams real-time state and PTY sessions over authenticated WebSockets.
+1. **[herdr-bridge](https://github.com/XicuM/herdr-bridge)**: A lightweight companion daemon written in Rust (Axum + Tokio), in its own repository. Connects to Herdr's local IPC socket (`herdr.sock`), multiplexes remote machines over SSH, and streams real-time state and PTY sessions over authenticated WebSockets.
 2. **`app/`**: A native Android Flutter client powered by `xterm.dart` and Material 3 design, delivering smooth terminal interaction and instant alerts.
 
 ---
 
 ## 🚀 Quickstart: Deploying the Bridge
 
-The bridge runs as a lightweight user daemon on your development machine where Herdr is active. It requires **no root / `sudo` privileges**.
-
-### Linux & macOS (Native) / Windows (WSL2)
-
-Run the automated installer from the repository root:
-
-```bash
-./deploy/install.sh
-```
-
-**What this does:**
-1. Installs `herdr-bridge` binary to `~/.local/bin/`.
-2. Generates a secure authorization token at `~/.config/herdr-bridge/token`.
-3. Registers and starts the background user service:
-   - **Linux / WSL2**: User systemd unit (`herdr-bridge.service`).
-   - **macOS**: launchd agent (`dev.herdr.bridge.plist`).
-4. Prints your **Tailscale IP**, **Port (`7788`)**, and **Token** to plug straight into the mobile app.
+The app talks to [**herdr-bridge**](https://github.com/XicuM/herdr-bridge), a user daemon on the machine where Herdr runs (no root needed). Install it from its [releases](https://github.com/XicuM/herdr-bridge/releases) or source with `./deploy/install.sh`; it prints your **Tailscale IP**, **Port (`7788`)** and **Token** to plug into the app.
 
 ---
 
@@ -84,7 +68,7 @@ Run the automated installer from the repository root:
 3. Enter:
    - **Host / IP**: Your Tailscale IP (e.g. `100.x.y.z` or MagicDNS name)
    - **Port**: `7788` (default)
-   - **Token**: The 8-character token printed by `./deploy/install.sh` (or `herdr-bridge --print-token`)
+   - **Token**: The 8-character token printed by the bridge's installer (or `herdr-bridge --print-token`)
 4. That's it! Your active agents and workspaces will sync immediately.
 
 ---
@@ -99,33 +83,11 @@ Herdr Mobile is designed to be secure by default:
 
 ---
 
-## 🛠️ Service Management
-
-<details>
-<summary><b>Useful Bridge Commands</b></summary>
-
-```bash
-# Print your auth token
-herdr-bridge --print-token
-
-# View live service logs
-journalctl --user -u herdr-bridge -f          # Linux / WSL2
-tail -f ~/Library/Logs/herdr-bridge.log       # macOS
-
-# Check service status
-systemctl --user status herdr-bridge          # Linux / WSL2
-launchctl list | grep dev.herdr.bridge        # macOS
-
-# Start manually in foreground with debug logs
-RUST_LOG=herdr_bridge=debug herdr-bridge --port 7788
-```
-
-The bridge also serves this machine's Obsidian vaults to the [Obsidian plugin](https://github.com/XicuM/herdr-obsidian) on a phone: a phone vault syncs with the vault of the same name in Obsidian's vault list here (`~/.config/obsidian/obsidian.json`). Nothing to configure.
-</details>
+Service management, logs and the bridge's Obsidian features are covered in the [herdr-bridge README](https://github.com/XicuM/herdr-bridge#readme).
 
 ---
 
 ## 🤝 Contributing & Development
 
-- **Bridge**: `cargo check`, `cargo test`, `cargo build --release`
+- **Bridge**: now in [herdr-bridge](https://github.com/XicuM/herdr-bridge).
 - **Mobile App**: `flutter analyze`, `flutter test`, `flutter run`

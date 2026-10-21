@@ -1,5 +1,7 @@
 # CLAUDE.md
 
+> The bridge (`bridge/`, `deploy/`) moved to its own repository, https://github.com/XicuM/herdr-bridge, with its routes in `PROTOCOL.md`. The bridge notes below describe it and still apply there; this repo now holds the app.
+
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
 ## What this is
