@@ -971,7 +971,8 @@ class HerdrClientService extends ChangeNotifier {
             panes: panes,
             agents: s.agents.where((a) => panes.any((p) => p.id == a.paneId)).toList(),
           );
-    if (!now.panes.any((p) => p.id == c.selectedPaneId)) {
+    final wasInBefore = before?.panes.any((p) => p.id == c.selectedPaneId) ?? false;
+    if (c.selectedPaneId == null || (wasInBefore && !now.panes.any((p) => p.id == c.selectedPaneId))) {
       // Everything hidden isn't herdr left empty: no new workspace for that.
       c.selectedPaneId = now.panes.isEmpty && s.panes.isNotEmpty ? null : _fallbackPane(m, c.selectedPaneId, before, now);
     }
@@ -1150,7 +1151,7 @@ class HerdrClientService extends ChangeNotifier {
         onError?.call('Could not $what: ${e is SocketException || e is TimeoutException ? _networkError(parentOf(m) ?? m, e) : _parseError(e)}');
       }
     }
-    await _fetchSnapshotHttp(m);
+    unawaited(_fetchSnapshotHttp(m));
     return result;
   }
 
