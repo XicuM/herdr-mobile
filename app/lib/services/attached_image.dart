@@ -1,15 +1,14 @@
 import 'dart:io' show Process;
-import 'dart:math';
 import 'dart:typed_data';
-import 'dart:ui' as ui;
 
-/// An image picked for the message box, normalized for upload: the bridge saves it where the
-/// agent runs and the app sends its path as an `@`-reference, which is plain text every agent
-/// either reads as an image or just sees as a path.
+/// An image picked or pasted for an agent: the bridge saves it where that agent runs and the app
+/// sends its path as an `@`-reference, which is plain text every agent either reads as an image or
+/// just sees as a path.
 class AttachedImage {
-  /// Downscales so the longest side is at most this, in pixels: phone photos are megabytes, and
-  /// the agent downsamples past this anyway.
-  static const maxSide = 1568;
+  /// The bridge's cap on one upload (`uploads::MAX_BYTES`). Nothing here shrinks an image to fit it:
+  /// the engine can only re-encode PNG, which for a photo is bigger than the JPEG it came from, and
+  /// the agent downsamples what it reads anyway. An image this big is refused instead.
+  static const maxBytes = 10 * 1024 * 1024;
 
   /// The image type of [bytes] by magic, or null when they are no PNG, JPEG, GIF or WebP image.
   static String? mimeOf(Uint8List bytes) {
@@ -60,50 +59,27 @@ class AttachedImage {
     final wayland = await _tool(const ['wl-paste', '--list-types']);
     if (wayland != null) {
       final pick = pickClipboardType(String.fromCharCodes(wayland));
-      if (pick != null) return _tool(['wl-paste', '-t', pick]);
+      if (pick != null) return _image(await _tool(['wl-paste', '-t', pick]));
       return null;
     }
     final x11 = await _tool(const ['xclip', '-selection', 'clipboard', '-t', 'TARGETS', '-o']);
     if (x11 != null) {
       final pick = pickClipboardType(String.fromCharCodes(x11));
-      if (pick != null) return _tool(['xclip', '-selection', 'clipboard', '-t', pick, '-o']);
+      if (pick != null) return _image(await _tool(['xclip', '-selection', 'clipboard', '-t', pick, '-o']));
     }
     return null;
   }
 
-  /// Returns [bytes] with its mime when they are an image fitting [maxSide], else a PNG scaled
-  /// down to it. Throws when the bytes decode as no image; callers report that instead of
-  /// uploading garbage.
-  static Future<(Uint8List, String)> normalize(Uint8List bytes, {int maxSide = AttachedImage.maxSide}) async {
+  /// [bytes] when they are an image, else null: an `application/octet-stream` offer can be anything,
+  /// and what isn't an image is left to the field's own paste.
+  static Uint8List? _image(Uint8List? bytes) => bytes != null && mimeOf(bytes) != null ? bytes : null;
+
+  /// [bytes] as they are, with their mime: what was copied is what the agent gets to read, at the
+  /// size it was copied. Throws when they are no PNG, JPEG, GIF or WebP image, or bigger than the
+  /// bridge takes, which callers report instead of uploading.
+  static (Uint8List, String) uploadable(Uint8List bytes) {
     final mime = mimeOf(bytes) ?? (throw StateError('Not a PNG, JPEG, GIF or WebP image.'));
-    final codec = await ui.instantiateImageCodec(bytes);
-    final frame = await codec.getNextFrame();
-    final image = frame.image;
-    try {
-      if (max(image.width, image.height) <= maxSide) return (bytes, mime);
-      final scale = maxSide / max(image.width, image.height);
-      final width = (image.width * scale).round();
-      final height = (image.height * scale).round();
-      final recorder = ui.PictureRecorder();
-      final canvas = ui.Canvas(recorder);
-      canvas.drawImageRect(
-        image,
-        ui.Rect.fromLTWH(0, 0, image.width.toDouble(), image.height.toDouble()),
-        ui.Rect.fromLTWH(0, 0, width.toDouble(), height.toDouble()),
-        ui.Paint()..filterQuality = ui.FilterQuality.medium,
-      );
-      final picture = recorder.endRecording();
-      final scaled = await picture.toImage(width, height);
-      try {
-        final data = await scaled.toByteData(format: ui.ImageByteFormat.png);
-        final png = data?.buffer.asUint8List();
-        if (png == null || png.isEmpty) throw StateError('Could not encode the image as PNG.');
-        return (png, 'image/png');
-      } finally {
-        scaled.dispose();
-      }
-    } finally {
-      image.dispose();
-    }
+    if (bytes.length > maxBytes) throw StateError('Image is over 10 MB.');
+    return (bytes, mime);
   }
 }

@@ -156,6 +156,16 @@ class _TerminalScreenState extends State<TerminalScreen> {
 
   KeyEventResult _onTermKeyEvent(FocusNode node, KeyEvent event) {
     if (event is! KeyDownEvent && event is! KeyRepeatEvent) return KeyEventResult.ignored;
+    if (event is KeyDownEvent &&
+        event.logicalKey == LogicalKeyboardKey.keyV &&
+        (HardwareKeyboard.instance.isControlPressed || HardwareKeyboard.instance.isMetaPressed) &&
+        !Platform.isAndroid &&
+        !Platform.isIOS) {
+      // An image goes in as its `@`-reference, text as a paste; handled here so xterm's own paste
+      // doesn't ask the clipboard again ([_pasteIntoTerminal]).
+      _pasteIntoTerminal();
+      return KeyEventResult.handled;
+    }
     if (event.logicalKey == LogicalKeyboardKey.enter || event.logicalKey == LogicalKeyboardKey.numpadEnter) {
       final isShift = HardwareKeyboard.instance.isShiftPressed ||
           HardwareKeyboard.instance.isLogicalKeyPressed(LogicalKeyboardKey.shift) ||
@@ -465,7 +475,7 @@ class _TerminalScreenState extends State<TerminalScreen> {
     if (text.isEmpty) {
       channel?.sendInput('\r');
     } else {
-      channel?.sendInput(_terminal.bracketedPasteMode ? '\x1b[200~$text\x1b[201~' : text);
+      channel?.sendInput('\x1b[200~$text\x1b[201~');
       // An Enter in the same read as the paste is taken as part of it (Claude Code), so send it apart.
       // Dropped if the pane was switched meanwhile: its channel is closed.
       Future.delayed(const Duration(milliseconds: 150), () {
@@ -489,10 +499,9 @@ class _TerminalScreenState extends State<TerminalScreen> {
     SharedPreferences.getInstance().then((p) => p.setStringList('recent_commands', _recentCommands));
   }
 
-  /// Picks an image, uploads it to the active machine's bridge ([HerdrClientService.uploadImage]),
-  /// and puts its `@`-reference in the message box to review and send: the agent reads the file, and
-  /// any agent without file references just sees a path. The box's draft stays.
+  /// Picks an image and uploads it as an `@`-reference for the box ([_uploadImage]).
   Future<void> _attachImage() async {
+    if (_uploadingImage) return;
     const images = XTypeGroup(label: 'images', extensions: ['png', 'jpg', 'jpeg', 'gif', 'webp']);
     late final XFile? file;
     try {
@@ -502,17 +511,12 @@ class _TerminalScreenState extends State<TerminalScreen> {
     }
     if (file == null || !mounted) return; // picked nothing
     late final Uint8List bytes;
-    late final String mime;
     try {
-      (bytes, mime) = await AttachedImage.normalize(await file.readAsBytes());
+      bytes = await file.readAsBytes();
     } catch (e) {
       return _imageError('Could not read that image ($e).');
     }
-    final path = await widget.client.uploadImage(bytes, mime);
-    if (path == null || !mounted) return; // reported through onError
-    final cur = _message.text;
-    final next = cur.isEmpty ? '@$path ' : '${cur.endsWith(' ') ? cur : '$cur '}@$path ';
-    _message.value = TextEditingValue(text: next, selection: TextSelection.collapsed(offset: next.length));
+    await _uploadImage(bytes, failure: 'Could not attach that image');
   }
 
   void _imageError(String message) {
@@ -520,30 +524,62 @@ class _TerminalScreenState extends State<TerminalScreen> {
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(message)));
   }
 
-  bool _pastingImage = false; // a clipboard-image paste in flight; repeat Ctrl+V waits
+  bool _uploadingImage = false; // an upload in flight: the attach button shows it, another waits
 
-  /// Pastes a clipboard image, if one is there, as an `@`-reference like [_attachImage] but
-  /// without the picker. Only runs when the field has no text to paste, so the two never
-  /// double-insert; disconnected, there is nothing to upload to, and the field pastes alone.
+  /// Uploads [bytes] to the active machine's bridge ([HerdrClientService.uploadImage]) and puts the
+  /// `@`-reference it answers in the box, or types it into the pane's own prompt when [intoTerminal]:
+  /// nothing binary ever reaches a pane, the agent opens the file. [failure] starts the error shown.
+  Future<void> _uploadImage(Uint8List bytes, {required String failure, bool intoTerminal = false}) async {
+    if (_uploadingImage) return;
+    setState(() => _uploadingImage = true);
+    try {
+      final (image, mime) = AttachedImage.uploadable(bytes);
+      final path = await widget.client.uploadImage(image, mime);
+      if (path == null || !mounted) return; // reported through onError
+      if (intoTerminal) {
+        _pasteFromClipboard('@$path ');
+        return;
+      }
+      final cur = _message.text;
+      final next = cur.isEmpty ? '@$path ' : '${cur.endsWith(' ') ? cur : '$cur '}@$path ';
+      _message.value = TextEditingValue(text: next, selection: TextSelection.collapsed(offset: next.length));
+    } catch (e) {
+      _imageError('$failure ($e).');
+    } finally {
+      if (mounted) setState(() => _uploadingImage = false);
+    }
+  }
+
+  /// Pastes an image from the clipboard into the box as an `@`-reference ([_uploadImage]); text is
+  /// left to the field's own paste, so the two never double-insert. The clipboard tools' types are
+  /// read first, and [Clipboard.getData] is not asked at all: an image has no text to find, and that
+  /// ask is a round trip through the desktop's clipboard to whoever owns it.
   void _pasteClipboardImage() {
-    if (_pastingImage || !widget.client.connected) return;
-    _pastingImage = true;
+    if (_uploadingImage || !widget.client.connected) return;
     () async {
       try {
-        final clip = await Clipboard.getData(Clipboard.kTextPlain);
-        if (clip?.text?.isNotEmpty ?? false) return; // text: the field pastes it
         final bytes = await AttachedImage.readClipboardImage();
-        if (bytes == null || !mounted) return; // no image (or no tool): nothing to paste
-        final (image, mime) = await AttachedImage.normalize(bytes);
-        final path = await widget.client.uploadImage(image, mime);
-        if (path == null || !mounted) return; // reported through onError
-        final cur = _message.text;
-        final next = cur.isEmpty ? '@$path ' : '${cur.endsWith(' ') ? cur : '$cur '}@$path ';
-        _message.value = TextEditingValue(text: next, selection: TextSelection.collapsed(offset: next.length));
+        if (bytes == null || !mounted) return; // text (or nothing): the field pastes it
+        await _uploadImage(bytes, failure: 'Could not paste that image');
       } catch (e) {
         _imageError('Could not paste that image ($e).');
-      } finally {
-        _pastingImage = false;
+      }
+    }();
+  }
+
+  /// Ctrl+V in the terminal: an image on the clipboard goes in as its `@`-reference, anything else as
+  /// text. The key is handled here so it never reaches xterm's own paste, which would ask the
+  /// clipboard for text a second time.
+  void _pasteIntoTerminal() {
+    if (!widget.client.connected) return;
+    () async {
+      try {
+        final bytes = await AttachedImage.readClipboardImage();
+        if (!mounted) return;
+        if (bytes != null) return await _uploadImage(bytes, failure: 'Could not paste that image', intoTerminal: true);
+        _pasteFromClipboard((await Clipboard.getData(Clipboard.kTextPlain))?.text);
+      } catch (e) {
+        _imageError('Could not paste that image ($e).');
       }
     }();
   }
@@ -1026,10 +1062,12 @@ class _TerminalScreenState extends State<TerminalScreen> {
   }
 
   /// Pastes clipboard text as one bracketed paste (like the message box), then Enter is left to the user.
+  /// Always bracketed: herdr's frames never carry the pane's `?2004h`, so our terminal can't know the
+  /// mode, while herdr drops the markers itself for a pane that didn't ask for them.
   void _pasteFromClipboard(String? text) {
     if (text == null || text.isEmpty) return;
-    _toLive();
-    _ptyChannel?.sendInput(_terminal.bracketedPasteMode ? '\x1b[200~$text\x1b[201~' : text);
+    if (_controller.selection != null) _controller.clearSelection(); // as xterm's own paste does
+    _send('\x1b[200~$text\x1b[201~');
   }
 
   /// Selects the visible screen, like xterm's own Select-all action.
@@ -2107,9 +2145,14 @@ class _TerminalScreenState extends State<TerminalScreen> {
                                 suffixIcon: _showingHistory
                                     ? null
                                     : IconButton(
-                                        tooltip: 'Attach image',
-                                        icon: const Icon(Icons.image_outlined),
-                                        onPressed: _attachImage,
+                                        tooltip: _uploadingImage ? 'Uploading image…' : 'Attach image',
+                                        icon: _uploadingImage
+                                            ? const SizedBox.square(
+                                                dimension: 18,
+                                                child: CircularProgressIndicator(strokeWidth: 2),
+                                              )
+                                            : const Icon(Icons.image_outlined),
+                                        onPressed: _uploadingImage ? null : _attachImage,
                                       ),
                               ),
                             ),
