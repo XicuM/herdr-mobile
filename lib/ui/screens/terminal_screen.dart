@@ -338,11 +338,11 @@ class _TerminalScreenState extends State<TerminalScreen> {
         return true;
       }
       if (key == LogicalKeyboardKey.arrowUp) {
-        if (event is! KeyUpEvent) client.previousWorkspace();
+        if (event is! KeyUpEvent) client.stepAgent(-1);
         return true;
       }
       if (key == LogicalKeyboardKey.arrowDown) {
-        if (event is! KeyUpEvent) client.nextWorkspace();
+        if (event is! KeyUpEvent) client.stepAgent(1);
         return true;
       }
       if (key == LogicalKeyboardKey.escape) {

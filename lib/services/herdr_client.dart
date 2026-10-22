@@ -749,30 +749,6 @@ class HerdrClientService extends ChangeNotifier {
     if (tab != null) selectTab(tab);
   }
 
-  /// Selects the previous workspace on the active machine.
-  void previousWorkspace() {
-    final workspaces = snapshot?.workspaces ?? [];
-    if (workspaces.isEmpty) return;
-    final currentWsId = selectedPane?.workspaceId;
-    final idx = workspaces.indexWhere((w) => w.id == currentWsId);
-    if (idx > 0) {
-      selectWorkspace(workspaces[idx - 1].id);
-    }
-  }
-
-  /// Selects the next workspace on the active machine.
-  void nextWorkspace() {
-    final workspaces = snapshot?.workspaces ?? [];
-    if (workspaces.isEmpty) return;
-    final currentWsId = selectedPane?.workspaceId;
-    final idx = workspaces.indexWhere((w) => w.id == currentWsId);
-    if (idx >= 0 && idx < workspaces.length - 1) {
-      selectWorkspace(workspaces[idx + 1].id);
-    } else if (idx == -1) {
-      selectWorkspace(workspaces.first.id);
-    }
-  }
-
   /// Selects the previous tab in the active workspace.
   void previousTab() {
     final pane = selectedPane;

@@ -2488,10 +2488,10 @@ void main() {
       client.selectTabAt(1);
       expect(client.selectedPaneId, 'p2');
 
-      // Workspace navigation
-      client.nextWorkspace();
+      // Workspace selection
+      client.selectWorkspace('w2');
       expect(client.selectedPaneId, 'p3');
-      client.previousWorkspace();
+      client.selectWorkspace('w1');
       expect(client.selectedPaneId, 'p1');
 
       // Attention jump
@@ -2523,6 +2523,7 @@ void main() {
       });
       client.setMachines(['127.0.0.1:7788'], []);
       client.setSnapshotForTesting(snap);
+      client.setConnectedForTesting('127.0.0.1:7788', true);
       client.selectPane('p1');
 
       var searchOpened = false;
@@ -2561,9 +2562,16 @@ void main() {
       await tester.pump();
       expect(client.selectedPaneId, 'p2');
 
-      // Alt + Down -> next workspace
+      // Alt + Down -> next agent (from a plain shell, the first one)
       await tester.sendKeyDownEvent(LogicalKeyboardKey.altLeft);
       await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
+      await tester.sendKeyUpEvent(LogicalKeyboardKey.altLeft);
+      await tester.pump();
+      expect(client.selectedPaneId, 'p1');
+
+      // Alt + Up -> previous agent, wrapping around
+      await tester.sendKeyDownEvent(LogicalKeyboardKey.altLeft);
+      await tester.sendKeyEvent(LogicalKeyboardKey.arrowUp);
       await tester.sendKeyUpEvent(LogicalKeyboardKey.altLeft);
       await tester.pump();
       expect(client.selectedPaneId, 'p3');

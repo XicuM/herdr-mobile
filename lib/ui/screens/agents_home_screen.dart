@@ -149,11 +149,17 @@ class _AgentsHomeScreenState extends State<AgentsHomeScreen> {
       return true;
     }
     if (key == LogicalKeyboardKey.arrowUp) {
-      if (event is! KeyUpEvent) client.previousWorkspace();
+      if (event is! KeyUpEvent) {
+        client.stepAgent(-1);
+        if (client.selectedPaneId != null && !_isWide(context)) _openTerminal(context);
+      }
       return true;
     }
     if (key == LogicalKeyboardKey.arrowDown) {
-      if (event is! KeyUpEvent) client.nextWorkspace();
+      if (event is! KeyUpEvent) {
+        client.stepAgent(1);
+        if (client.selectedPaneId != null && !_isWide(context)) _openTerminal(context);
+      }
       return true;
     }
     if (key == LogicalKeyboardKey.arrowLeft) {
