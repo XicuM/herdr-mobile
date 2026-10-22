@@ -7,7 +7,7 @@ import '../../models/agent_status.dart';
 import '../../services/herdr_client.dart';
 
 /// What follows a workspace's branch, as in Herdr's sidebar: ↑ the commits to push in green, ↓ the commits to
-/// pull in red; nothing when level with its upstream or without one.
+/// pull in red (a linked worktree without an upstream counts against the main checkout); nothing when level.
 List<InlineSpan> aheadBehind(WorkspaceModel ws) {
   InlineSpan count(IconData icon, int n, Color color) => TextSpan(children: [
         const TextSpan(text: ' '),
@@ -58,7 +58,9 @@ class WorkspaceList extends StatelessWidget {
           leading: StatusDot(ws.agentStatus, size: 10),
           minLeadingWidth: 10,
           trailing: trailing,
-          title: Text(ws.displayName, maxLines: 1, overflow: TextOverflow.ellipsis),
+          // A linked worktree is named after its branch, so its ↑↓ follow its name.
+          title: Text.rich(TextSpan(text: ws.displayName, children: ws.isLinkedWorktree ? aheadBehind(ws) : null),
+              maxLines: 1, overflow: TextOverflow.ellipsis),
           subtitle: ws.isLinkedWorktree || ws.gitBranch == null
               ? null
               : Text.rich(TextSpan(text: ws.gitBranch, children: aheadBehind(ws)), maxLines: 1),
