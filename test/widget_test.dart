@@ -1258,6 +1258,35 @@ void main() {
       expect(client.changedAt('w1:p1'), at);
     });
 
+    test('When an agent changed survives a restart while its seq is the one saved', () async {
+      SharedPreferences.setMockInitialValues({});
+      SessionSnapshot snap(int seq, String status) => SessionSnapshot.fromJson({
+            'panes': [
+              {'pane_id': 'w1:p1', 'workspace_id': 'w1', 'tab_id': 'w1:t1', 'agent_status': status}
+            ],
+            'agents': [
+              {'agent': 'claude', 'pane_id': 'w1:p1', 'status': status, 'state_change_seq': seq}
+            ],
+          });
+      final first = HerdrClientService()..configure('10.0.0.1:7788', connect: false);
+      first.setSnapshotForTesting(snap(1, 'working'));
+      first.setSnapshotForTesting(snap(2, 'done'));
+      final at = first.changedAt('w1:p1')!;
+      await Future<void>.delayed(Duration.zero);
+      final prefs = await SharedPreferences.getInstance();
+      HerdrClientService restarted() => HerdrClientService()
+        ..load(prefs)
+        ..configure('10.0.0.1:7788', connect: false);
+
+      // Viewed meanwhile (done → idle, same seq): still the same change.
+      final viewed = restarted()..setSnapshotForTesting(snap(2, 'idle'));
+      expect(viewed.changedAt('w1:p1')?.millisecondsSinceEpoch, at.millisecondsSinceEpoch);
+
+      // It changed while the app was closed: when is unknown.
+      final moved = restarted()..setSnapshotForTesting(snap(5, 'working'));
+      expect(moved.changedAt('w1:p1'), isNull);
+    });
+
     test('Agent titles lose their agent tags, and the agent is named by its program', () {
       String title(String t) => PaneModel.fromJson({'terminal_title_stripped': t, 'cwd': '/src/my-repo'}).terminalTitle;
       expect(title('OC | Fix scroll'), 'Fix scroll');

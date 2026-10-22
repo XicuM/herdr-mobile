@@ -46,7 +46,7 @@ class _Conn {
 
   /// Per pane, its agent's last `state_change_seq` (0 when herdr sends none), its status and when this
   /// app saw that change: herdr has no timestamps. Null for an agent already there in the first snapshot,
-  /// whose last change the app never saw.
+  /// whose last change the app never saw, unless it is still the one saved before ([HerdrClientService._saved]).
   final changes = <String, (int, String, DateTime?)>{};
 }
 
@@ -79,6 +79,11 @@ class HerdrClientService extends ChangeNotifier {
 
   /// Panes that never raise an alert, as `machine/pane_id`.
   Set<String> _muted = {};
+
+  /// The [_Conn.changes] that have a time, as `machine/pane_id`, kept across restarts (pref `agent_changes`).
+  /// A machine's first snapshot takes a time back only while the agent's seq (without seqs, its status) is
+  /// still the saved one: otherwise it changed while the app wasn't looking, or herdr reused the pane's id.
+  Map<String, (int, String, DateTime)> _saved = {};
   bool _keyBar = false;
   VolumeKeys _volumeKeys = VolumeKeys.fontSize;
   bool _pinchZoom = true;
@@ -360,6 +365,11 @@ class HerdrClientService extends ChangeNotifier {
     _hideMessageTerminal = p.getBool('hide_message_terminal') ?? false;
     _enterBehavior = EnterBehavior.values.asNameMap()[p.getString('enter_behavior')] ?? EnterBehavior.newline;
     _muted = (p.getStringList('muted_panes') ?? []).toSet();
+    _saved = {
+      for (final s in p.getStringList('agent_changes') ?? [])
+        if (s.split('\t') case [final k, final seq, final status, final ms])
+          k: (int.parse(seq), status, DateTime.fromMillisecondsSinceEpoch(int.parse(ms)))
+    };
     final alerts = p.getBool('background_alerts');
     alerts == null ? setAlerts(true) : _alerts = alerts;
     _alertBlocked = p.getBool('alert_blocked') ?? true;
@@ -937,8 +947,31 @@ class HerdrClientService extends ChangeNotifier {
       // A higher seq is a change; an older snapshot landing late (lower seq) isn't. Nor is `done` turning
       // `idle` when the pane is viewed: herdr leaves the seq as it was. Without seqs, a new status is.
       if (was == null || seq > was.$1 || seq == 0 && a.status != was.$2) {
-        c.changes[a.paneId] = (seq, a.status, before == null ? null : DateTime.now());
+        final kept = _saved['$m/${a.paneId}'];
+        c.changes[a.paneId] = (
+          seq,
+          a.status,
+          before != null
+              ? DateTime.now()
+              : kept != null && kept.$1 == seq && (seq != 0 || kept.$2 == a.status)
+                  ? kept.$3
+                  : null
+        );
       }
+    }
+    final saved = {..._saved}
+      ..removeWhere((k, _) => k.substring(0, k.lastIndexOf('/')) == m)
+      ..addAll({
+        for (final MapEntry(:key, :value) in c.changes.entries)
+          if (value.$3 case final at?) '$m/$key': (value.$1, value.$2, at)
+      });
+    if (saved.length != _saved.length || saved.entries.any((e) => _saved[e.key] != e.value)) {
+      _saved = saved;
+      final list = [
+        for (final MapEntry(:key, :value) in saved.entries)
+          '$key\t${value.$1}\t${value.$2}\t${value.$3.millisecondsSinceEpoch}'
+      ];
+      SharedPreferences.getInstance().then((p) => p.setStringList('agent_changes', list));
     }
     // A pane id has no slash, so the key's machine is all before its last one.
     final gone =
