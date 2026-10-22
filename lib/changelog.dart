@@ -1,6 +1,13 @@
 /// Newest first. Shown once after an update; add an entry when bumping the version in pubspec.yaml.
 const changelog = <(String, List<String>)>[
   (
+    '1.18.0',
+    [
+      'Agents can send you files (herdr-bridge send, bridge 0.4.0): an alert with Install or Open, and a card above the agent\'s message box. An APK opens the installer.',
+      'The agents list shows a file an agent sent under its name until you open or dismiss it.',
+    ]
+  ),
+  (
     '1.17.1',
     [
       'A tab whose agent is waiting on background monitors shows it in its ring, as the agents list does.',
