@@ -25,8 +25,8 @@ flutter run
 ```
 
 ### 3. Connect to Herdr
-1. On each computer running Herdr, start the bridge ([herdr-bridge](https://github.com/XicuM/herdr-bridge)'s `deploy/install.sh` sets it up as a service); it listens on the computer's Tailscale IP, port 7788.
-2. Open the app on your phone and tap **Add a machine**.
-3. Enter the computer's Tailscale IP or MagicDNS name (add `:port` if it isn't 7788), optionally a name, and tap **Add & connect**.
+1. On each computer running Herdr, start the bridge ([herdr-bridge](https://github.com/XicuM/herdr-bridge)'s `plugin/install.sh --bridge` sets it up as a service); it listens on `127.0.0.1:7788`, and `tailscale serve` brings the tailnet to it.
+2. Run `plugin/install.sh --phone` there, open the app on your phone and tap **Add a machine**.
+3. Scan its pairing QR code with the scan button in **Address** (or paste its link there, or type the computer's Tailscale IP or MagicDNS name and the token), optionally a name, and tap **Add**.
 4. Allow notifications and background use when asked. The app stays connected in the background (shown as an ongoing notification) and alerts you when an agent needs you or finishes.
 5. To stop a machine's connection and save battery, tap the machine chip in the top bar and turn its switch off.

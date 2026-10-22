@@ -19,6 +19,11 @@ import android.os.Build
 import android.os.IBinder
 import android.os.PowerManager
 import android.provider.Settings
+import com.google.android.gms.common.moduleinstall.ModuleInstall
+import com.google.android.gms.common.moduleinstall.ModuleInstallRequest
+import com.google.mlkit.vision.barcode.common.Barcode
+import com.google.mlkit.vision.codescanner.GmsBarcodeScannerOptions
+import com.google.mlkit.vision.codescanner.GmsBarcodeScanning
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.embedding.engine.FlutterEngineCache
 import io.flutter.embedding.engine.dart.DartExecutor
@@ -86,6 +91,7 @@ class HerdrApp : Application() {
                 "askBattery" -> askBattery()
                 "openNotificationSettings" -> openNotificationSettings()
                 "isIgnoringBatteryOptimizations" -> return@setMethodCallHandler result.success(isIgnoringBatteryOptimizations())
+                "scan" -> return@setMethodCallHandler scan(result)
                 // Material You's accent, from the wallpaper (Android 12+).
                 "sdk" -> return@setMethodCallHandler result.success(Build.VERSION.SDK_INT)
                 "systemColor" -> return@setMethodCallHandler result.success(
@@ -95,6 +101,19 @@ class HerdrApp : Application() {
         }
         engine.dartExecutor.executeDartEntrypoint(DartExecutor.DartEntrypoint.createDefault())
         FlutterEngineCache.getInstance().put(ENGINE, engine)
+    }
+
+    /** A QR code's text, read by Play services' own scanner (no camera permission here); null if cancelled. */
+    private fun scan(result: MethodChannel.Result) {
+        val activity = activity ?: return result.error("scan", "The app isn't on screen", null)
+        val options = GmsBarcodeScannerOptions.Builder().setBarcodeFormats(Barcode.FORMAT_QR_CODE).build()
+        val scanner = GmsBarcodeScanning.getClient(activity, options)
+        // An APK from GitHub isn't installed by Play, so Play services may not have fetched the scanner yet.
+        ModuleInstall.getClient(this).installModules(ModuleInstallRequest.newBuilder().addApi(scanner).build())
+            .onSuccessTask { scanner.startScan() }
+            .addOnSuccessListener { result.success(it.rawValue) }
+            .addOnCanceledListener { result.success(null) }
+            .addOnFailureListener { result.error("scan", it.message, null) }
     }
 
     /** Shows [status] (title, text) in the ongoing notification, starting the service; null stops it. */

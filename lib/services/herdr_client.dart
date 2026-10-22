@@ -134,6 +134,9 @@ class HerdrClientService extends ChangeNotifier {
   /// Fails harmlessly off Android (e.g. in tests).
   void _native(String method, [Object? args]) => _android.invokeMethod(method, args).ignore();
 
+  /// A QR code's text from Play services' scanner (Android only); null if cancelled. Throws when it can't scan.
+  Future<String?> scanQr() => _android.invokeMethod<String>('scan');
+
   int? _sdk;
 
   /// Android 13+ confirms a copy itself, so the app shouldn't too.

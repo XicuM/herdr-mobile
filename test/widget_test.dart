@@ -869,6 +869,18 @@ void main() {
       await tester.tap(find.byTooltip('Add machine'));
       await settle();
       expect(find.text('Add'), findsOneWidget);
+
+      // The pairing link install.sh --phone shows, pasted into Address, fills in the whole form.
+      await tester.enterText(find.widgetWithText(TextField, 'Address'),
+          'herdrmobile://pair?to=100.64.0.7:7788&token=K3MF9QXA&name=pi');
+      await tester.pump();
+      expect(find.text('100.64.0.7:7788'), findsOneWidget);
+      expect(find.widgetWithText(TextField, 'pi'), findsOneWidget);
+      await tester.tap(find.text('Add'));
+      await settle();
+      expect(client.machines, contains('100.64.0.7:7788'));
+      expect(client.tokenOf('100.64.0.7:7788'), 'K3MF9QXA');
+      expect(client.nameOf('100.64.0.7:7788'), 'pi');
     });
 
     test('Moving a machine keeps those a bridge reaches under it', () {

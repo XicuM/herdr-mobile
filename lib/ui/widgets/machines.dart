@@ -1,3 +1,4 @@
+import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import '../../services/herdr_client.dart';
@@ -328,6 +329,28 @@ class _MachineScreenState extends State<MachineScreen> {
     client.configure(to, name: name.text.trim(), token: key);
   }
 
+  /// Fills the form from a pairing link, `herdrmobile://pair?to=host:port&token=…&name=…` as `install.sh
+  /// --phone` shows it, scanned or pasted into Address. Leaves it alone for anything else.
+  void _pair(String text) {
+    final uri = Uri.tryParse(text.trim());
+    if (uri == null || uri.scheme != 'herdrmobile' || uri.host != 'pair') return;
+    final q = uri.queryParameters;
+    address.text = q['to'] ?? '';
+    token.text = _dashed(_tokenChars(q['token'] ?? ''));
+    if (name.text.isEmpty) name.text = q['name'] ?? '';
+  }
+
+  Future<void> _scan() async {
+    try {
+      final text = await client.scanQr();
+      if (text != null && mounted) _pair(text);
+    } on PlatformException catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text("Couldn't scan (${e.message}): type the address and token instead")));
+    }
+  }
+
   Future<void> _remove() async {
     final ok = await showDialog<bool>(
       context: context,
@@ -480,11 +503,17 @@ class _MachineScreenState extends State<MachineScreen> {
                   controller: address,
                   autofocus: m == null,
                   keyboardType: TextInputType.url,
-                  decoration: const InputDecoration(
+                  onChanged: _pair,
+                  decoration: InputDecoration(
                     labelText: 'Address',
-                    prefixIcon: Icon(Icons.lan_outlined),
-                    helperText: 'Tailscale IP or name; add :port if not 7788',
-                    border: OutlineInputBorder(),
+                    prefixIcon: const Icon(Icons.lan_outlined),
+                    suffixIcon: Platform.isAndroid
+                        ? IconButton(icon: const Icon(Icons.qr_code_scanner), tooltip: 'Scan QR code', onPressed: _scan)
+                        : null,
+                    helperText: 'Tailscale IP or name; add :port if not 7788. Or paste or scan the pairing link '
+                        'from install.sh --phone',
+                    helperMaxLines: 2,
+                    border: const OutlineInputBorder(),
                   ),
                 ),
                 const SizedBox(height: 16),

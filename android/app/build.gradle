@@ -52,3 +52,8 @@ android {
 flutter {
     source = "../.."
 }
+
+dependencies {
+    // Play services' own QR scanner: no camera permission, and the scanning itself lives in Play services.
+    implementation "com.google.android.gms:play-services-code-scanner:16.1.0"
+}

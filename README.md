@@ -57,7 +57,7 @@ Herdr Mobile is composed of two minimal, zero-bloat pieces:
 
 ## 🚀 Quickstart: Deploying the Bridge
 
-The app talks to [**herdr-bridge**](https://github.com/XicuM/herdr-bridge), a user daemon on the machine where Herdr runs (no root needed). Install it from its [releases](https://github.com/XicuM/herdr-bridge/releases) or source with `./deploy/install.sh`; it prints your **Tailscale IP**, **Port (`7788`)** and **Token** to plug into the app.
+The app talks to [**herdr-bridge**](https://github.com/XicuM/herdr-bridge), a user daemon on the machine where Herdr runs (no root needed). Install it from its [releases](https://github.com/XicuM/herdr-bridge/releases) or source with `./plugin/install.sh` (also a herdr plugin: `herdr plugin install XicuM/herdr-bridge/plugin`); `install.sh --phone` then shows a QR code that pairs the app with it.
 
 ---
 
@@ -65,7 +65,7 @@ The app talks to [**herdr-bridge**](https://github.com/XicuM/herdr-bridge), a us
 
 1. Grab the latest APK from the [**Releases**](https://github.com/XicuM/herdr-mobile/releases) page (a Linux desktop build, `herdr-mobile-linux-{x86_64,aarch64}.tar.gz`, is there too).
 2. Open the app, tap the **Machines** icon (top right) ➔ **Add Bridge**.
-3. Enter:
+3. Scan the pairing QR code from `install.sh --phone` with the scan button in **Address** (or paste its link there), or enter:
    - **Host / IP**: Your Tailscale IP (e.g. `100.x.y.z` or MagicDNS name)
    - **Port**: `7788` (default)
    - **Token**: The 8-character token printed by the bridge's installer (or `herdr-bridge --print-token`)
