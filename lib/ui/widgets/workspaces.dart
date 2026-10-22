@@ -233,32 +233,29 @@ Future<void> showWorkspaceContextMenu(
   }
 }
 
-/// Deletes [ws]'s linked worktree checkout (`git worktree remove`; its branch stays) unless undone, closing its
-/// workspace. herdr won't delete a checkout with changes, so that is asked about once it has refused.
-void _deleteCheckout(BuildContext context, HerdrClientService client, WorkspaceModel ws, String m) {
+/// Deletes [ws]'s linked worktree checkout (`git worktree remove`; its branch stays), asking first and closing
+/// its workspace once it has gone, with no Undo: a checkout gone is gone. Since herdr says a checkout is dirty
+/// only by refusing it, the one question warns of that and the removal is forced after it.
+void _deleteCheckout(BuildContext context, HerdrClientService client, WorkspaceModel ws, String m) async {
   final navigator = Navigator.of(context, rootNavigator: true); // still there once this screen has gone
-  closeWithUndo(context, client, 'Worktree deleted', ['$m/${ws.id}'], () {
-    return client.deleteWorkspace(ws.id, removeWorktree: true, on: m, dirty: (reason) async {
-      if (!navigator.mounted) return;
-      final error = Theme.of(navigator.context).colorScheme.error;
-      final sure = await showDialog<bool>(
-        context: navigator.context,
-        builder: (dialogContext) => AlertDialog(
-          title: Text('Delete ${ws.displayName} anyway?'),
-          content: Text('$reason\n\nDirty or untracked files will be permanently deleted. The branch is kept.'),
-          actions: [
-            TextButton(onPressed: () => Navigator.pop(dialogContext), child: const Text('Keep')),
-            TextButton(
-              style: TextButton.styleFrom(foregroundColor: error),
-              onPressed: () => Navigator.pop(dialogContext, true),
-              child: const Text('Delete anyway'),
-            ),
-          ],
+  final sure = await showDialog<bool>(
+    context: navigator.context,
+    builder: (dialogContext) => AlertDialog(
+      title: Text('Delete ${ws.displayName}?'),
+      content: const Text('Its checkout is removed, and anything uncommitted in it is lost for good. '
+          'Its branch is kept.'),
+      actions: [
+        TextButton(onPressed: () => Navigator.pop(dialogContext, false), child: const Text('Keep')),
+        TextButton(
+          style: TextButton.styleFrom(foregroundColor: Theme.of(dialogContext).colorScheme.error),
+          onPressed: () => Navigator.pop(dialogContext, true),
+          child: const Text('Delete'),
         ),
-      );
-      if (sure == true) client.deleteWorkspace(ws.id, removeWorktree: true, force: true, on: m);
-    });
-  });
+      ],
+    ),
+  );
+  if (sure != true) return;
+  await client.deleteWorkspace(ws.id, removeWorktree: true, force: true, on: m);
 }
 
 OverlayEntry? _activeUndoEntry;

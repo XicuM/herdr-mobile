@@ -1297,9 +1297,8 @@ class HerdrClientService extends ChangeNotifier {
   /// Sends one request to [on]'s bridge (the active machine's by default), then refreshes that machine's snapshot (also on
   /// failure, which may have changed something, or undoes [moveTab]'s or [moveWorkspaces]'s local reorder). Failures go
   /// to [onError] as "Could not [what]". Returns the decoded response, or null on failure.
-  /// [refused], when given, gets the body of a refusal in place of [onError].
   Future<dynamic> _request(String what, String method, String path,
-      {Map<String, dynamic>? body, Map<String, String>? query, String? on, void Function(String)? refused}) async {
+      {Map<String, dynamic>? body, Map<String, String>? query, String? on}) async {
     final m = on ?? machine;
     dynamic result;
     try {
@@ -1314,11 +1313,7 @@ class HerdrClientService extends ChangeNotifier {
       result = res.body.isEmpty ? null : jsonDecode(res.body);
     } catch (e) {
       debugPrint('$method $m$path failed: $e');
-      if (refused != null && e is String) {
-        refused(e);
-      } else {
-        onError?.call('Could not $what: ${e is SocketException || e is TimeoutException ? _networkError(parentOf(m) ?? m, e) : _parseError(e)}');
-      }
+      onError?.call('Could not $what: ${e is SocketException || e is TimeoutException ? _networkError(parentOf(m) ?? m, e) : _parseError(e)}');
     }
     unawaited(_fetchSnapshotHttp(m));
     return result;
@@ -1399,23 +1394,17 @@ class HerdrClientService extends ChangeNotifier {
 
   /// Closes a workspace, or with [closeGroup] a repository's main workspace with its linked worktrees' (herdr
   /// refuses to close it alone), or with [removeWorktree] deletes a linked worktree's checkout, which herdr
-  /// refuses while it has changes unless [force]d; [dirty] gets herdr's reason then. A checkout's branch stays.
+  /// refuses while it has changes unless [force]d (the caller asks, since herdr's reason for refusing is the
+  /// only sign of that). A checkout's branch stays.
   Future<void> deleteWorkspace(String workspaceId,
-      {bool closeGroup = false, bool removeWorktree = false, bool force = false, String? on, void Function(String)? dirty}) {
-    final what = removeWorktree ? 'delete worktree' : 'close workspace';
+      {bool closeGroup = false, bool removeWorktree = false, bool force = false, String? on}) {
     final query = {
       if (closeGroup) 'close_group': 'true',
       if (removeWorktree) 'remove_worktree': 'true',
       if (force) 'force': 'true',
     };
-    return _request(what, 'DELETE', '/api/workspace/$workspaceId',
-        query: query.isEmpty ? null : query,
-        on: on,
-        refused: dirty == null
-            ? null
-            : (body) => body.contains('dirty_worktree_requires_force')
-                ? dirty(_parseError(body))
-                : onError?.call('Could not $what: ${_parseError(body)}'));
+    return _request(removeWorktree ? 'delete worktree' : 'close workspace', 'DELETE', '/api/workspace/$workspaceId',
+        query: query.isEmpty ? null : query, on: on);
   }
 
   Future<void> renameWorkspace(String workspaceId, String label, {String? on}) =>
