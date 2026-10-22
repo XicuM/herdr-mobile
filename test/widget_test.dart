@@ -1972,6 +1972,34 @@ void main() {
       expect(legacy.highestPercent, equals(0.4));
     });
 
+    testWidgets('TerminalScreen tab shows a monitoring agent as monitoring, as the list does', (tester) async {
+      final client = HerdrClientService();
+      client.setSnapshotForTesting(SessionSnapshot.fromJson({
+        'focused_workspace_id': 'w1',
+        'focused_tab_id': 'w1:t1',
+        'focused_pane_id': 'w1:p1',
+        'workspaces': [
+          {'workspace_id': 'w1', 'number': 1, 'label': 'main', 'active_tab_id': 'w1:t1', 'agent_status': 'idle'},
+        ],
+        'tabs': [
+          {'tab_id': 'w1:t1', 'workspace_id': 'w1', 'number': 1, 'label': 'Tab 1', 'agent_status': 'idle'},
+        ],
+        'panes': [
+          {'pane_id': 'w1:p1', 'workspace_id': 'w1', 'tab_id': 'w1:t1', 'focused': true, 'agent_status': 'idle'},
+        ],
+        'agents': [
+          {'name': 'claude', 'pane_id': 'w1:p1', 'agent_status': 'idle', 'monitoring': true},
+        ],
+      }));
+      client.selectPane('w1:p1');
+
+      await tester.pumpWidget(MaterialApp(home: TerminalScreen(client: client)));
+      await tester.pump(const Duration(milliseconds: 300));
+
+      final tabAvatar = tester.widgetList<AgentAvatar>(find.byType(AgentAvatar)).firstWhere((a) => a.status != null);
+      expect(tabAvatar.status, 'monitoring');
+    });
+
     testWidgets('TerminalScreen message box has quota bolt button that opens usage sheet', (tester) async {
       final client = HerdrClientService();
       final snap = SessionSnapshot.fromJson({

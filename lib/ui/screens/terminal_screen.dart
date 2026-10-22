@@ -1701,7 +1701,13 @@ class _TerminalScreenState extends State<TerminalScreen> {
                                         padding: const EdgeInsets.symmetric(horizontal: 8),
                                         child: Row(
                                           children: [
-                                            AgentAvatar(name: tabAgent?.name ?? '', radius: 7.5, status: t.agentStatus),
+                                            // herdr's `idle` is `monitoring` while the agent waits on monitors, as in the list.
+                                            AgentAvatar(
+                                                name: tabAgent?.name ?? '',
+                                                radius: 7.5,
+                                                status: t.agentStatus == 'idle' && tabAgent?.monitoring == true
+                                                    ? 'monitoring'
+                                                    : t.agentStatus),
                                             const SizedBox(width: 6),
                                             Expanded(
                                               child: Text(
