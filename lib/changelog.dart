@@ -1,6 +1,16 @@
 /// Newest first. Shown once after an update; add an entry when bumping the version in pubspec.yaml.
 const changelog = <(String, List<String>)>[
   (
+    '1.17.0',
+    [
+      'Pair a machine from the herdrmobile://pair link that install.sh --phone shows: paste it in the Address field, or scan its QR code (Android).',
+      'Branches show ↑ commits to push and ↓ to pull, in the drawer, the search results and the terminal\'s top bar; a workspace can hide its worktrees.',
+      'Images paste into the terminal with Ctrl+V and are sent as they were copied, without re-encoding.',
+      'With text selected, Ctrl+C copies it; Alt+Up and Alt+Down step through agents.',
+      'Dragging a tab shows a line where it will land, and an agent keeps its change time across restarts.',
+    ]
+  ),
+  (
     '1.16.0',
     [
       'The workspaces menu mirrors herdr\'s own sidebar: rename, close or close group, new/open worktree, and delete worktree checkout.',
