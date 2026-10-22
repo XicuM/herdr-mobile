@@ -1,6 +1,12 @@
 /// Newest first. Shown once after an update; add an entry when bumping the version in pubspec.yaml.
 const changelog = <(String, List<String>)>[
   (
+    '1.17.1',
+    [
+      'A tab whose agent is waiting on background monitors shows it in its ring, as the agents list does.',
+    ]
+  ),
+  (
     '1.17.0',
     [
       'Pair a machine from the herdrmobile://pair link that install.sh --phone shows: paste it in the Address field, or scan its QR code (Android).',
