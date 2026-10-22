@@ -1749,11 +1749,18 @@ class _TerminalScreenState extends State<TerminalScreen> {
                                             child: Container(
                                               key: j == i ? _currentTab : null,
                                               width: 168,
-                                              decoration: over.isNotEmpty
-                                                  ? BoxDecoration(color: scheme.secondaryContainer, borderRadius: top)
-                                                  : j == i
-                                                      ? BoxDecoration(color: background, borderRadius: top)
-                                                      : null,
+                                              decoration:
+                                                  j == i ? BoxDecoration(color: background, borderRadius: top) : null,
+                                              // A line where the dragged tab will land: past this one when it comes
+                                              // from the left, before it when from the right.
+                                              foregroundDecoration: switch (over.firstOrNull) {
+                                                final id? => BoxDecoration(
+                                                    border: tabs.indexWhere((t) => t.id == id) < j
+                                                        ? Border(right: BorderSide(color: scheme.primary, width: 3))
+                                                        : Border(left: BorderSide(color: scheme.primary, width: 3)),
+                                                  ),
+                                                null => null,
+                                              },
                                               child: InkWell(
                                                 customBorder: const RoundedRectangleBorder(borderRadius: top),
                                                 onTap: () => client.selectTab(t.id),
