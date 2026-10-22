@@ -1344,6 +1344,33 @@ void main() {
       expect(working.displayStatus, 'working');
     });
 
+    testWidgets('The ongoing notification counts monitoring agents apart from idle', (tester) async {
+      SharedPreferences.setMockInitialValues({});
+      final statuses = <Map<dynamic, dynamic>>[];
+      tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(const MethodChannel('herdr/android'),
+          (call) async {
+        if (call.method == 'status' && call.arguments != null) {
+          statuses.add(Map<dynamic, dynamic>.from(call.arguments as Map));
+        }
+        return null;
+      });
+      final client = HerdrClientService()
+        ..setMachines(['10.0.0.1:7788'], [])
+        ..setAlerts(true, ask: false)
+        ..setConnectedForTesting('10.0.0.1:7788', true);
+      client.setSnapshotForTesting(
+          SessionSnapshot.fromJson({
+            'agents': [
+              {'name': 'coder', 'pane_id': 'w1:p1', 'status': 'idle', 'monitoring': true},
+              {'name': 'ui', 'pane_id': 'w1:p2', 'status': 'idle'},
+              {'name': 'api', 'pane_id': 'w1:p3', 'status': 'idle'},
+            ],
+          }),
+          '10.0.0.1:7788');
+      expect(client.summaryOf('10.0.0.1:7788'), '1 monitoring · 2 idle');
+      expect(statuses.last['title'], '1 agent monitoring');
+    });
+
     testWidgets('Agent avatar shows status ring and no StatusDot on AgentsHomeScreen', (tester) async {
       SharedPreferences.setMockInitialValues({'last_seen_changelog': changelog.first.$1});
       final client = HerdrClientService()

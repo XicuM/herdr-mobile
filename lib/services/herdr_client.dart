@@ -262,12 +262,13 @@ class HerdrClientService extends ChangeNotifier {
     final counts = <String, int>{};
     for (final a in snapshotOf(m)?.agents ?? <AgentModel>[]) {
       // `done` lasts only until the pane is viewed: it is idle all the same.
-      final status = a.status == 'done' ? 'idle' : a.status;
+      final status = a.displayStatus == 'done' ? 'idle' : a.displayStatus;
       counts[status] = (counts[status] ?? 0) + 1;
     }
     final text = [
       if (counts['blocked'] case final n?) '$n ${n == 1 ? 'needs' : 'need'} you',
       if (counts['working'] case final n?) '$n working',
+      if (counts['monitoring'] case final n?) '$n monitoring',
       if (counts['idle'] case final n?) '$n idle',
     ].join(' · ');
     return text.isEmpty ? 'No agents' : text;
@@ -453,6 +454,7 @@ class HerdrClientService extends ChangeNotifier {
     final agents = [for (final m in on.where(isConnected)) ...?snapshotOf(m)?.agents];
     final blocked = agents.where((a) => a.status == 'blocked').length;
     final working = agents.where((a) => a.status == 'working').length;
+    final monitoring = agents.where((a) => a.displayStatus == 'monitoring').length;
     _native('status', {
       'title': !on.any(isConnected)
           ? 'Reconnecting…'
@@ -460,9 +462,11 @@ class HerdrClientService extends ChangeNotifier {
               ? '$blocked ${blocked == 1 ? 'agent needs' : 'agents need'} you'
               : working > 0
                   ? '$working ${working == 1 ? 'agent' : 'agents'} working'
-                  : agents.isEmpty
-                      ? 'No agents running'
-                      : 'All agents idle',
+                  : monitoring > 0
+                      ? '$monitoring ${monitoring == 1 ? 'agent' : 'agents'} monitoring'
+                      : agents.isEmpty
+                          ? 'No agents running'
+                          : 'All agents idle',
       'text': [
         for (final m in on) '${nameOf(m)}: ${isConnected(m) ? summaryOf(m) : errorOf(m) ?? 'reconnecting…'}'
       ].join('\n'),
