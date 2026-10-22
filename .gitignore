@@ -52,7 +52,3 @@ app.*.map.json
 /android/app/src/main/java/io/flutter/plugins/GeneratedPluginRegistrant.java
 
 .vscode/
-
-# Bridge build output (the bridge lives in its own repository) and release artifacts
-bridge/target/
-deploy/artifacts/
