@@ -79,6 +79,7 @@ class _TerminalScreenState extends State<TerminalScreen> {
   PtyChannel? _ptyChannel;
   bool _stale = false; // the pane hasn't streamed for a while: the screen is its last frame, dimmed
   bool _termBusy = false; // another client holds the pane: herdr refused the attach, retrying slowly
+  bool _allFiles = false; // every file the agent sent is listed, not only the newest
   bool _takeOver = false; // steal the pane on the next attach, asked once through the banner below
   Timer? _staleTimer;
   late final AppLifecycleListener _lifecycle;
@@ -1498,6 +1499,49 @@ class _TerminalScreenState extends State<TerminalScreen> {
     return null;
   }
 
+  /// A file the agent sent: its name and what it is, and Install (an APK, on Android) or Open, which
+  /// downloads it first, showing how far.
+  Widget _deliveryCard(Delivery d, ColorScheme scheme) {
+    final text = Theme.of(context).textTheme;
+    return Container(
+      color: scheme.surfaceContainerHigh,
+      padding: const EdgeInsets.fromLTRB(12, 6, 4, 6),
+      child: Row(
+        children: [
+          Icon(d.isApk ? Icons.android : Icons.insert_drive_file_outlined, color: scheme.onSurfaceVariant),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(d.name, maxLines: 1, overflow: TextOverflow.ellipsis, style: text.titleSmall),
+                Text(d.detail,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: text.bodySmall?.copyWith(color: scheme.onSurfaceVariant)),
+              ],
+            ),
+          ),
+          const SizedBox(width: 8),
+          ValueListenableBuilder<double?>(
+            valueListenable: d.progress,
+            builder: (context, progress, _) => progress != null
+                ? SizedBox(width: 72, child: LinearProgressIndicator(value: progress))
+                : FilledButton.tonal(
+                    onPressed: () => widget.client.openDelivery(d),
+                    child: Text(d.isApk && Platform.isAndroid ? 'Install' : 'Open'),
+                  ),
+          ),
+          IconButton(
+            tooltip: 'Dismiss',
+            icon: const Icon(Icons.close, size: 20),
+            onPressed: () => widget.client.dismissDelivery(d),
+          ),
+        ],
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final client = widget.client;
@@ -2016,6 +2060,25 @@ class _TerminalScreenState extends State<TerminalScreen> {
                       ],
                     ),
             ),
+            // Files the agent sent (herdr-bridge send), above the box until opened or dismissed: the newest,
+            // and the others behind "N more".
+            ...() {
+              final files = client.deliveriesOf(client.machine, pane?.id).reversed.toList();
+              return [
+                for (final d in _allFiles ? files : files.take(1)) _deliveryCard(d, scheme),
+                if (files.length > 1)
+                  Container(
+                    color: scheme.surfaceContainerHigh,
+                    alignment: Alignment.centerLeft,
+                    padding: const EdgeInsets.only(left: 4),
+                    child: TextButton.icon(
+                      onPressed: () => setState(() => _allFiles = !_allFiles),
+                      icon: Icon(_allFiles ? Icons.expand_less : Icons.expand_more, size: 18),
+                      label: Text(_allFiles ? 'Show fewer' : '${files.length - 1} more'),
+                    ),
+                  ),
+              ];
+            }(),
             // Two places to type: the message box, or the terminal itself with the control keys in the
             // box's place. The box leads with the control keys' button, which brings the keys without
             // the keyboard; the keys lead with the box's button back, and end with the keyboard's,

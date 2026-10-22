@@ -17,6 +17,43 @@ enum VolumeKeys { fontSize, arrows, volume }
 /// [send] sends the message (Shift+Enter inserts a new line).
 enum EnterBehavior { newline, send }
 
+/// A file an agent sent the user (`herdr-bridge send`), offered on its pane until opened or dismissed.
+class Delivery {
+  Delivery(this.machine, Map<String, dynamic> json)
+      : id = json['id'],
+        name = json['name'],
+        size = json['size'] ?? 0,
+        mime = json['mime'] ?? 'application/octet-stream',
+        title = json['title'],
+        paneId = json['pane_id'];
+
+  /// The bridge it came from, which serves it at `/api/deliveries/[id]`.
+  final String machine;
+  final String id, name, mime;
+  final int size;
+  final String? title;
+
+  /// The sending agent's pane; null for an agent in another herdr session, offered on every pane.
+  final String? paneId;
+
+  /// How much has arrived (0–1) while downloading, else null.
+  final progress = ValueNotifier<double?>(null);
+
+  /// Where it was saved, so opening it again doesn't fetch it again.
+  String? path;
+
+  bool get isApk => mime == 'application/vnd.android.package-archive';
+
+  String get sizeLabel => size >= 1 << 20
+      ? '${(size / (1 << 20)).toStringAsFixed(1)} MB'
+      : size >= 1 << 10
+          ? '${(size / (1 << 10)).round()} KB'
+          : '$size B';
+
+  /// The title, then its size: what the alert and the card say under its name.
+  String get detail => [if (title?.isNotEmpty == true) title!, sizeLabel].join(' · ');
+}
+
 /// One machine's `/ws/session` link, its last snapshot, and the pane last viewed on it.
 class _Conn {
   WebSocketChannel? channel;
@@ -93,6 +130,9 @@ class HerdrClientService extends ChangeNotifier {
   bool _disposed = false;
   final _conns = <String, _Conn>{};
 
+  /// Files agents sent, oldest first, across machines ([deliveriesOf]).
+  final _deliveries = <Delivery>[];
+
   /// HerdrApp.kt: the ongoing status notification, alerts, and taps on them.
   static const _android = MethodChannel('herdr/android');
 
@@ -107,8 +147,12 @@ class HerdrClientService extends ChangeNotifier {
       }
       if (call.method != 'open') return;
       final String m = call.arguments['machine'];
+      final String pane = call.arguments['pane'];
       if (m != machine && _machines.contains(m)) switchMachine(m);
-      if (m == machine) selectPane(call.arguments['pane']);
+      if (m == machine && pane.isNotEmpty) selectPane(pane);
+      // A delivery's alert's Install/Open button.
+      final delivery = _deliveries.where((d) => d.id == call.arguments['delivery']).firstOrNull;
+      if (delivery != null) openDelivery(delivery);
     });
     _native('ready');
     _loadSystemSeed();
@@ -903,6 +947,8 @@ class HerdrClientService extends ChangeNotifier {
       } else if (type == 'error') {
         _conns[m]?.error = data['error'].toString();
         notifyListeners();
+      } else if (type == 'delivery') {
+        _delivered(Delivery(m, data));
       }
     } catch (e) {
       debugPrint('Error parsing session WS message: $e');
@@ -920,6 +966,7 @@ class HerdrClientService extends ChangeNotifier {
     // completion count, which would hold back its "Finished" alerts.
     c.completions.removeWhere((id, _) => !snapshot.panes.any((p) => p.id == id));
     c.changes.removeWhere((id, _) => !snapshot.agents.any((a) => a.paneId == id));
+    _deliveries.removeWhere((d) => d.machine == m && d.paneId != null && !snapshot.panes.any((p) => p.id == d.paneId));
     for (final a in snapshot.agents) {
       final was = c.changes[a.paneId];
       final seq = a.stateChangeSeq ?? 0;
@@ -1126,6 +1173,116 @@ class HerdrClientService extends ChangeNotifier {
         }
       }
     }
+  }
+
+  /// Files sent to [paneId] on [m], oldest first: its agent's, and those of agents in another herdr session.
+  List<Delivery> deliveriesOf(String m, String? paneId) =>
+      _deliveries.where((d) => d.machine == m && (d.paneId == null || d.paneId == paneId)).toList();
+
+  void dismissDelivery(Delivery d) {
+    _deliveries.remove(d);
+    _native('cancel', {'key': '${d.machine}/delivery/${d.id}'});
+    notifyListeners();
+  }
+
+  /// Offers a file an agent sent on its pane and, unless that pane is on screen or muted, alerts with a
+  /// button that opens it. The bridge sends none to the app on its own machine, which already has the file.
+  void _delivered(Delivery d) {
+    final m = d.machine;
+    _deliveries.add(d);
+    notifyListeners();
+    final watching = m == machine && WidgetsBinding.instance.lifecycleState == AppLifecycleState.resumed;
+    if (!_alerts || watching && (d.paneId == null || d.paneId == selectedPaneId)) return;
+    if (d.paneId != null && _muted.contains('$m/${d.paneId}')) return;
+    final snap = snapshotOf(m);
+    final pane = snap?.panes.where((p) => p.id == d.paneId).firstOrNull;
+    final agentName = snap?.agents.where((a) => a.paneId == d.paneId).firstOrNull?.name ?? '';
+    final who = agentName.isEmpty ? 'An agent' : agentName[0].toUpperCase() + agentName.substring(1);
+    final title = '$who sent ${d.name}';
+    final place = [if (pane != null) snap!.placeOf(pane), nameOf(m)].where((s) => s.isNotEmpty).join(' · ');
+    if (Platform.isAndroid) {
+      final iconBytes = agentIconBytes(agentName);
+      _native('alert', {
+        'key': '$m/delivery/${d.id}',
+        'title': title,
+        'text': d.detail,
+        'place': place,
+        'machine': m,
+        'pane': d.paneId ?? '',
+        'urgent': false,
+        'delivery': d.id,
+        'action': d.isApk ? 'Install' : 'Open',
+        if (iconBytes != null) 'icon': iconBytes,
+      });
+    } else if (Platform.isLinux && _alertDesktop) {
+      Process.run('notify-send', ['-a', 'Herdr', '-i', agentIconPath(agentName) ?? 'document-save', title, '${d.detail}\n$place'])
+          .ignore();
+    }
+  }
+
+  /// Downloads [d] (once) and opens it: on Android with the app for its type, the installer for an APK;
+  /// on Linux it is saved to the Downloads folder and opened from there.
+  Future<void> openDelivery(Delivery d) async {
+    if (d.progress.value != null) return;
+    try {
+      var path = d.path;
+      if (path == null || !File(path).existsSync()) {
+        d.progress.value = 0;
+        path = d.path = await _download(d);
+      }
+      if (Platform.isAndroid) {
+        await _android.invokeMethod('openFile', {'path': path, 'mime': d.mime});
+      } else {
+        await Process.run('xdg-open', [path]);
+      }
+    } catch (e) {
+      onError?.call('Could not open ${d.name}: ${e is PlatformException ? e.message : _parseError(e)}');
+    } finally {
+      d.progress.value = null;
+    }
+  }
+
+  Future<String> _download(Delivery d) async {
+    final String dir;
+    if (Platform.isAndroid) {
+      // The app's cache, which its FileProvider shares with the app that opens it. Only the files still
+      // offered are kept: an APK runs to tens of MB.
+      dir = (await _android.invokeMethod<String>('deliveriesDir'))!;
+      final kept = {for (final o in _deliveries) o.path};
+      for (final f in Directory(dir).listSync()) {
+        if (!kept.contains(f.path)) f.deleteSync();
+      }
+    } else {
+      final xdg = await Process.run('xdg-user-dir', ['DOWNLOAD']).then((r) => (r.stdout as String).trim(), onError: (_) => '');
+      dir = xdg.isNotEmpty ? xdg : '${Platform.environment['HOME']}/Downloads';
+    }
+    // A bridge's name for it never holds a slash, but a name is no path to trust.
+    final name = d.name.replaceAll('/', '_');
+    var file = File('$dir/$name');
+    final dot = name.lastIndexOf('.');
+    for (var i = 1; !Platform.isAndroid && file.existsSync(); i++) {
+      file = File('$dir/${dot > 0 ? '${name.substring(0, dot)} ($i)${name.substring(dot)}' : '$name ($i)'}');
+    }
+    final req = http.Request('GET', Uri.parse('http://${d.machine}/api/deliveries/${d.id}'))
+      ..headers.addAll(headersOf(d.machine));
+    final res = await req.send();
+    if (res.statusCode != 200) throw await res.stream.bytesToString();
+    final sink = file.openWrite();
+    var got = 0;
+    try {
+      await for (final chunk in res.stream) {
+        sink.add(chunk);
+        got += chunk.length;
+        d.progress.value = d.size > 0 ? got / d.size : 1;
+      }
+      await sink.close();
+    } catch (_) {
+      // Half a file isn't left behind.
+      await sink.close().catchError((_) {});
+      if (file.existsSync()) file.deleteSync();
+      rethrow;
+    }
+    return file.path;
   }
 
   Future<void> _fetchSnapshotHttp(String m) async {

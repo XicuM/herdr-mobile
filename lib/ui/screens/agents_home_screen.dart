@@ -893,6 +893,8 @@ class _AgentsHomeScreenState extends State<AgentsHomeScreen> {
       if (pane != null) snapshot.placeOf(pane),
       if (showMachine) client.nameOf(machine),
     ].where((p) => p.isNotEmpty).join(' · ');
+    // A file it sent leads the line until opened or dismissed, as a chat's last message does.
+    final file = client.deliveriesOf(machine, agent.paneId).where((d) => d.paneId == agent.paneId).lastOrNull;
 
     // What a swipe does, drawn under the row: its colour, with its icon and label at the edge it leaves.
     Widget behind(Color bg, Color fg, IconData icon, String label, bool start) => ColoredBox(
@@ -955,9 +957,19 @@ class _AgentsHomeScreenState extends State<AgentsHomeScreen> {
             maxLines: 1,
             overflow: TextOverflow.ellipsis,
             style: theme.textTheme.titleMedium?.copyWith(fontWeight: needsYou ? FontWeight.bold : null)),
-        subtitle: place.isNotEmpty
-            ? Text(
-                place,
+        subtitle: place.isNotEmpty || file != null
+            ? Text.rich(
+                TextSpan(children: [
+                  if (file != null) ...[
+                    WidgetSpan(
+                      alignment: PlaceholderAlignment.middle,
+                      child: Icon(Icons.attach_file, size: 14, color: scheme.onSurfaceVariant),
+                    ),
+                    TextSpan(text: file.name, style: const TextStyle(fontWeight: FontWeight.w600)),
+                    if (place.isNotEmpty) const TextSpan(text: ' · '),
+                  ],
+                  TextSpan(text: place),
+                ]),
                 style: theme.textTheme.bodySmall?.copyWith(color: scheme.onSurfaceVariant),
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,

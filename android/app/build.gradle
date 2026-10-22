@@ -56,4 +56,6 @@ flutter {
 dependencies {
     // Play services' own QR scanner: no camera permission, and the scanning itself lives in Play services.
     implementation "com.google.android.gms:play-services-code-scanner:16.1.0"
+    // FileProvider, which shares a file an agent sent with the app that opens it.
+    implementation "androidx.core:core:1.13.1"
 }

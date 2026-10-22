@@ -123,6 +123,25 @@ void main() {
       expect(snapshot.placeOf(snapshot.panes[2]), equals('backend'));
     });
 
+    test('A delivery parses from the bridge message, with or without a title and pane', () {
+      final apk = Delivery('host:7788', {
+        'type': 'delivery',
+        'id': '045efe2bbdc0c1c1',
+        'name': 'app-release.apk',
+        'size': 61022208,
+        'mime': 'application/vnd.android.package-archive',
+        'title': 'Debug build',
+        'pane_id': 'w1:p2',
+      });
+      expect(apk.isApk, isTrue);
+      expect(apk.paneId, 'w1:p2');
+      expect(apk.detail, 'Debug build · 58.2 MB');
+      final pdf = Delivery('host:7788', {'id': 'a', 'name': 'r.pdf', 'size': 3000, 'mime': 'application/pdf', 'title': null, 'pane_id': null});
+      expect(pdf.isApk, isFalse);
+      expect(pdf.paneId, isNull);
+      expect(pdf.detail, '3 KB');
+    });
+
     test('AgentStatus enum mapping works', () {
       expect(AgentStatus.fromString('blocked'), equals(AgentStatus.blocked));
       expect(AgentStatus.fromString('working'), equals(AgentStatus.working));

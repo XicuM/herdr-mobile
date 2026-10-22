@@ -44,10 +44,10 @@ class MainActivity : FlutterActivity() {
         app.askBattery()
     }
 
-    /** A tapped alert carries the machine and pane to open. */
+    /** A tapped alert carries the machine and pane to open, and its button a file an agent sent. */
     private fun open(intent: Intent) {
         val machine = intent.getStringExtra("machine") ?: return
         intent.removeExtra("machine")
-        app.open(machine, intent.getStringExtra("pane") ?: return)
+        app.open(machine, intent.getStringExtra("pane") ?: return, intent.getStringExtra("delivery"))
     }
 }

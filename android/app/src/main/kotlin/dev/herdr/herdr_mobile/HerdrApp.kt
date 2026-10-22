@@ -8,6 +8,7 @@ import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
 import android.app.Service
+import android.content.ActivityNotFoundException
 import android.content.ContentResolver
 import android.content.Intent
 import android.content.pm.PackageManager
@@ -19,6 +20,7 @@ import android.os.Build
 import android.os.IBinder
 import android.os.PowerManager
 import android.provider.Settings
+import androidx.core.content.FileProvider
 import com.google.android.gms.common.moduleinstall.ModuleInstall
 import com.google.android.gms.common.moduleinstall.ModuleInstallRequest
 import com.google.mlkit.vision.barcode.common.Barcode
@@ -28,6 +30,7 @@ import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.embedding.engine.FlutterEngineCache
 import io.flutter.embedding.engine.dart.DartExecutor
 import io.flutter.plugin.common.MethodChannel
+import java.io.File
 
 /**
  * Runs the Flutter engine with the process instead of the activity, so the Dart side keeps its bridge
@@ -41,7 +44,7 @@ class HerdrApp : Application() {
     var serviceRunning = false
     private var status: Pair<String, String>? = null
     private var dartReady = false
-    private var pendingOpen: Map<String, String>? = null
+    private var pendingOpen: Map<String, String?>? = null
     private val nm get() = getSystemService(NOTIFICATION_SERVICE) as NotificationManager
 
     override fun onCreate() {
@@ -73,6 +76,7 @@ class HerdrApp : Application() {
                 NotificationChannel(STATUS, "Connection", NotificationManager.IMPORTANCE_MIN),
                 blockedChannel,
                 finishedChannel,
+                NotificationChannel(FILES, "Files from agents", NotificationManager.IMPORTANCE_HIGH),
             ))
         }
         val engine = FlutterEngine(this)
@@ -85,7 +89,12 @@ class HerdrApp : Application() {
                     call.argument<String>("key")!!, call.argument<String>("title")!!, call.argument<String>("text")!!,
                     call.argument<String>("place")!!, call.argument<String>("machine")!!, call.argument<String>("pane")!!,
                     call.argument<Boolean>("urgent")!!, call.argument<ByteArray>("icon"),
+                    call.argument<String>("delivery"), call.argument<String>("action"),
                 )
+                "deliveriesDir" -> return@setMethodCallHandler result.success(
+                    File(cacheDir, "deliveries").apply { mkdirs() }.path)
+                "openFile" -> return@setMethodCallHandler openFile(
+                    call.argument<String>("path")!!, call.argument<String>("mime")!!, result)
                 "cancel" -> nm.cancel(call.argument<String>("key").hashCode())
                 "askPermissions" -> askPermissions()
                 "askBattery" -> askBattery()
@@ -150,13 +159,31 @@ class HerdrApp : Application() {
         .build()
 
     /**
-     * One alert per [key] (machine/pane): a newer one replaces it. Tapping opens that pane. [place] goes in
-     * the header, and the agent's logo is the large icon, the only one shown on the collapsed row.
+     * Opens a downloaded file (in the cache's deliveries folder, which [FileProvider] shares) with the app
+     * for [mime]: an APK opens the system installer, which asks once to allow installs from this app.
      */
+    private fun openFile(path: String, mime: String, result: MethodChannel.Result) {
+        val activity = activity ?: return result.error("open", "The app isn't on screen", null)
+        val uri = FileProvider.getUriForFile(this, "$packageName.files", File(path))
+        val intent = Intent(Intent.ACTION_VIEW).setDataAndType(uri, mime).addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        try {
+            activity.startActivity(intent)
+            result.success(null)
+        } catch (e: ActivityNotFoundException) {
+            result.error("open", "No app on this phone opens $mime", null)
+        }
+    }
+
+    /**
+     * One alert per [key] (machine/pane, or machine/delivery/id): a newer one replaces it. Tapping opens that
+     * pane. [place] goes in the header, and the agent's logo is the large icon, the only one shown on the
+     * collapsed row. A file an agent sent ([delivery]) has a button, [action], that opens it too.
+     */
+    @Suppress("DEPRECATION")
     private fun alert(key: String, title: String, text: String, place: String, machine: String, pane: String,
-                      urgent: Boolean, iconBytes: ByteArray?) {
+                      urgent: Boolean, iconBytes: ByteArray?, delivery: String?, action: String?) {
         val id = key.hashCode()
-        val b = builder(if (urgent) BLOCKED else FINISHED)
+        val b = builder(if (delivery != null) FILES else if (urgent) BLOCKED else FINISHED)
             .setContentTitle(title)
             .setContentText(text.ifEmpty { null })
             .setSubText(place)
@@ -164,6 +191,9 @@ class HerdrApp : Application() {
             .setAutoCancel(true)
             .setCategory(Notification.CATEGORY_MESSAGE)
             .setContentIntent(openIntent(id, machine, pane))
+        if (delivery != null && action != null) {
+            b.addAction(Notification.Action.Builder(0, action, openIntent(id + 1, machine, pane, delivery)).build())
+        }
         nm.notify(id, b.build())
     }
 
@@ -173,17 +203,17 @@ class HerdrApp : Application() {
             .setPriority(if (channel == BLOCKED) Notification.PRIORITY_HIGH else Notification.PRIORITY_DEFAULT))
             .setSmallIcon(R.drawable.ic_notification)
 
-    private fun openIntent(code: Int, machine: String?, pane: String?): PendingIntent {
+    private fun openIntent(code: Int, machine: String?, pane: String?, delivery: String? = null): PendingIntent {
         val intent = Intent(this, MainActivity::class.java)
             .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP)
-        if (machine != null) intent.putExtra("machine", machine).putExtra("pane", pane)
+        if (machine != null) intent.putExtra("machine", machine).putExtra("pane", pane).putExtra("delivery", delivery)
         val immutable = if (Build.VERSION.SDK_INT >= 23) PendingIntent.FLAG_IMMUTABLE else 0
         return PendingIntent.getActivity(this, code, intent, PendingIntent.FLAG_UPDATE_CURRENT or immutable)
     }
 
-    /** Hands a tapped alert's pane to Dart, holding it until Dart has started listening. */
-    fun open(machine: String, pane: String) {
-        pendingOpen = mapOf("machine" to machine, "pane" to pane)
+    /** Hands a tapped alert's pane (and file to open) to Dart, holding it until Dart has started listening. */
+    fun open(machine: String, pane: String, delivery: String?) {
+        pendingOpen = mapOf("machine" to machine, "pane" to pane, "delivery" to delivery)
         flushOpen()
     }
 
@@ -238,6 +268,7 @@ class HerdrApp : Application() {
         const val STATUS = "status"
         const val BLOCKED = "blocked_v3"
         const val FINISHED = "finished_v3"
+        const val FILES = "files"
         const val DISCONNECT = "disconnect"
     }
 }
