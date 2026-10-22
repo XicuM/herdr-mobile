@@ -1,6 +1,13 @@
 /// Newest first. Shown once after an update; add an entry when bumping the version in pubspec.yaml.
 const changelog = <(String, List<String>)>[
   (
+    '1.18.1',
+    [
+      'Deleting a worktree checkout asks first, in one question that warns uncommitted work goes with it, and offers no Undo.',
+      'The ongoing notification counts monitoring agents apart from idle ones, as the agents list does.',
+    ]
+  ),
+  (
     '1.18.0',
     [
       'Agents can send you files (herdr-bridge send, bridge 0.4.0): an alert with Install or Open, and a card above the agent\'s message box. An APK opens the installer.',
