@@ -81,6 +81,7 @@ class _AgentsHomeScreenState extends State<AgentsHomeScreen> {
 
   @override
   void dispose() {
+    if (widget.client.onOpenTerminal != null) widget.client.onOpenTerminal = null;
     HardwareKeyboard.instance.removeHandler(_onHardwareKey);
     _search.dispose();
     _searchFocus.dispose();
@@ -98,8 +99,30 @@ class _AgentsHomeScreenState extends State<AgentsHomeScreen> {
   @override
   void initState() {
     super.initState();
+    widget.client.onOpenTerminal = () {
+      if (!mounted) return;
+      _openTerminal(context);
+    };
+    if (widget.client.openTerminalRequested) {
+      widget.client.openTerminalRequested = false;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) _openTerminal(context);
+      });
+    }
     HardwareKeyboard.instance.addHandler(_onHardwareKey);
     WidgetsBinding.instance.addPostFrameCallback((_) => _showIntroOrChangelog());
+  }
+
+  @override
+  void didUpdateWidget(AgentsHomeScreen oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.client != widget.client) {
+      oldWidget.client.onOpenTerminal = null;
+      widget.client.onOpenTerminal = () {
+        if (!mounted) return;
+        _openTerminal(context);
+      };
+    }
   }
 
   bool _onHardwareKey(KeyEvent event) {
@@ -374,6 +397,16 @@ class _AgentsHomeScreenState extends State<AgentsHomeScreen> {
     if (_isWide(context)) {
       setState(() => _detail = null);
       return;
+    }
+    final existingRoute = _terminalRoute;
+    if (existingRoute != null && existingRoute.isActive) {
+      if (!existingRoute.isCurrent) {
+        Navigator.popUntil(context, (r) => r == existingRoute);
+      }
+      return;
+    }
+    if (Navigator.canPop(context)) {
+      Navigator.popUntil(context, (r) => r.isFirst);
     }
     final route = _terminalRoute = MaterialPageRoute(builder: (_) => TerminalScreen(client: client));
     final action = await Navigator.push(context, route);

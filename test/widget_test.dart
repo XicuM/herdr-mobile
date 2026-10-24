@@ -2728,6 +2728,42 @@ void main() {
       await tester.pump();
       expect(tester.widget<TextField>(textField).focusNode?.hasFocus, isTrue);
     });
+
+    testWidgets('Tapping an agent notification opens TerminalScreen, but general notification does not', (tester) async {
+      SharedPreferences.setMockInitialValues({'last_seen_changelog': changelog.first.$1});
+      const m = '100.1.2.3:7788';
+      final client = HerdrClientService()
+        ..setMachines([m], [])
+        ..switchMachine(m)
+        ..setSnapshotForTesting(twoWorkspaces())
+        ..selectPane('w1:p1');
+
+      await tester.pumpWidget(MaterialApp(home: AgentsHomeScreen(client: client)));
+      await tester.pump();
+      await tester.pump(const Duration(seconds: 1));
+      expect(find.byType(TerminalScreen), findsNothing);
+
+      // 1. General notification (empty pane or null): does not open terminal
+      await tester.binding.defaultBinaryMessenger.handlePlatformMessage(
+        'herdr/android',
+        const StandardMethodCodec().encodeMethodCall(const MethodCall('open', {'machine': m, 'pane': ''})),
+        (data) {},
+      );
+      await tester.pump();
+      await tester.pump(const Duration(seconds: 1));
+      expect(find.byType(TerminalScreen), findsNothing);
+
+      // 2. Agent notification (has pane): opens terminal view for that agent
+      await tester.binding.defaultBinaryMessenger.handlePlatformMessage(
+        'herdr/android',
+        const StandardMethodCodec().encodeMethodCall(const MethodCall('open', {'machine': m, 'pane': 'w2:p4'})),
+        (data) {},
+      );
+      await tester.pump();
+      await tester.pump(const Duration(seconds: 1));
+      expect(find.byType(TerminalScreen), findsOneWidget);
+      expect(client.selectedPaneId, 'w2:p4');
+    });
   });
 }
 

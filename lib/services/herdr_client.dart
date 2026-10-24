@@ -136,6 +136,10 @@ class HerdrClientService extends ChangeNotifier {
   /// HerdrApp.kt: the ongoing status notification, alerts, and taps on them.
   static const _android = MethodChannel('herdr/android');
 
+  /// Called when an agent alert notification is tapped to reveal its terminal.
+  void Function()? onOpenTerminal;
+  bool openTerminalRequested = false;
+
   HerdrClientService() {
     _android.setMethodCallHandler((call) async {
       // The ongoing notification's Disconnect: every machine goes off, which also stops the service.
@@ -146,10 +150,17 @@ class HerdrClientService extends ChangeNotifier {
         return notifyListeners();
       }
       if (call.method != 'open') return;
-      final String m = call.arguments['machine'];
-      final String pane = call.arguments['pane'];
-      if (m != machine && _machines.contains(m)) switchMachine(m);
-      if (m == machine && pane.isNotEmpty) selectPane(pane);
+      final String? m = call.arguments['machine'];
+      final String? pane = call.arguments['pane'];
+      if (m != null && m != machine && _machines.contains(m)) switchMachine(m);
+      if (pane != null && pane.isNotEmpty) {
+        if (m == machine || m == null) selectPane(pane);
+        if (onOpenTerminal != null) {
+          onOpenTerminal!();
+        } else {
+          openTerminalRequested = true;
+        }
+      }
       // A delivery's alert's Install/Open button.
       final delivery = _deliveries.where((d) => d.id == call.arguments['delivery']).firstOrNull;
       if (delivery != null) openDelivery(delivery);
