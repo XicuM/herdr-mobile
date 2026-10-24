@@ -261,8 +261,10 @@ void _deleteCheckout(BuildContext context, HerdrClientService client, WorkspaceM
 OverlayEntry? _activeUndoEntry;
 Completer<bool>? _activeUndoCompleter;
 
-/// Shows a floating stadium pill at the top of the screen with [message] and an Undo action.
-Future<bool> _showTopUndoPill(BuildContext context, String message) {
+/// Shows [message] and an Undo action in a snackbar just above the bar whose key is [above] (the message bar),
+/// or at the bottom of the screen when there is none, as Gmail's undo bars do, for four seconds or until
+/// another replaces it.
+Future<bool> _showUndoSnackBar(BuildContext context, String message, GlobalKey? above) {
   _activeUndoCompleter?.complete(false);
   _activeUndoEntry?.remove();
   _activeUndoEntry = null;
@@ -291,35 +293,51 @@ Future<bool> _showTopUndoPill(BuildContext context, String message) {
   entry = OverlayEntry(
     builder: (ctx) {
       final scheme = Theme.of(ctx).colorScheme;
-      return SafeArea(
-        child: Align(
-          alignment: Alignment.topCenter,
-          child: Padding(
-            padding: const EdgeInsets.only(top: 10, left: 16, right: 16),
-            child: Material(
-              color: scheme.surfaceContainerHighest,
-              elevation: 4,
-              shape: const StadiumBorder(),
-              child: Padding(
-                padding: const EdgeInsets.only(left: 18, right: 8, top: 4, bottom: 4),
-                child: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Text(
-                      message,
-                      style: TextStyle(color: scheme.onSurface, fontSize: 14, fontWeight: FontWeight.w500),
-                    ),
-                    const SizedBox(width: 8),
-                    TextButton(
-                      style: TextButton.styleFrom(
-                        visualDensity: VisualDensity.compact,
-                        foregroundColor: scheme.primary,
-                        padding: const EdgeInsets.symmetric(horizontal: 12),
+      final bar = above?.currentContext?.findRenderObject() as RenderBox?;
+      final overlayBox = overlay.context.findRenderObject() as RenderBox?;
+      // Without a message bar, keep clear of the keyboard and the system's own bar.
+      final systemInset = MediaQuery.paddingOf(ctx).bottom;
+      final keyboard = MediaQuery.viewInsetsOf(ctx).bottom;
+      var bottom = 16.0 + (keyboard > systemInset ? keyboard : systemInset);
+      if (bar != null && bar.attached && overlayBox != null && overlayBox.attached) {
+        bottom = overlayBox.size.height - bar.localToGlobal(Offset.zero, ancestor: overlayBox).dy + 8;
+      }
+      return Align(
+        alignment: Alignment.bottomCenter,
+        child: Padding(
+          padding: EdgeInsets.only(left: 12, right: 12, bottom: bottom),
+          // M3's widest snackbar, centred on a tablet.
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 640),
+            child: TweenAnimationBuilder<double>(
+              duration: const Duration(milliseconds: 200),
+              curve: Curves.easeOut,
+              tween: Tween(begin: 0, end: 1),
+              builder: (_, t, child) =>
+                  Opacity(opacity: t, child: Transform.translate(offset: Offset(0, (1 - t) * 16), child: child)),
+              child: Material(
+                // M3's snackbar roles, as Gmail's: near white in a dark theme, charcoal in a light one.
+                color: scheme.inverseSurface,
+                elevation: 6,
+                borderRadius: BorderRadius.circular(8),
+                clipBehavior: Clip.antiAlias,
+                child: Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 4, 4, 4),
+                  child: Row(
+                    children: [
+                      Expanded(
+                        child: Text(message, style: TextStyle(color: scheme.onInverseSurface, fontSize: 14)),
                       ),
-                      onPressed: () => dismiss(true),
-                      child: const Text('Undo', style: TextStyle(fontWeight: FontWeight.bold)),
-                    ),
-                  ],
+                      TextButton(
+                        style: TextButton.styleFrom(
+                          foregroundColor: scheme.inversePrimary,
+                          visualDensity: VisualDensity.compact,
+                        ),
+                        onPressed: () => dismiss(true),
+                        child: const Text('Undo', style: TextStyle(fontWeight: FontWeight.bold)),
+                      ),
+                    ],
+                  ),
                 ),
               ),
             ),
@@ -337,10 +355,11 @@ Future<bool> _showTopUndoPill(BuildContext context, String message) {
 }
 
 /// Hides what [keys] name (`machine/id` of panes, tabs or workspaces) at once and runs [close] once the
-/// top pill saying [message] goes without Undo, or another replaces it.
-void closeWithUndo(
-    BuildContext context, HerdrClientService client, String message, List<String> keys, Future<void> Function() close) {
-  final undone = _showTopUndoPill(context, message);
+/// snackbar saying [message] goes without Undo, or another replaces it. [above] is the bar it sits over,
+/// when the screen has one.
+void closeWithUndo(BuildContext context, HerdrClientService client, String message, List<String> keys,
+    Future<void> Function() close, {GlobalKey? above}) {
+  final undone = _showUndoSnackBar(context, message, above);
   client.closeUnlessUndone(keys, undone, close);
 }
 

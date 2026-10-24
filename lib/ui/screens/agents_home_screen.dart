@@ -17,7 +17,7 @@ const _urgency = ['blocked', 'working', 'monitoring', 'done', 'idle'];
 /// The home screen, like a chat list: every agent on every connected machine, most urgent first and
 /// within that most recently changed first. Each row shows, as its terminal's top bar does, the summary
 /// the agent's terminal title gives, and under it its workspace, tab and status.
-/// Tap one for its terminal; swipe it right to mute it, left to close it (with Undo). Long-press one, or
+/// Tap one for its terminal; swipe right to reveal Mute, left to reveal Close. Long-press one, or
 /// tap its avatar, to select it, as in Gmail: then taps select more and the top bar mutes or closes them all.
 /// The top bar is Gmail's: ☰ opens the workspaces (and Settings), the search finds agents, workspaces,
 /// tabs and machines, a section each, and the machines' icon, green while one is connected, opens them.
@@ -52,6 +52,9 @@ class _AgentsHomeScreenState extends State<AgentsHomeScreen> {
 
   /// The selected agents, as (machine, pane id).
   final _selected = <(String, String)>{};
+
+  /// The key (`machine/pane_id`) of the agent row currently slid open, if any.
+  String? _openKey;
 
   final _scaffold = GlobalKey<ScaffoldState>();
 
@@ -320,12 +323,14 @@ class _AgentsHomeScreenState extends State<AgentsHomeScreen> {
     setState(_selected.clear);
   }
 
-  /// Closes [agents] unless undone. One at a time, so each close sees the snapshot after the last and keeps
-  /// their workspace alive.
+  /// Closes [agents] without an Undo snackbar. One at a time, so each close sees the snapshot
+  /// after the last and keeps their workspace alive.
   void _close(List<(String, String)> agents) {
-    setState(_selected.clear);
-    closeWithUndo(context, client, agents.length == 1 ? 'Agent closed' : '${agents.length} agents closed',
-        [for (final (m, id) in agents) '$m/$id'], () async {
+    setState(() {
+      _selected.clear();
+      _openKey = null;
+    });
+    client.closeUnlessUndone([for (final (m, id) in agents) '$m/$id'], Future.value(false), () async {
       for (final (m, id) in agents) {
         await client.closePane(id, m);
       }
@@ -654,16 +659,25 @@ class _AgentsHomeScreenState extends State<AgentsHomeScreen> {
                         : rows.isEmpty
                             ? _empty(context, Icons.smart_toy_outlined, 'No agents',
                                 'Agents started in herdr show up here.', null)
-                            : ListView.separated(
-                                padding: const EdgeInsets.only(bottom: 16),
-                                itemCount: rows.length,
-                                // A hairline across the whole row, faint like WhatsApp's chat list.
-                                separatorBuilder: (context, _) => Divider(
-                                  height: 1,
-                                  thickness: 0.5,
-                                  color: Theme.of(context).colorScheme.outlineVariant.withAlpha(128),
+                            : NotificationListener<ScrollNotification>(
+                                onNotification: (notification) {
+                                  if (notification is ScrollStartNotification ||
+                                      notification is ScrollUpdateNotification) {
+                                    if (_openKey != null) setState(() => _openKey = null);
+                                  }
+                                  return false;
+                                },
+                                child: ListView.separated(
+                                  padding: const EdgeInsets.only(bottom: 16),
+                                  itemCount: rows.length,
+                                  // A hairline across the whole row, faint like WhatsApp's chat list.
+                                  separatorBuilder: (context, _) => Divider(
+                                    height: 1,
+                                    thickness: 0.5,
+                                    color: Theme.of(context).colorScheme.outlineVariant.withAlpha(128),
+                                  ),
+                                  itemBuilder: (context, i) => _tile(context, rows[i], machines.length > 1),
                                 ),
-                                itemBuilder: (context, i) => _tile(context, rows[i], machines.length > 1),
                               );
 
         final Widget scaffold = PopScope(
@@ -816,9 +830,16 @@ class _AgentsHomeScreenState extends State<AgentsHomeScreen> {
 
     String sub(String m, Iterable<String?> parts) =>
         [...parts.whereType<String>(), if (showMachine) client.nameOf(m)].where((p) => p.isNotEmpty).join(' · ');
-    return ListView(
-      padding: const EdgeInsets.only(bottom: 16),
-      children: [
+    return NotificationListener<ScrollNotification>(
+      onNotification: (notification) {
+        if (notification is ScrollStartNotification || notification is ScrollUpdateNotification) {
+          if (_openKey != null) setState(() => _openKey = null);
+        }
+        return false;
+      },
+      child: ListView(
+        padding: const EdgeInsets.only(bottom: 16),
+        children: [
         if (agents.isNotEmpty) ...[
           header('Agents'),
           for (final r in agents) _tile(context, r, showMachine),
@@ -871,7 +892,8 @@ class _AgentsHomeScreenState extends State<AgentsHomeScreen> {
           MachineList(client: client, only: machines),
         ],
       ],
-    );
+    ),
+  );
   }
 
   Widget _tile(BuildContext context, (String, SessionSnapshot, AgentModel, PaneModel?) row, bool showMachine) {
@@ -896,46 +918,90 @@ class _AgentsHomeScreenState extends State<AgentsHomeScreen> {
     // A file it sent leads the line until opened or dismissed, as a chat's last message does.
     final file = client.deliveriesOf(machine, agent.paneId).where((d) => d.paneId == agent.paneId).lastOrNull;
 
-    // What a swipe does, drawn under the row: its colour, with its icon and label at the edge it leaves.
-    Widget behind(Color bg, Color fg, IconData icon, String label, bool start) => ColoredBox(
-          color: bg,
-          child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 24),
-            child: Row(
-              mainAxisAlignment: start ? MainAxisAlignment.start : MainAxisAlignment.end,
+    final tileColor = selected
+        ? scheme.secondaryContainer
+        : _isWide(context) && client.machine == machine && client.selectedPaneId == agent.paneId
+            ? scheme.surfaceContainerHighest
+            : scheme.surface;
+
+    final rowKeyStr = '$machine/${agent.paneId}';
+
+    // Slide right to reveal Mute, left to reveal Close. Pressing the revealed button performs the action.
+    return _SlideActionRow(
+      key: ValueKey(rowKeyStr),
+      isOpen: _openKey == rowKeyStr,
+      enabled: _selected.isEmpty,
+      onOpen: () {
+        if (_openKey != rowKeyStr) setState(() => _openKey = rowKeyStr);
+      },
+      onClose: () {
+        if (_openKey == rowKeyStr) setState(() => _openKey = null);
+      },
+      onDragStart: () {
+        if (_openKey != null && _openKey != rowKeyStr) setState(() => _openKey = rowKeyStr);
+      },
+      tileColor: tileColor,
+      leftAction: Material(
+        color: scheme.secondaryContainer,
+        child: InkWell(
+          onTap: () {
+            setState(() => _openKey = null);
+            client.setMuted(agent.paneId, !muted, machine);
+          },
+          child: SizedBox(
+            width: 84,
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
               children: [
-                Icon(icon, color: fg),
-                const SizedBox(width: 12),
-                Text(label, style: theme.textTheme.labelLarge?.copyWith(color: fg)),
+                Icon(
+                  muted ? Icons.notifications_outlined : Icons.notifications_off_outlined,
+                  color: scheme.onSecondaryContainer,
+                  size: 22,
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  muted ? 'Unmute' : 'Mute',
+                  style: theme.textTheme.labelMedium?.copyWith(
+                    color: scheme.onSecondaryContainer,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
               ],
             ),
           ),
-        );
-
-    // Swipe right to mute (the row stays), left to close.
-    return Dismissible(
-      key: ValueKey('$machine/${agent.paneId}'),
-      direction: _selected.isEmpty ? DismissDirection.horizontal : DismissDirection.none,
-      background: behind(scheme.secondaryContainer, scheme.onSecondaryContainer,
-          muted ? Icons.notifications_outlined : Icons.notifications_off_outlined, muted ? 'Unmute' : 'Mute', true),
-      secondaryBackground: behind(scheme.errorContainer, scheme.onErrorContainer, Icons.close, 'Close', false),
-      confirmDismiss: (direction) async {
-        if (direction == DismissDirection.startToEnd) {
-          client.setMuted(agent.paneId, !muted, machine);
-          return false;
-        }
-        return true;
-      },
-      onDismissed: (_) => _close([key]),
+        ),
+      ),
+      rightAction: Material(
+        color: scheme.error,
+        child: InkWell(
+          onTap: () {
+            setState(() => _openKey = null);
+            _close([key]);
+          },
+          child: SizedBox(
+            width: 84,
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Icon(Icons.close, color: scheme.onError, size: 22),
+                const SizedBox(height: 4),
+                Text(
+                  'Close',
+                  style: theme.textTheme.labelMedium?.copyWith(
+                    color: scheme.onError,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
       child: GestureDetector(
         onSecondaryTapUp: (d) => _agentMenu(d, machine, agent),
         child: ListTile(
         // On a wide screen, the agent whose terminal is beside the list is marked, as an open chat is.
-        tileColor: selected
-            ? scheme.secondaryContainer
-            : _isWide(context) && client.machine == machine && client.selectedPaneId == agent.paneId
-                ? scheme.surfaceContainerHighest
-                : null,
+        tileColor: tileColor,
         leading: GestureDetector(
           onTap: () => _toggle(key),
           // Selected, the check sits in the status ring's place, so the row keeps its size.
@@ -1008,7 +1074,13 @@ class _AgentsHomeScreenState extends State<AgentsHomeScreen> {
             ),
           ],
         ),
-        onTap: () => _selected.isEmpty ? _openAgent(context, machine, agent.paneId) : _toggle(key),
+        onTap: () {
+          if (_openKey != null) {
+            setState(() => _openKey = null);
+            return;
+          }
+          _selected.isEmpty ? _openAgent(context, machine, agent.paneId) : _toggle(key);
+        },
         onLongPress: () => _toggle(key),
         ),
       ),
@@ -1031,6 +1103,205 @@ class _AgentsHomeScreenState extends State<AgentsHomeScreen> {
                 textAlign: TextAlign.center,
                 style: theme.textTheme.bodyMedium?.copyWith(color: theme.colorScheme.onSurfaceVariant)),
             if (action != null) ...[const SizedBox(height: 24), action],
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// A row that slides left or right to reveal an action button that must be pressed to execute.
+class _SlideActionRow extends StatefulWidget {
+  static const actionWidth = 84.0;
+
+  final bool isOpen;
+  final bool enabled;
+  final VoidCallback onOpen;
+  final VoidCallback onClose;
+  final VoidCallback? onDragStart;
+  final Widget leftAction;
+  final Widget rightAction;
+  final Color tileColor;
+  final Widget child;
+
+  const _SlideActionRow({
+    super.key,
+    required this.isOpen,
+    required this.enabled,
+    required this.onOpen,
+    required this.onClose,
+    this.onDragStart,
+    required this.leftAction,
+    required this.rightAction,
+    required this.tileColor,
+    required this.child,
+  });
+
+  @override
+  State<_SlideActionRow> createState() => _SlideActionRowState();
+}
+
+class _SlideActionRowState extends State<_SlideActionRow> with SingleTickerProviderStateMixin {
+  late final AnimationController _controller;
+  double _dragExtent = 0.0;
+  bool _isDragging = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _controller = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 150),
+      value: 0.0,
+      lowerBound: -1.0,
+      upperBound: 1.0,
+    );
+  }
+
+  @override
+  void didUpdateWidget(_SlideActionRow oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (!widget.enabled && _controller.value != 0) {
+      _controller.animateTo(0.0, curve: Curves.easeOut);
+    } else if (!widget.isOpen && oldWidget.isOpen && _controller.value != 0 && !_isDragging) {
+      _controller.animateTo(0.0, curve: Curves.easeOut);
+    }
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  void _closeDrawer() {
+    _controller.animateTo(0.0, curve: Curves.easeOut);
+    widget.onClose();
+  }
+
+  void _onDragStart(DragStartDetails details) {
+    if (!widget.enabled) return;
+    _isDragging = true;
+    _dragExtent = _controller.value * _SlideActionRow.actionWidth;
+    widget.onDragStart?.call();
+  }
+
+  void _onDragUpdate(DragUpdateDetails details) {
+    if (!widget.enabled) return;
+    final delta = details.primaryDelta ?? 0.0;
+    _dragExtent = (_dragExtent + delta).clamp(-_SlideActionRow.actionWidth, _SlideActionRow.actionWidth);
+    _controller.value = _dragExtent / _SlideActionRow.actionWidth;
+  }
+
+  void _onDragEnd(DragEndDetails details) {
+    if (!widget.enabled) return;
+    _isDragging = false;
+    final velocity = details.primaryVelocity ?? 0.0;
+    if (velocity < -300 || (velocity.abs() <= 300 && _controller.value < -0.3)) {
+      _controller.animateTo(-1.0, curve: Curves.easeOut);
+      widget.onOpen();
+    } else if (velocity > 300 || (velocity.abs() <= 300 && _controller.value > 0.3)) {
+      _controller.animateTo(1.0, curve: Curves.easeOut);
+      widget.onOpen();
+    } else {
+      _controller.animateTo(0.0, curve: Curves.easeOut);
+      widget.onClose();
+    }
+  }
+
+  void _onDragCancel() {
+    if (!widget.enabled) return;
+    _isDragging = false;
+    _controller.animateTo(0.0, curve: Curves.easeOut);
+    widget.onClose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return ClipRect(
+      child: GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onHorizontalDragStart: _onDragStart,
+        onHorizontalDragUpdate: _onDragUpdate,
+        onHorizontalDragEnd: _onDragEnd,
+        onHorizontalDragCancel: _onDragCancel,
+        child: Stack(
+          children: [
+            // Background action button: revealed behind the shifting tile
+            Positioned.fill(
+              child: AnimatedBuilder(
+                animation: _controller,
+                builder: (context, _) {
+                  if (_controller.value == 0) return const SizedBox.shrink();
+                  if (_controller.value < 0) {
+                    final revealWidth = (-_controller.value * _SlideActionRow.actionWidth).clamp(0.0, _SlideActionRow.actionWidth);
+                    return Align(
+                      alignment: Alignment.centerRight,
+                      child: SizedBox(
+                        width: revealWidth,
+                        height: double.infinity,
+                        child: ClipRect(
+                          child: OverflowBox(
+                            alignment: Alignment.center,
+                            minWidth: _SlideActionRow.actionWidth,
+                            maxWidth: _SlideActionRow.actionWidth,
+                            child: widget.rightAction,
+                          ),
+                        ),
+                      ),
+                    );
+                  } else {
+                    final revealWidth = (_controller.value * _SlideActionRow.actionWidth).clamp(0.0, _SlideActionRow.actionWidth);
+                    return Align(
+                      alignment: Alignment.centerLeft,
+                      child: SizedBox(
+                        width: revealWidth,
+                        height: double.infinity,
+                        child: ClipRect(
+                          child: OverflowBox(
+                            alignment: Alignment.center,
+                            minWidth: _SlideActionRow.actionWidth,
+                            maxWidth: _SlideActionRow.actionWidth,
+                            child: widget.leftAction,
+                          ),
+                        ),
+                      ),
+                    );
+                  }
+                },
+              ),
+            ),
+            // Foreground row
+            AnimatedBuilder(
+              animation: _controller,
+              builder: (context, child) {
+                return Transform.translate(
+                  offset: Offset(_controller.value * _SlideActionRow.actionWidth, 0),
+                  child: child,
+                );
+              },
+              child: Material(
+                color: widget.tileColor,
+                child: widget.child,
+              ),
+            ),
+            // When open, tapping the shifted tile (not the action button) closes the drawer
+            AnimatedBuilder(
+              animation: _controller,
+              builder: (context, _) {
+                if (_controller.value == 0) return const SizedBox.shrink();
+                return Positioned(
+                  left: _controller.value > 0 ? _SlideActionRow.actionWidth : 0,
+                  right: _controller.value < 0 ? _SlideActionRow.actionWidth : 0,
+                  top: 0,
+                  bottom: 0,
+                  child: GestureDetector(
+                    behavior: HitTestBehavior.opaque,
+                    onTap: _closeDrawer,
+                  ),
+                );
+              },
+            ),
           ],
         ),
       ),

@@ -119,8 +119,12 @@ class _TerminalScreenState extends State<TerminalScreen> {
   bool _pinched = false; // the rest of a gesture that pinched never scrolls
 
   // The current tab in the top bar's strip, scrolled into view when it changes.
-  final _currentTab = GlobalKey();
+  final _tabScroll = ScrollController();
+  static const _tabWidth = 168.0;
   String? _shownTabId;
+
+  // The message bar, which an undo snackbar sits above.
+  final _messageBar = GlobalKey();
 
   // The terminal's true background: the colour most of the screen's edges are painted, since full-screen agents
   // paint their own over the default. The message bar and the current tab take it, joining the terminal.
@@ -352,7 +356,7 @@ class _TerminalScreenState extends State<TerminalScreen> {
           if (pane != null) {
             final m = client.machine;
             closeWithUndo(context, client, client.snapshot?.agentOf(pane.id) != null ? 'Agent closed' : 'Pane closed',
-                ['$m/${pane.id}'], () => client.closePane(pane.id, m));
+                ['$m/${pane.id}'], () => client.closePane(pane.id, m), above: _messageBar);
             if (!widget.embedded && Navigator.canPop(context)) {
               Navigator.pop(context);
             }
@@ -976,7 +980,8 @@ class _TerminalScreenState extends State<TerminalScreen> {
         if (index < tabs.length - 1) client.moveTab(tab.id, tabs[index + 1].id);
       case 'close':
         final m = client.machine;
-        closeWithUndo(context, client, 'Tab closed', ['$m/${tab.id}'], () => client.closeTab(tab.id, m));
+        closeWithUndo(context, client, 'Tab closed', ['$m/${tab.id}'], () => client.closeTab(tab.id, m),
+            above: _messageBar);
     }
   }
 
@@ -1253,7 +1258,7 @@ class _TerminalScreenState extends State<TerminalScreen> {
     final client = widget.client;
     final m = client.machine;
     HapticFeedback.mediumImpact();
-    closeWithUndo(context, client, 'Tab closed', ['$m/$tabId'], () => client.closeTab(tabId, m));
+    closeWithUndo(context, client, 'Tab closed', ['$m/$tabId'], () => client.closeTab(tabId, m), above: _messageBar);
   }
 
   /// Herdr holds the pane's history (see [PtyChannel.connect]), so dragging scrolls herdr's view a line
@@ -1470,6 +1475,7 @@ class _TerminalScreenState extends State<TerminalScreen> {
     _parkPlace();
     _onMessageChanged();
     _message.removeListener(_onMessageChanged);
+    _tabScroll.dispose();
     _messageFocus.dispose();
     _termFocus.dispose();
     _lifecycle.dispose();
@@ -1568,8 +1574,12 @@ class _TerminalScreenState extends State<TerminalScreen> {
     if (pane?.tabId != _shownTabId) {
       _shownTabId = pane?.tabId;
       WidgetsBinding.instance.addPostFrameCallback((_) {
-        final tab = _currentTab.currentContext;
-        if (tab != null) Scrollable.ensureVisible(tab, alignment: 0.5, duration: const Duration(milliseconds: 200));
+        // The strip builds lazily, so the current tab may not exist yet to scroll to; tabs are all one width.
+        final at = _tabs()?.$2 ?? -1;
+        if (at < 0 || !_tabScroll.hasClients) return;
+        final pos = _tabScroll.position;
+        final offset = (at * _tabWidth - (pos.viewportDimension - _tabWidth) / 2).clamp(0.0, pos.maxScrollExtent);
+        _tabScroll.animateTo(offset, duration: const Duration(milliseconds: 200), curve: Curves.easeInOut);
       });
     }
 
@@ -1728,102 +1738,80 @@ class _TerminalScreenState extends State<TerminalScreen> {
                   (final tabs, final i) when i >= 0 => Row(
                       children: [
                         Expanded(
-                          child: SingleChildScrollView(
+                          // Hold and drag a tab: the others slide aside to show where it lands, anywhere along the
+                          // strip. [to] counts in the order before the move, so a tab goes in the place of the one
+                          // now at its final index.
+                          child: ReorderableListView(
                             scrollDirection: Axis.horizontal,
-                            child: Row(
-                              crossAxisAlignment: CrossAxisAlignment.stretch,
-                              children: [
-                                for (final (j, t) in tabs.indexed)
-                                  // Long-press and drag a tab onto another to take its place.
-                                  DragTarget<String>(
-                                    onWillAcceptWithDetails: (d) => d.data != t.id,
-                                    onAcceptWithDetails: (d) => client.moveTab(d.data, t.id),
-                                    builder: (context, over, _) {
-                                      final tabAgent = _tabAgent(t);
-                                      final summary = _tabSummary(t);
-                                      final label = Padding(
-                                        padding: const EdgeInsets.symmetric(horizontal: 8),
-                                        child: Row(
-                                          children: [
-                                            // herdr's `idle` is `monitoring` while the agent waits on monitors, as in the list.
-                                            AgentAvatar(
-                                                name: tabAgent?.name ?? '',
-                                                radius: 7.5,
-                                                status: t.agentStatus == 'idle' && tabAgent?.monitoring == true
-                                                    ? 'monitoring'
-                                                    : t.agentStatus),
-                                            const SizedBox(width: 6),
-                                            Expanded(
-                                              child: Text(
-                                                summary,
-                                                maxLines: 1,
-                                                overflow: TextOverflow.ellipsis,
-                                                style: Theme.of(context).textTheme.labelMedium?.copyWith(
-                                                    color: j == i ? scheme.onSurface : scheme.onSurfaceVariant),
-                                              ),
-                                            ),
-                                          ],
-                                        ),
-                                      );
-                                      const top = BorderRadius.vertical(top: Radius.circular(10));
-                                      // Held and lifted, its menu; held and dragged, onto another tab to take its place.
-                                      return HoldMenu(
-                                        onMenu: (at) => _showTabMenu(at, t, tabs, j),
-                                        child: LongPressDraggable<String>(
-                                          data: t.id,
-                                          axis: Axis.horizontal,
-                                          feedback: Material(
-                                            color: scheme.secondaryContainer,
-                                            elevation: 3,
-                                            borderRadius: top,
-                                            child: SizedBox(
-                                              height: 34,
-                                              width: 168,
-                                              child: label,
-                                            ),
-                                          ),
-                                          childWhenDragging: Opacity(
-                                            opacity: 0.3,
-                                            child: Container(
-                                              width: 168,
-                                              decoration:
-                                                  j == i ? BoxDecoration(color: background, borderRadius: top) : null,
-                                              child: label,
-                                            ),
-                                          ),
-                                          // The full line on hover (manual: hover still shows, touch doesn't fight the hold menu).
-                                          child: Tooltip(
-                                            message: summary,
-                                            triggerMode: TooltipTriggerMode.manual,
-                                            waitDuration: const Duration(milliseconds: 500),
-                                            child: Container(
-                                              key: j == i ? _currentTab : null,
-                                              width: 168,
-                                              decoration:
-                                                  j == i ? BoxDecoration(color: background, borderRadius: top) : null,
-                                              // A line where the dragged tab will land: past this one when it comes
-                                              // from the left, before it when from the right.
-                                              foregroundDecoration: switch (over.firstOrNull) {
-                                                final id? => BoxDecoration(
-                                                    border: tabs.indexWhere((t) => t.id == id) < j
-                                                        ? Border(right: BorderSide(color: scheme.primary, width: 3))
-                                                        : Border(left: BorderSide(color: scheme.primary, width: 3)),
-                                                  ),
-                                                null => null,
-                                              },
-                                              child: InkWell(
-                                                customBorder: const RoundedRectangleBorder(borderRadius: top),
-                                                onTap: () => client.selectTab(t.id),
-                                                child: label,
-                                              ),
-                                            ),
-                                          ),
-                                        ),
-                                      );
-                                    },
-                                  ),
-                              ],
+                            scrollController: _tabScroll,
+                            buildDefaultDragHandles: false,
+                            onReorder: (from, to) {
+                              if (to > from) to--;
+                              if (to != from) client.moveTab(tabs[from].id, tabs[to].id);
+                            },
+                            proxyDecorator: (child, _, __) => Material(
+                              color: scheme.secondaryContainer,
+                              elevation: 3,
+                              borderRadius: const BorderRadius.vertical(top: Radius.circular(10)),
+                              child: child,
                             ),
+                            children: [
+                              for (final (j, t) in tabs.indexed)
+                                Builder(
+                                  key: ValueKey(t.id),
+                                  builder: (context) {
+                                    final tabAgent = _tabAgent(t);
+                                    final summary = _tabSummary(t);
+                                    const top = BorderRadius.vertical(top: Radius.circular(10));
+                                    // Held and lifted, its menu; held and dragged, it moves.
+                                    return HoldMenu(
+                                      onMenu: (at) => _showTabMenu(at, t, tabs, j),
+                                      child: ReorderableDelayedDragStartListener(
+                                        index: j,
+                                        // The full line on hover (manual: hover still shows, touch doesn't fight the hold menu).
+                                        child: Tooltip(
+                                          message: summary,
+                                          triggerMode: TooltipTriggerMode.manual,
+                                          waitDuration: const Duration(milliseconds: 500),
+                                          child: Container(
+                                            width: _tabWidth,
+                                            decoration:
+                                                j == i ? BoxDecoration(color: background, borderRadius: top) : null,
+                                            child: InkWell(
+                                              customBorder: const RoundedRectangleBorder(borderRadius: top),
+                                              onTap: () => client.selectTab(t.id),
+                                              child: Padding(
+                                                padding: const EdgeInsets.symmetric(horizontal: 8),
+                                                child: Row(
+                                                  children: [
+                                                    // herdr's `idle` is `monitoring` while the agent waits on monitors, as in the list.
+                                                    AgentAvatar(
+                                                        name: tabAgent?.name ?? '',
+                                                        radius: 7.5,
+                                                        status: t.agentStatus == 'idle' && tabAgent?.monitoring == true
+                                                            ? 'monitoring'
+                                                            : t.agentStatus),
+                                                    const SizedBox(width: 6),
+                                                    Expanded(
+                                                      child: Text(
+                                                        summary,
+                                                        maxLines: 1,
+                                                        overflow: TextOverflow.ellipsis,
+                                                        style: Theme.of(context).textTheme.labelMedium?.copyWith(
+                                                            color: j == i ? scheme.onSurface : scheme.onSurfaceVariant),
+                                                      ),
+                                                    ),
+                                                  ],
+                                                ),
+                                              ),
+                                            ),
+                                          ),
+                                        ),
+                                      ),
+                                    );
+                                  },
+                                ),
+                            ],
                           ),
                         ),
                         IconButton(
@@ -2085,6 +2073,8 @@ class _TerminalScreenState extends State<TerminalScreen> {
             // which shows or hides it. A keyboard that is up stays up across the swap.
             if (!client.hideMessageTerminal)
               Container(
+                // The undo snackbar sits above the message bar, as Gmail's sits above its composer.
+                key: _messageBar,
                 color: background,
                 padding: const EdgeInsets.fromLTRB(4, 4, 4, 6),
                 child: Column(

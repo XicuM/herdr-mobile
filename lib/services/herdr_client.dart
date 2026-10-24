@@ -1374,6 +1374,9 @@ class HerdrClientService extends ChangeNotifier {
     if (ws != null && panes.where((p) => p.workspaceId == ws).length == 1) {
       await _request('create tab', 'POST', '/api/tab', body: {'workspace_id': ws}, on: m);
     }
+    final raw = _conns[m ?? machine]?.raw;
+    raw?.panes.removeWhere((p) => p.id == paneId);
+    raw?.agents.removeWhere((a) => a.paneId == paneId);
     await _request('close agent', 'DELETE', '/api/pane/$paneId', on: m);
   }
 

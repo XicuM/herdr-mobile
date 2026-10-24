@@ -349,6 +349,9 @@ void main() {
       // Past the threshold: the current tab closes, with Undo.
       await swipeDown(120);
       expect(find.text('Tab closed'), findsOneWidget);
+      // The undo snackbar sits above the message bar, as Gmail's sits above its composer.
+      expect(tester.getBottomLeft(find.text('Tab closed')).dy,
+          lessThanOrEqualTo(tester.getTopLeft(find.byType(TextField)).dy));
       expect(client.snapshot!.tabs.map((t) => t.id), isNot(contains('w1:t1')));
       await tester.tap(find.text('Undo'));
       await tester.pump();
@@ -463,7 +466,7 @@ void main() {
         await tester.pump(const Duration(seconds: 1));
       }
 
-      final first = find.byType(LongPressDraggable<String>).first;
+      final first = find.byType(ReorderableDelayedDragStartListener).first;
       expect(find.byIcon(Icons.more_vert), findsNothing);
       expect(tester.getSize(first).width, 168);
 
@@ -483,6 +486,28 @@ void main() {
       expect(find.text('Open tab'), findsNothing);
       expect(find.text('Move right'), findsOneWidget);
       expect(find.text('Close tab'), findsOneWidget);
+    });
+
+    testWidgets('A tab dragged past the last one moves to the end', (tester) async {
+      SharedPreferences.setMockInitialValues({'last_seen_changelog': changelog.first.$1});
+      final client = HerdrClientService()
+        ..setMachines(['100.1.2.3:7788'], [])
+        ..setSnapshotForTesting(twoWorkspaces())
+        ..selectPane('w1:p1');
+      await tester.pumpWidget(MaterialApp(home: TerminalScreen(client: client)));
+
+      final drag = await tester.startGesture(tester.getCenter(find.byType(ReorderableDelayedDragStartListener).first));
+      await tester.pump(kLongPressTimeout + const Duration(milliseconds: 50));
+      for (var i = 0; i < 10; i++) {
+        await drag.moveBy(const Offset(40, 0));
+        await tester.pump(const Duration(milliseconds: 50));
+      }
+      await drag.up();
+      // The drop settles into its slot before the move is made.
+      for (var i = 0; i < 10; i++) {
+        await tester.pump(const Duration(milliseconds: 50));
+      }
+      expect([for (final t in client.snapshot!.tabs) t.id], ['w1:t2', 'w1:t1', 'w2:t1']);
     });
 
     testWidgets('The top bar shows the workspace and its tabs; tapping a tab shows it', (tester) async {
@@ -1186,10 +1211,13 @@ void main() {
 
       expect(find.text('Connecting…'), findsOneWidget);
 
-      // Swiping it right mutes it, and it stays
+      // Swiping it right reveals Mute, and pressing Mute mutes it
       await tester.drag(find.text('antigravity-refactor'), const Offset(500, 0));
       await tester.pumpAndSettle();
       expect(find.text('antigravity-refactor'), findsOneWidget);
+      expect(find.text('Mute'), findsOneWidget);
+      await tester.tap(find.text('Mute'));
+      await tester.pumpAndSettle();
       expect(client.isMuted('w1:p2', '10.0.0.1:7788'), isTrue);
       expect(find.byIcon(Icons.notifications_off_outlined), findsOneWidget);
 
@@ -1205,14 +1233,14 @@ void main() {
       expect(client.isMuted('w1:p2'), isTrue);
       expect(find.text('Connecting…'), findsOneWidget); // the selection is over
 
-      // Swiping it left hides it at once, and Undo brings it back without closing it.
+      // Swiping it left reveals Close, and pressing Close closes it directly with no snackbar.
       await tester.drag(find.text('antigravity-refactor'), const Offset(-500, 0));
       await tester.pumpAndSettle();
-      expect(find.text('antigravity-refactor'), findsNothing);
-      expect(find.text('Agent closed'), findsOneWidget);
-      await tester.tap(find.text('Undo'));
+      expect(find.text('Close'), findsOneWidget);
+      await tester.tap(find.text('Close'));
       await tester.pumpAndSettle();
-      expect(find.text('antigravity-refactor'), findsOneWidget);
+      expect(find.text('antigravity-refactor'), findsNothing);
+      expect(find.text('Agent closed'), findsNothing);
     });
 
     testWidgets('Agent timestamps update when state changes and format correctly in AgentsHomeScreen', (tester) async {

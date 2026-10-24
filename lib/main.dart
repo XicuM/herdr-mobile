@@ -31,11 +31,6 @@ class HerdrMobileApp extends StatelessWidget {
       return ThemeData(
         colorScheme: scheme,
         bottomSheetTheme: const BottomSheetThemeData(showDragHandle: true),
-        snackBarTheme: SnackBarThemeData(
-          backgroundColor: scheme.surfaceContainerHighest,
-          contentTextStyle: TextStyle(color: scheme.onSurface),
-          actionTextColor: scheme.primary,
-        ),
       );
     }
     return ListenableBuilder(
