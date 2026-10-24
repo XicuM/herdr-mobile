@@ -1,6 +1,14 @@
 /// Newest first. Shown once after an update; add an entry when bumping the version in pubspec.yaml.
 const changelog = <(String, List<String>)>[
   (
+    '1.19.0',
+    [
+      'Swiping an agent left or right reveals a Close or Mute button to press, preventing accidental actions.',
+      'Closing an agent from the list closes directly without an Undo snackbar; tabs and workspaces retain Undo.',
+      'Tabs reorder by dragging along the strip, and Undo snackbars in the terminal view sit above the message bar.',
+    ]
+  ),
+  (
     '1.18.1',
     [
       'Deleting a worktree checkout asks first, in one question that warns uncommitted work goes with it, and offers no Undo.',
