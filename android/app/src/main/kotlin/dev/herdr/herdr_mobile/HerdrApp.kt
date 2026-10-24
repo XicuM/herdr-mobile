@@ -96,7 +96,7 @@ class HerdrApp : Application() {
                 "openFile" -> return@setMethodCallHandler openFile(
                     call.argument<String>("path")!!, call.argument<String>("mime")!!, result)
                 "openUrl" -> return@setMethodCallHandler openUrl(
-                    call.argument<String>("url")!, result)
+                    call.argument<String>("url")!!, result)
                 "cancel" -> nm.cancel(call.argument<String>("key").hashCode())
                 "askPermissions" -> askPermissions()
                 "askBattery" -> askBattery()
