@@ -2166,7 +2166,10 @@ void main() {
     });
 
     testWidgets('The history button left of the message box opens recent messages', (tester) async {
-      SharedPreferences.setMockInitialValues({'message_history': ['fix bug in layout', 'run tests']});
+      SharedPreferences.setMockInitialValues({
+        'message_history': ['fix bug in layout', 'run tests'],
+        'recent_commands': ['/help', '/clear'],
+      });
       final client = HerdrClientService();
       final snap = SessionSnapshot.fromJson({
         'version': '0.9.3',
@@ -2197,6 +2200,65 @@ void main() {
       expect(find.text('Recent messages'), findsOneWidget);
       expect(find.text('fix bug in layout'), findsOneWidget);
       expect(find.text('run tests'), findsOneWidget);
+      expect(find.text('/help'), findsOneWidget);
+      expect(find.text('/clear'), findsOneWidget);
+      expect(
+        find.ancestor(of: find.text('/help'), matching: find.byType(SingleChildScrollView)),
+        findsOneWidget,
+      );
+
+      // Swiping to dismiss a history item removes it from recent messages
+      expect(find.text('fix bug in layout'), findsOneWidget);
+      await tester.drag(find.text('fix bug in layout'), const Offset(-500, 0));
+      await tester.pumpAndSettle();
+      expect(find.text('fix bug in layout'), findsNothing);
+      expect(find.text('run tests'), findsOneWidget);
+
+      // Tapping a command sends it
+      await tester.tap(find.text('/help'));
+      await tester.pumpAndSettle();
+      TerminalScreen.clearDraftsForTesting();
+    });
+
+    testWidgets('History prioritizes workspace-specific commands and messages', (tester) async {
+      SharedPreferences.setMockInitialValues({
+        'message_history': ['global message'],
+        'message_history_w1': ['workspace message'],
+        'recent_commands': ['/global'],
+        'recent_commands_w1': ['/workspace_cmd'],
+      });
+      final client = HerdrClientService();
+      final snap = SessionSnapshot.fromJson({
+        'version': '0.9.3',
+        'protocol': 22,
+        'focused_workspace_id': 'w1',
+        'focused_tab_id': 'w1:t1',
+        'focused_pane_id': 'w1:p1',
+        'workspaces': [
+          {'workspace_id': 'w1', 'number': 1, 'label': 'main', 'active_tab_id': 'w1:t1', 'agent_status': 'idle'},
+        ],
+        'tabs': [
+          {'tab_id': 'w1:t1', 'workspace_id': 'w1', 'number': 1, 'label': 'Tab 1', 'agent_status': 'idle'},
+        ],
+        'panes': [
+          {'pane_id': 'w1:p1', 'workspace_id': 'w1', 'tab_id': 'w1:t1', 'focused': true, 'agent_status': 'idle', 'terminal_title': ''},
+        ],
+        'agents': [],
+      });
+      client.setSnapshotForTesting(snap);
+      client.selectPane('w1:p1');
+
+      await tester.pumpWidget(MaterialApp(home: TerminalScreen(client: client)));
+      await tester.pump(const Duration(milliseconds: 300));
+
+      await tester.tap(find.byTooltip('History and recent commands'));
+      await tester.pumpAndSettle();
+
+      expect(find.text('workspace message'), findsOneWidget);
+      expect(find.text('global message'), findsOneWidget);
+      expect(find.text('/workspace_cmd'), findsOneWidget);
+      expect(find.text('/global'), findsOneWidget);
+      TerminalScreen.clearDraftsForTesting();
     });
 
     testWidgets('Arrow Up/Down in message TextField navigates history', (tester) async {

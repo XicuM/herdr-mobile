@@ -84,6 +84,7 @@ class _TerminalScreenState extends State<TerminalScreen> {
   Timer? _staleTimer;
   late final AppLifecycleListener _lifecycle;
   bool _ctrl = false;
+  SharedPreferences? _prefs;
   List<String> _history = []; // sent messages, newest first, shared by every pane
   List<String> _recentCommands = []; // sent slash commands (`/models`…), newest first, for one-tap resend
   bool _showingHistory = false; // the recent-messages panel above the pill; the pill filters it
@@ -154,6 +155,7 @@ class _TerminalScreenState extends State<TerminalScreen> {
     _connectTerminal();
     if (widget.client.selectedPaneId case final paneId?) _swapDraft('${widget.client.machine}/$paneId');
     SharedPreferences.getInstance().then((p) {
+      _prefs = p;
       _history = p.getStringList('message_history') ?? [];
       _recentCommands = p.getStringList('recent_commands') ?? [];
     });
@@ -518,18 +520,40 @@ class _TerminalScreenState extends State<TerminalScreen> {
     _historyIndex = -1;
     _savedDraft = '';
     final trimmed = text.trim();
-    if (trimmed.startsWith('/')) _rememberCommand(trimmed);
+    final wsId = widget.client.selectedPane?.workspaceId;
+    if (trimmed.startsWith('/')) _rememberCommand(trimmed, wsId);
     if (command != null) return;
     _message.clear();
     if (trimmed.isEmpty) return;
-    _history = [text, ..._history.where((h) => h != text)].take(30).toList();
-    SharedPreferences.getInstance().then((p) => p.setStringList('message_history', _history));
+    _rememberHistory(text, wsId);
   }
 
-  /// Keeps the latest sent slash commands (`/models`…) for one-tap resend, newest first.
-  void _rememberCommand(String text) {
-    _recentCommands = [text, ..._recentCommands.where((c) => c != text)].take(8).toList();
-    SharedPreferences.getInstance().then((p) => p.setStringList('recent_commands', _recentCommands));
+  /// Keeps the latest sent slash commands (`/models`…) for one-tap resend, newest first, prioritized by workspace.
+  void _rememberCommand(String text, [String? wsId]) {
+    _recentCommands = [text, ..._recentCommands.where((c) => c != text)].take(20).toList();
+    SharedPreferences.getInstance().then((p) {
+      _prefs = p;
+      p.setStringList('recent_commands', _recentCommands);
+      if (wsId != null) {
+        final key = 'recent_commands_$wsId';
+        final wsList = [text, ...(p.getStringList(key) ?? []).where((c) => c != text)].take(20).toList();
+        p.setStringList(key, wsList);
+      }
+    });
+  }
+
+  /// Keeps the latest sent messages, newest first, prioritized by workspace.
+  void _rememberHistory(String text, [String? wsId]) {
+    _history = [text, ..._history.where((h) => h != text)].take(30).toList();
+    SharedPreferences.getInstance().then((p) {
+      _prefs = p;
+      p.setStringList('message_history', _history);
+      if (wsId != null) {
+        final key = 'message_history_$wsId';
+        final wsList = [text, ...(p.getStringList(key) ?? []).where((h) => h != text)].take(30).toList();
+        p.setStringList(key, wsList);
+      }
+    });
   }
 
   /// Picks an image and uploads it as an `@`-reference for the box ([_uploadImage]).
@@ -656,6 +680,35 @@ class _TerminalScreenState extends State<TerminalScreen> {
       _message.value = TextEditingValue(text: text, selection: TextSelection.collapsed(offset: text.length));
     });
     _messageFocus.requestFocus();
+  }
+
+  void _deleteHistory(String item) {
+    setState(() {
+      _history.remove(item);
+      final wsId = widget.client.selectedPane?.workspaceId;
+      if (wsId != null && _prefs != null) {
+        final key = 'message_history_$wsId';
+        final wsList = (_prefs!.getStringList(key) ?? [])..remove(item);
+        _prefs!.setStringList(key, wsList);
+      }
+      SharedPreferences.getInstance().then((p) {
+        _prefs = p;
+        p.setStringList('message_history', _history);
+        if (wsId != null) {
+          final key = 'message_history_$wsId';
+          final wsList = (p.getStringList(key) ?? [])..remove(item);
+          p.setStringList(key, wsList);
+        }
+      });
+    });
+  }
+
+  List<String> _contextualItems(List<String> global, String prefPrefix) {
+    final wsId = widget.client.selectedPane?.workspaceId;
+    if (wsId == null || _prefs == null) return global;
+    final wsItems = _prefs?.getStringList('${prefPrefix}_$wsId') ?? [];
+    if (wsItems.isEmpty) return global;
+    return [...wsItems, ...global.where((item) => !wsItems.contains(item))];
   }
 
   List<String> _filterHistory(List<String> items, String query) {
@@ -2167,11 +2220,13 @@ class _TerminalScreenState extends State<TerminalScreen> {
                       ValueListenableBuilder<TextEditingValue>(
                         valueListenable: _message,
                         builder: (context, val, _) {
-                          final messages = _filterHistory(_history, val.text);
-                          final commands = _filterHistory(_recentCommands, val.text);
+                          final messages = _filterHistory(_contextualItems(_history, 'message_history'), val.text);
+                          final commands = _filterHistory(_contextualItems(_recentCommands, 'recent_commands'), val.text);
                           final empty = messages.isEmpty && commands.isEmpty;
+                          final viewHeight = MediaQuery.sizeOf(context).height - MediaQuery.viewInsetsOf(context).bottom;
+                          final maxPanelHeight = (viewHeight * 0.35).clamp(120.0, 300.0);
                           return ConstrainedBox(
-                            constraints: const BoxConstraints(maxHeight: 300),
+                            constraints: BoxConstraints(maxHeight: maxPanelHeight),
                             child: Padding(
                               padding: const EdgeInsets.fromLTRB(4, 0, 4, 6),
                               child: Material(
@@ -2208,31 +2263,48 @@ class _TerminalScreenState extends State<TerminalScreen> {
                                               shrinkWrap: true,
                                               children: [
                                                 for (final h in messages)
-                                                  ListTile(
-                                                    dense: true,
-                                                    leading: const Icon(Icons.history),
-                                                    title: Text(h,
-                                                        maxLines: 2, overflow: TextOverflow.ellipsis),
-                                                    onTap: () => _pickHistory(h),
+                                                  Dismissible(
+                                                    key: ValueKey('history_$h'),
+                                                    background: Container(
+                                                      color: scheme.errorContainer,
+                                                      alignment: Alignment.centerLeft,
+                                                      padding: const EdgeInsets.symmetric(horizontal: 16),
+                                                      child: Icon(Icons.delete_outline, color: scheme.onErrorContainer),
+                                                    ),
+                                                    secondaryBackground: Container(
+                                                      color: scheme.errorContainer,
+                                                      alignment: Alignment.centerRight,
+                                                      padding: const EdgeInsets.symmetric(horizontal: 16),
+                                                      child: Icon(Icons.delete_outline, color: scheme.onErrorContainer),
+                                                    ),
+                                                    onDismissed: (_) => _deleteHistory(h),
+                                                    child: ListTile(
+                                                      dense: true,
+                                                      leading: const Icon(Icons.history),
+                                                      title: Text(h,
+                                                          maxLines: 2, overflow: TextOverflow.ellipsis),
+                                                      onTap: () => _pickHistory(h),
+                                                    ),
                                                   ),
                                               ],
                                             ),
                                     ),
                                     if (commands.isNotEmpty)
-                                      Padding(
+                                      SingleChildScrollView(
+                                        scrollDirection: Axis.horizontal,
                                         padding: const EdgeInsets.fromLTRB(12, 4, 12, 10),
-                                        child: Wrap(
-                                          spacing: 8,
-                                          runSpacing: 4,
+                                        child: Row(
                                           children: [
-                                            for (final r in commands)
+                                            for (var i = 0; i < commands.length; i++) ...[
+                                              if (i > 0) const SizedBox(width: 8),
                                               ActionChip(
                                                 backgroundColor: scheme.secondaryContainer,
                                                 side: BorderSide.none,
                                                 labelStyle: TextStyle(color: scheme.onSecondaryContainer),
-                                                label: Text(r),
-                                                onPressed: () => _sendMessage(r),
+                                                label: Text(commands[i]),
+                                                onPressed: () => _sendMessage(commands[i]),
                                               ),
+                                            ],
                                           ],
                                         ),
                                       ),
