@@ -1,6 +1,14 @@
 /// Newest first. Shown once after an update; add an entry when bumping the version in pubspec.yaml.
 const changelog = <(String, List<String>)>[
   (
+    '1.20.0',
+    [
+      'Tap https links in the terminal to open them directly in the browser.',
+      'Tapping an agent notification navigates straight to its terminal.',
+      'Message history and slash commands are scoped per workspace, with swipe-to-delete in recent messages.',
+    ]
+  ),
+  (
     '1.19.0',
     [
       'Swiping an agent left or right reveals a Close or Mute button to press, preventing accidental actions.',
