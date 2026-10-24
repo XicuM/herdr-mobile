@@ -1257,6 +1257,26 @@ class HerdrClientService extends ChangeNotifier {
     }
   }
 
+  /// Opens [url] in the system's browser.
+  @visibleForTesting
+  Future<void> Function(String url)? onOpenUrl;
+
+  Future<void> openUrl(String url) async {
+    try {
+      if (onOpenUrl != null) {
+        await onOpenUrl!(url);
+        return;
+      }
+      if (Platform.isAndroid) {
+        await _android.invokeMethod('openUrl', {'url': url});
+      } else {
+        await Process.run('xdg-open', [url]);
+      }
+    } catch (e) {
+      onError?.call('Could not open link: ${e is PlatformException ? e.message : _parseError(e)}');
+    }
+  }
+
   Future<String> _download(Delivery d) async {
     final String dir;
     if (Platform.isAndroid) {

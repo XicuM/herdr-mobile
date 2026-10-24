@@ -1220,9 +1220,91 @@ class _TerminalScreenState extends State<TerminalScreen> {
     final render = _view.currentState?.renderTerminal;
     if (render == null) return;
     final cell = render.getCellOffset(render.globalToLocal(e.position));
+    if (_urlAt(cell.x, cell.y) case final url?) {
+      widget.client.openUrl(url);
+      return;
+    }
     // xterm counts rows from the buffer's top; herdr, from the screen's.
     final top = _terminal.buffer.height - _terminal.viewHeight;
     _ptyChannel?.sendClick(cell.x, (cell.y - top).clamp(0, _terminal.viewHeight - 1));
+  }
+
+  /// The https URL under the cell at ([col], [row]), if any, joining wrapped terminal lines.
+  String? _urlAt(int col, int row) {
+    final lines = _terminal.buffer.lines;
+    if (row < 0 || row >= lines.length || col < 0 || col >= _terminal.viewWidth) return null;
+    final line = lines[row].getText();
+    if (col >= line.length || line[col] == ' ') return null;
+
+    var startCol = col;
+    while (startCol > 0 && line[startCol - 1] != ' ') startCol--;
+    var endCol = col;
+    while (endCol + 1 < line.length && line[endCol + 1] != ' ') endCol++;
+
+    var curRow = row;
+    var curStartCol = startCol;
+    final chunks = <String>[line.substring(startCol, endCol + 1)];
+    var tapOffset = col - startCol;
+
+    while (curStartCol == 0 && curRow > 0) {
+      final prevLine = lines[curRow - 1].getText().trimRight();
+      if (prevLine.length >= _terminal.viewWidth && prevLine.isNotEmpty && prevLine[prevLine.length - 1] != ' ') {
+        var prevTailStart = prevLine.length - 1;
+        while (prevTailStart > 0 && prevLine[prevTailStart - 1] != ' ') prevTailStart--;
+        final prevChunk = prevLine.substring(prevTailStart);
+        chunks.insert(0, prevChunk);
+        tapOffset += prevChunk.length;
+        curStartCol = prevTailStart;
+        curRow--;
+      } else {
+        break;
+      }
+    }
+
+    curRow = row;
+    var curEndCol = endCol;
+    while (curEndCol >= _terminal.viewWidth - 1 && curRow + 1 < lines.length) {
+      final nextLine = lines[curRow + 1].getText();
+      if (nextLine.isNotEmpty && nextLine[0] != ' ') {
+        var nextHeadEnd = 0;
+        while (nextHeadEnd + 1 < nextLine.length && nextLine[nextHeadEnd + 1] != ' ') nextHeadEnd++;
+        final nextChunk = nextLine.substring(0, nextHeadEnd + 1);
+        chunks.add(nextChunk);
+        curEndCol = nextHeadEnd;
+        curRow++;
+      } else {
+        break;
+      }
+    }
+
+    final candidate = chunks.join('');
+    final matches = RegExp(r"https://[^\s<>'`]+", caseSensitive: false).allMatches(candidate);
+    for (final m in matches) {
+      if (tapOffset >= m.start && tapOffset < m.end) {
+        var url = m.group(0)!.replaceAll(RegExp(r'''[.,;:!?'"]+$'''), '');
+        while (url.endsWith(')') || url.endsWith(']')) {
+          final openParen = '('.allMatches(url).length;
+          final closeParen = ')'.allMatches(url).length;
+          if (closeParen > openParen && url.endsWith(')')) {
+            url = url.substring(0, url.length - 1);
+            continue;
+          }
+          final openBracket = '['.allMatches(url).length;
+          final closeBracket = ']'.allMatches(url).length;
+          if (closeBracket > openBracket && url.endsWith(']')) {
+            url = url.substring(0, url.length - 1);
+            continue;
+          }
+          break;
+        }
+        url = url.replaceAll(RegExp(r'''[.,;:!?'"]+$'''), '');
+        final uri = Uri.tryParse(url);
+        if (uri != null && uri.scheme.toLowerCase() == 'https' && uri.hasAuthority) {
+          return url;
+        }
+      }
+    }
+    return null;
   }
 
   /// Opens the soft keyboard into the terminal, from the keyboard button beside the control keys.

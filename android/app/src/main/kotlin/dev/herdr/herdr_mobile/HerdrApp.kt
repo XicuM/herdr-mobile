@@ -95,6 +95,8 @@ class HerdrApp : Application() {
                     File(cacheDir, "deliveries").apply { mkdirs() }.path)
                 "openFile" -> return@setMethodCallHandler openFile(
                     call.argument<String>("path")!!, call.argument<String>("mime")!!, result)
+                "openUrl" -> return@setMethodCallHandler openUrl(
+                    call.argument<String>("url")!, result)
                 "cancel" -> nm.cancel(call.argument<String>("key").hashCode())
                 "askPermissions" -> askPermissions()
                 "askBattery" -> askBattery()
@@ -171,6 +173,19 @@ class HerdrApp : Application() {
             result.success(null)
         } catch (e: ActivityNotFoundException) {
             result.error("open", "No app on this phone opens $mime", null)
+        }
+    }
+
+    /** Opens [url] in the system browser. */
+    private fun openUrl(url: String, result: MethodChannel.Result) {
+        val activity = activity ?: return result.error("openUrl", "The app isn't on screen", null)
+        try {
+            activity.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)))
+            result.success(null)
+        } catch (e: ActivityNotFoundException) {
+            result.error("openUrl", "No app on this phone opens this link", null)
+        } catch (e: Exception) {
+            result.error("openUrl", e.message, null)
         }
     }
 

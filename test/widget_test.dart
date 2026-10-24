@@ -422,6 +422,27 @@ void main() {
       await tester.pump(const Duration(seconds: 1)); // xterm's double-tap timer
     });
 
+    testWidgets('Tapping an https link in the terminal opens it in the browser', (tester) async {
+      SharedPreferences.setMockInitialValues({'last_seen_changelog': changelog.first.$1});
+      String? openedUrl;
+      final client = HerdrClientService()
+        ..setMachines(['100.1.2.3:7788'], [])
+        ..setSnapshotForTesting(twoWorkspaces())
+        ..selectPane('w1:p1')
+        ..onOpenUrl = (url) async => openedUrl = url;
+      await tester.pumpWidget(MaterialApp(home: TerminalScreen(client: client)));
+      tester.widget<TerminalView>(find.byType(TerminalView)).terminal.write('\r\n\r\nVisit https://herdr.dev for details');
+      await tester.pump();
+      final terminal = find.byType(TerminalView);
+      // Row 2 has "Visit https://herdr.dev for details"
+      final linkPos = tester.getTopLeft(terminal) + const Offset(120, 40);
+
+      await tester.tapAt(linkPos);
+      await tester.pump();
+      expect(openedUrl, 'https://herdr.dev');
+      await tester.pump(const Duration(seconds: 1)); // xterm's double-tap timer
+    });
+
     testWidgets("A selection's handles adjust it, and Copy takes what they cover", (tester) async {
       SharedPreferences.setMockInitialValues({'last_seen_changelog': changelog.first.$1});
       String? copied;
