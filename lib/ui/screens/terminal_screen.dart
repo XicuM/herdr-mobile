@@ -18,6 +18,7 @@ import '../widgets/agent_avatar.dart';
 import '../widgets/keyboard_accessory_bar.dart';
 import '../widgets/machines.dart';
 import '../widgets/workspaces.dart';
+import 'settings_screen.dart';
 
 class TerminalScreen extends StatefulWidget {
   final HerdrClientService client;
@@ -126,6 +127,9 @@ class _TerminalScreenState extends State<TerminalScreen> {
 
   // The message bar, which an undo snackbar sits above.
   final _messageBar = GlobalKey();
+
+  // For the workspaces panel this screen opens over its terminal.
+  final _scaffold = GlobalKey<ScaffoldState>();
 
   // The terminal's true background: the colour most of the screen's edges are painted, since full-screen agents
   // paint their own over the default. The message bar and the current tab take it, joining the terminal.
@@ -388,13 +392,7 @@ class _TerminalScreenState extends State<TerminalScreen> {
         return true;
       }
       if (key == LogicalKeyboardKey.keyB) {
-        if (event is! KeyUpEvent) {
-          if (widget.onOpenDrawer != null) {
-            widget.onOpenDrawer!();
-          } else if (!widget.embedded && Navigator.canPop(context)) {
-            Navigator.pop(context, 'drawer');
-          }
-        }
+        if (event is! KeyUpEvent) _openWorkspaces();
         return true;
       }
       if (key == LogicalKeyboardKey.keyM) {
@@ -475,6 +473,24 @@ class _TerminalScreenState extends State<TerminalScreen> {
       }
     }
     return true;
+  }
+
+  /// Opens the workspaces panel: the home screen's drawer when the terminal sits beside the agents there,
+  /// else this screen's own, over the terminal ([Scaffold.drawer]), where a picked workspace switches the
+  /// pane in place.
+  void _openWorkspaces() {
+    FocusScope.of(context).unfocus();
+    if (widget.onOpenDrawer != null) {
+      widget.onOpenDrawer!();
+    } else {
+      _scaffold.currentState?.openDrawer();
+    }
+  }
+
+  /// Settings from this screen's workspaces panel; the terminal is still there on the way back.
+  void _openSettings() {
+    _scaffold.currentState?.closeDrawer();
+    Navigator.push(context, MaterialPageRoute(builder: (_) => SettingsScreen(client: widget.client)));
   }
 
   /// Everything typed or tapped reaches the pane here, with an armed CTRL applied once. Typing while
@@ -584,7 +600,7 @@ class _TerminalScreenState extends State<TerminalScreen> {
   bool _uploadingImage = false; // an upload in flight: the attach button shows it, another waits
 
   /// Uploads [bytes] to the active machine's bridge ([HerdrClientService.uploadImage]) and puts the
-  /// `@`-reference it answers in the box, or types it into the pane's own prompt when [intoTerminal]:
+  /// reference it answers in the box, or types it into the pane's own prompt when [intoTerminal]:
   /// nothing binary ever reaches a pane, the agent opens the file. [failure] starts the error shown.
   Future<void> _uploadImage(Uint8List bytes, {required String failure, bool intoTerminal = false}) async {
     if (_uploadingImage) return;
@@ -593,12 +609,13 @@ class _TerminalScreenState extends State<TerminalScreen> {
       final (image, mime) = AttachedImage.uploadable(bytes);
       final path = await widget.client.uploadImage(image, mime);
       if (path == null || !mounted) return; // reported through onError
+      final ref = AttachedImage.formatReference(_currentAgent()?.name, path);
       if (intoTerminal) {
-        _pasteFromClipboard('@$path ');
+        _pasteFromClipboard(ref);
         return;
       }
       final cur = _message.text;
-      final next = cur.isEmpty ? '@$path ' : '${cur.endsWith(' ') ? cur : '$cur '}@$path ';
+      final next = cur.isEmpty ? ref : '${cur.endsWith(' ') ? cur : '$cur '}$ref';
       _message.value = TextEditingValue(text: next, selection: TextSelection.collapsed(offset: next.length));
     } catch (e) {
       _imageError('$failure ($e).');
@@ -1729,61 +1746,78 @@ class _TerminalScreenState extends State<TerminalScreen> {
         if (!didPop && _showingHistory) _closeHistory();
       },
       child: Scaffold(
+        key: _scaffold,
+        // Only the header and Alt+B open it: an edge swipe would fight the terminal's own gestures.
+        drawerEnableOpenDragGesture: false,
+        drawer: WorkspacesDrawer(
+          client: widget.client,
+          open: () => _scaffold.currentState?.closeDrawer(),
+          onSettings: _openSettings,
+        ),
       appBar: AppBar(
-        automaticallyImplyLeading: !widget.embedded,
+        // The workspaces drawer would otherwise take the implied back button's place.
+        automaticallyImplyLeading: false,
+        leading: !widget.embedded && Navigator.canPop(context) ? const BackButton() : null,
         // Beside the back button; embedded, with none, the usual inset from the agents.
         titleSpacing: widget.embedded ? NavigationToolbar.kMiddleSpacing : 0,
         // The terminal isn't content scrolling under the bar: keep the bar's colour when it scrolls.
         notificationPredicate: (_) => false,
         // A step above the terminal's surface, so the current tab stands out joined to the terminal.
         backgroundColor: scheme.surfaceContainerHigh,
-        // The workspace's name and branch; its actions are in the workspaces panel.
-        title: Padding(
-          padding: const EdgeInsets.symmetric(vertical: 4),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Text(
-                title,
-                style: Theme.of(context).textTheme.titleMedium,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
+        // The workspace's name, branch and ↑↓ counts: tapping it opens the workspaces panel.
+        title: Tooltip(
+          message: 'Open workspaces',
+          child: InkWell(
+            onTap: _openWorkspaces,
+            borderRadius: BorderRadius.circular(8),
+            child: Padding(
+              padding: const EdgeInsets.symmetric(vertical: 4),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(
+                    title,
+                    style: Theme.of(context).textTheme.titleMedium,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                  if (isWorktree || branch.isNotEmpty)
+                    Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        if (isWorktree) ...[
+                          Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
+                            decoration: BoxDecoration(
+                              color: scheme.secondaryContainer,
+                              borderRadius: BorderRadius.circular(4),
+                            ),
+                            child: Text(
+                              'worktree',
+                              style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                                    color: scheme.onSecondaryContainer,
+                                    fontSize: 10,
+                                    fontWeight: FontWeight.w500,
+                                  ),
+                            ),
+                          ),
+                          if (branch.isNotEmpty) const SizedBox(width: 6),
+                        ],
+                        if (branch.isNotEmpty)
+                          Flexible(
+                            child: Text.rich(
+                              TextSpan(text: branch, children: aheadBehind(workspace!)),
+                              style: Theme.of(context).textTheme.bodySmall?.copyWith(color: scheme.onSurfaceVariant),
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                          ),
+                      ],
+                    ),
+                ],
               ),
-              if (isWorktree || branch.isNotEmpty)
-                Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    if (isWorktree) ...[
-                      Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
-                        decoration: BoxDecoration(
-                          color: scheme.secondaryContainer,
-                          borderRadius: BorderRadius.circular(4),
-                        ),
-                        child: Text(
-                          'worktree',
-                          style: Theme.of(context).textTheme.labelSmall?.copyWith(
-                                color: scheme.onSecondaryContainer,
-                                fontSize: 10,
-                                fontWeight: FontWeight.w500,
-                              ),
-                        ),
-                      ),
-                      if (branch.isNotEmpty) const SizedBox(width: 6),
-                    ],
-                    if (branch.isNotEmpty)
-                      Flexible(
-                        child: Text.rich(
-                          TextSpan(text: branch, children: aheadBehind(workspace!)),
-                          style: Theme.of(context).textTheme.bodySmall?.copyWith(color: scheme.onSurfaceVariant),
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                        ),
-                      ),
-                  ],
-                ),
-            ],
+            ),
           ),
         ),
         actions: [

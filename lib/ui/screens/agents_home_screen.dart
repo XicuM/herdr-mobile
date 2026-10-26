@@ -416,12 +416,6 @@ class _AgentsHomeScreenState extends State<AgentsHomeScreen> {
       if (action == 'search') {
         _searchFocus.requestFocus();
         setState(() => _query = _query ?? '');
-      } else if (action == 'drawer') {
-        if (_scaffold.currentState?.isDrawerOpen == true) {
-          _scaffold.currentState?.closeDrawer();
-        } else {
-          _scaffold.currentState?.openDrawer();
-        }
       } else if (action == 'machines') {
         if (_scaffold.currentState?.isEndDrawerOpen == true) {
           _scaffold.currentState?.closeEndDrawer();
@@ -726,25 +720,10 @@ class _AgentsHomeScreenState extends State<AgentsHomeScreen> {
               key: _scaffold,
               // Only the ☰ opens it: an edge swipe would fight the rows' swipe to mute and Android's back.
               drawerEnableOpenDragGesture: false,
-              drawer: Drawer(
-                child: SafeArea(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Padding(
-                        padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
-                        child: Text('Workspaces', style: Theme.of(context).textTheme.titleLarge),
-                      ),
-                      Expanded(child: WorkspaceList(client: client, open: () => _fromDrawer(_openTerminal))),
-                      const Divider(height: 1),
-                      ListTile(
-                        leading: const Icon(Icons.settings_outlined),
-                        title: const Text('Settings'),
-                        onTap: () => _fromDrawer(_openSettings),
-                      ),
-                    ],
-                  ),
-                ),
+              drawer: WorkspacesDrawer(
+                client: client,
+                open: () => _fromDrawer(_openTerminal),
+                onSettings: () => _fromDrawer(_openSettings),
               ),
               // The machines, on the side their icon is: each with how it's doing and a switch; its + adds one.
               endDrawerEnableOpenDragGesture: false,

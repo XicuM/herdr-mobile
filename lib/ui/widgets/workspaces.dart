@@ -175,6 +175,38 @@ class WorkspaceList extends StatelessWidget {
   }
 }
 
+/// The workspaces panel, as the home screen's ☰ and the terminal's header open it: the workspaces above,
+/// Settings at the foot. [open] runs once one is picked, to show it; [onSettings] opens Settings.
+class WorkspacesDrawer extends StatelessWidget {
+  final HerdrClientService client;
+  final VoidCallback open;
+  final VoidCallback onSettings;
+
+  const WorkspacesDrawer({super.key, required this.client, required this.open, required this.onSettings});
+
+  @override
+  Widget build(BuildContext context) => Drawer(
+        child: SafeArea(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Padding(
+                padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
+                child: Text('Workspaces', style: Theme.of(context).textTheme.titleLarge),
+              ),
+              Expanded(child: WorkspaceList(client: client, open: open)),
+              const Divider(height: 1),
+              ListTile(
+                leading: const Icon(Icons.settings_outlined),
+                title: const Text('Settings'),
+                onTap: onSettings,
+              ),
+            ],
+          ),
+        ),
+      );
+}
+
 /// A workspace's menu, from a hold or a right-click in the drawer or search ([HoldMenu]), as Herdr's sidebar has it:
 /// Rename and Close; Close group for a repository's main workspace with its linked worktrees open (herdr closes
 /// them together); New worktree and Open worktree for a git workspace that isn't a linked worktree; and Delete

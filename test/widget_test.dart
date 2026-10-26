@@ -675,6 +675,35 @@ void main() {
       expect(find.byType(TerminalScreen), findsOneWidget);
     });
 
+    testWidgets("The terminal's header opens the workspaces panel over it, switching pane in place",
+        (tester) async {
+      SharedPreferences.setMockInitialValues({'last_seen_changelog': changelog.first.$1});
+      final client = HerdrClientService()
+        ..setMachines(['100.1.2.3:7788'], [])
+        ..switchMachine('100.1.2.3:7788')
+        ..setSnapshotForTesting(twoWorkspaces())
+        ..setConnectedForTesting('100.1.2.3:7788', true)
+        ..selectPane('w1:p1');
+      await tester.pumpWidget(MaterialApp(home: TerminalScreen(client: client)));
+      Future<void> settle() async {
+        await tester.pump();
+        await tester.pump(const Duration(seconds: 1)); // the terminal's own stream never settles
+      }
+
+      // The workspace's name, with its branch under it, opens the panel; the terminal stays.
+      await tester.tap(find.text('backend'));
+      await settle();
+      expect(find.text('Workspaces'), findsOneWidget);
+      expect(find.byType(TerminalScreen), findsOneWidget);
+
+      // Picking another workspace switches this terminal to it, closing only the panel.
+      await tester.tap(find.descendant(of: find.byType(WorkspaceList), matching: find.text('frontend')));
+      await settle();
+      expect(client.selectedPaneId, 'w2:p4');
+      expect(find.text('Workspaces'), findsNothing);
+      expect(find.byType(TerminalScreen), findsOneWidget);
+    });
+
     testWidgets('A landscape tablet shows the terminal beside the agents, and rotating moves it', (tester) async {
       SharedPreferences.setMockInitialValues({'last_seen_changelog': changelog.first.$1});
       const m = '100.1.2.3:7788';
@@ -2793,6 +2822,12 @@ void main() {
       await tester.sendKeyDownEvent(LogicalKeyboardKey.altLeft);
       await tester.sendKeyEvent(LogicalKeyboardKey.keyB);
       await tester.sendKeyUpEvent(LogicalKeyboardKey.altLeft);
+      await tester.pump();
+      expect(drawerOpened, isTrue);
+
+      // Tapping the workspace's name (with its branch under it) opens it too.
+      drawerOpened = false;
+      await tester.tap(find.text('ws2'));
       await tester.pump();
       expect(drawerOpened, isTrue);
 
