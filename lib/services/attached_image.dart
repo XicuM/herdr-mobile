@@ -82,4 +82,29 @@ class AttachedImage {
     if (bytes.length > maxBytes) throw StateError('Image is over 10 MB.');
     return (bytes, mime);
   }
+
+  /// Formats [path] in [agent]'s own mention syntax. Mirrors what each harness's
+  /// @ completion inserts (and herdr-obsidian / herdr-companion).
+  static String formatReference(String? agent, String path) {
+    final quote = path.contains(' ') ? '"$path"' : path;
+    switch (agent?.toLowerCase()) {
+      // Codex's @ menu inserts a bare path; the @ is only the trigger.
+      case 'codex':
+        return '$quote ';
+      // Copilot, Grok and Antigravity attach @path.
+      case 'agy':
+      case 'copilot':
+      case 'grok':
+        return '@$path ';
+      // opencode sends @path.
+      case 'opencode':
+        return '@$path ';
+      // pi quotes paths with spaces.
+      case 'pi':
+        return '@$quote ';
+      // Claude (and unknown harnesses) parse @path, quotes included.
+      default:
+        return '@$quote ';
+    }
+  }
 }

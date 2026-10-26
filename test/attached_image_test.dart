@@ -37,4 +37,19 @@ void main() {
     expect(AttachedImage.pickClipboardType('text/plain;charset=utf-8'), isNull);
     expect(AttachedImage.pickClipboardType(''), isNull);
   });
+
+  test('formatReference formats for each agent', () {
+    expect(AttachedImage.formatReference('codex', 'img.png'), 'img.png ');
+    expect(AttachedImage.formatReference('codex', 'my img.png'), '"my img.png" ');
+    expect(AttachedImage.formatReference('agy', 'img.png'), '@img.png ');
+    expect(AttachedImage.formatReference('copilot', 'img.png'), '@img.png ');
+    expect(AttachedImage.formatReference('grok', 'img.png'), '@img.png ');
+    expect(AttachedImage.formatReference('opencode', 'img.png'), '@img.png ');
+    expect(AttachedImage.formatReference('pi', 'img.png'), '@img.png ');
+    expect(AttachedImage.formatReference('pi', 'my img.png'), '@"my img.png" ');
+    expect(AttachedImage.formatReference('claude', 'img.png'), '@img.png ');
+    expect(AttachedImage.formatReference('claude', 'my img.png'), '@"my img.png" ');
+    expect(AttachedImage.formatReference(null, 'img.png'), '@img.png ');
+    expect(AttachedImage.formatReference('unknown', 'img.png'), '@img.png ');
+  });
 }
