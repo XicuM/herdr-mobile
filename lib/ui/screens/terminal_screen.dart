@@ -1852,7 +1852,7 @@ class _TerminalScreenState extends State<TerminalScreen> {
                 ),
                 onPressed: () {
                   FocusScope.of(context).unfocus();
-                  showMachineSheet(context, client, client.machine);
+                  showMachinePage(context, client, client.machine);
                 },
               ),
             ),

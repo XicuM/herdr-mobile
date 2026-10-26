@@ -156,8 +156,7 @@ Widget? machineStatusIcon(HerdrClientService client, String m, ColorScheme schem
             ),
           );
 
-/// How [m] is doing (the whole reason when it fails) beside its switch, on a card: the top of its sheet and
-/// its page.
+/// How [m] is doing (the whole reason when it fails) beside its switch, on a card: the top of its page.
 Widget machineStatusCard(HerdrClientService client, String m, ThemeData theme) => Card.filled(
       margin: EdgeInsets.zero,
       child: Padding(
@@ -180,55 +179,6 @@ Widget machineStatusCard(HerdrClientService client, String m, ThemeData theme) =
         ),
       ),
     );
-
-/// [m] at a glance, from the terminal's machine chip: its name and address, Edit ([showMachinePage]), and
-/// its status card.
-void showMachineSheet(BuildContext context, HerdrClientService client, String m) {
-  showModalBottomSheet(
-    context: context,
-    showDragHandle: true,
-    builder: (sheetContext) => ListenableBuilder(
-      listenable: client,
-      builder: (sheetContext, _) {
-        if (!client.machines.contains(m)) return const SizedBox();
-        final theme = Theme.of(sheetContext);
-        final scheme = theme.colorScheme;
-        final address = HerdrClientService.parentOf(m) == null ? m : client.targetOf(m);
-        return SafeArea(
-          child: Padding(
-            padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                ListTile(
-                  contentPadding: const EdgeInsets.only(left: 4),
-                  leading: CircleAvatar(
-                    backgroundColor: scheme.secondaryContainer,
-                    foregroundColor: scheme.onSecondaryContainer,
-                    child: Icon(HerdrClientService.parentOf(m) == null ? Icons.lan_outlined : Icons.terminal),
-                  ),
-                  title: Text(client.nameOf(m),
-                      style: theme.textTheme.titleMedium?.copyWith(fontWeight: FontWeight.bold)),
-                  subtitle: address != null && address != client.nameOf(m) ? Text(address) : null,
-                  trailing: IconButton.filledTonal(
-                    icon: const Icon(Icons.edit_outlined),
-                    tooltip: 'Edit',
-                    onPressed: () {
-                      Navigator.pop(sheetContext);
-                      showMachinePage(context, client, m);
-                    },
-                  ),
-                ),
-                const SizedBox(height: 12),
-                machineStatusCard(client, m, theme),
-              ],
-            ),
-          ),
-        );
-      },
-    ),
-  );
-}
 
 typedef MachineDetailCallback = void Function(String? m);
 

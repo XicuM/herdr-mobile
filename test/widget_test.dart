@@ -1610,10 +1610,11 @@ void main() {
       await settle();
       expect(dot().color, equals(Colors.green));
 
-      // Tapping the chip opens the machine's sheet, not its edit page
+      // Tapping the chip opens the machine's page: its status, then Connection, Display and Remove
       await tester.tap(chipFinder);
       await settle();
-      expect(find.text('Edit machine'), findsNothing);
+      expect(find.text('Connection'), findsOneWidget);
+      expect(find.text('Save'), findsOneWidget);
     });
 
     testWidgets('AgentsHomeScreen displays workspace (tab_name) · machine in agent subtitle', (tester) async {
