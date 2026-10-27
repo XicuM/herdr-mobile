@@ -860,22 +860,41 @@ class HerdrClientService extends ChangeNotifier {
     if (idx >= 0 && idx < tabs.length - 1) moveTab(tabs[idx].id, tabs[idx + 1].id);
   }
 
-  /// The agent (machine, pane) [step] places from the one on screen, wrapping around, in the drawer's order:
-  /// the connected machines in theirs, then herdr's workspaces, tabs and panes. A stable order, unlike the
-  /// agents' list, so swiping back returns to where it came from. Null with nowhere else to go.
+  static const urgency = ['blocked', 'working', 'monitoring', 'done', 'idle'];
+
+  /// All agents across active machines, ordered as displayed on the agents page:
+  /// by status urgency, then by change timestamp (most recent first), then by sequence.
+  List<(String, SessionSnapshot, AgentModel, PaneModel?)> agentRows() {
+    final rows = <(String, SessionSnapshot, AgentModel, PaneModel?)>[];
+    for (final m in _machines) {
+      if (_off.contains(m)) continue;
+      final s = snapshotOf(m);
+      if (s == null) continue;
+      final pane = {for (final p in s.panes) p.id: p};
+      for (final a in s.agents) {
+        rows.add((m, s, a, pane[a.paneId]));
+      }
+    }
+    int rank(AgentModel a) => switch (urgency.indexOf(a.displayStatus)) { -1 => urgency.length, final i => i };
+    DateTime at(String m, AgentModel a) => changedAt(a.paneId, m) ?? DateTime(0);
+    rows.sort((x, y) => rank(x.$3) != rank(y.$3)
+        ? rank(x.$3) - rank(y.$3)
+        : switch (at(y.$1, y.$3).compareTo(at(x.$1, x.$3))) {
+            0 => (y.$3.stateChangeSeq ?? 0) - (x.$3.stateChangeSeq ?? 0),
+            final c => c,
+          });
+    return rows;
+  }
+
+  /// The agent (machine, pane) [step] places from the one on screen, wrapping around,
+  /// in the order shown on the agents page. Null with nowhere else to go.
   (String, String)? agentAt(int step) {
-    final all = [
-      for (final m in _machines)
-        if (!_off.contains(m) && isConnected(m) && snapshotOf(m) != null)
-          for (final w in snapshotOf(m)!.workspaces)
-            for (final t in snapshotOf(m)!.tabs.where((t) => t.workspaceId == w.id))
-              for (final p in snapshotOf(m)!.panes.where((p) => p.tabId == t.id))
-                if (snapshotOf(m)!.agents.any((a) => a.paneId == p.id)) (m, p.id)
-    ];
+    final all = [for (final r in agentRows()) (r.$1, r.$3.paneId)];
     final i = all.indexOf((machine, selectedPaneId ?? ''));
     if (all.isEmpty || (i >= 0 && all.length == 1)) return null;
     // Off the list (a plain shell), the first step forward is the first agent, and back the last.
-    return all[(i < 0 ? (step > 0 ? 0 : -1) : i + step) % all.length];
+    final next = i < 0 ? (step > 0 ? 0 : all.length - 1) : (i + step) % all.length;
+    return all[(next + all.length) % all.length];
   }
 
   /// Shows the agent [step] places from the one on screen ([agentAt]).

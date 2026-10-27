@@ -1,6 +1,12 @@
 /// Newest first. Shown once after an update; add an entry when bumping the version in pubspec.yaml.
 const changelog = <(String, List<String>)>[
   (
+    '1.21.1',
+    [
+      'Alt+↑/↓ traverses agents in the order shown on the agents page.',
+    ]
+  ),
+  (
     '1.21.0',
     [
       'Fix Alt shortcuts (switching tabs, stepping agents, new tab) triggering twice in wide/desktop view.',

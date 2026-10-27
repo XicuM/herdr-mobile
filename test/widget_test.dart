@@ -2726,6 +2726,51 @@ void main() {
       expect(client.selectedPaneId, 'p3');
     });
 
+    test('HerdrClientService agentRows and stepAgent follow agent page order', () {
+      final client = HerdrClientService();
+      final snap = SessionSnapshot.fromJson({
+        'workspaces': [
+          {'workspace_id': 'w1', 'number': 1, 'label': 'ws1', 'active_tab_id': 't1', 'agent_status': 'idle'},
+        ],
+        'tabs': [
+          {'tab_id': 't1', 'workspace_id': 'w1', 'number': 1, 'label': 'Tab 1', 'agent_status': 'idle'},
+        ],
+        'panes': [
+          {'pane_id': 'p_done', 'workspace_id': 'w1', 'tab_id': 't1', 'focused': false, 'agent_status': 'done', 'terminal_title': ''},
+          {'pane_id': 'p_blocked', 'workspace_id': 'w1', 'tab_id': 't1', 'focused': false, 'agent_status': 'blocked', 'terminal_title': ''},
+          {'pane_id': 'p_working', 'workspace_id': 'w1', 'tab_id': 't1', 'focused': false, 'agent_status': 'working', 'terminal_title': ''},
+        ],
+        'agents': [
+          {'pane_id': 'p_done', 'name': 'agent_done', 'status': 'done'},
+          {'pane_id': 'p_blocked', 'name': 'agent_blocked', 'status': 'blocked'},
+          {'pane_id': 'p_working', 'name': 'agent_working', 'status': 'working'},
+        ],
+      });
+      client.setMachines(['127.0.0.1:7788'], []);
+      client.setSnapshotForTesting(snap);
+
+      // Order on agent page must be: blocked, working, done
+      final rows = client.agentRows();
+      expect(rows.map((r) => r.$3.paneId).toList(), ['p_blocked', 'p_working', 'p_done']);
+
+      // Stepping forward (down the list)
+      client.selectPane('p_blocked');
+      client.stepAgent(1);
+      expect(client.selectedPaneId, 'p_working');
+      client.stepAgent(1);
+      expect(client.selectedPaneId, 'p_done');
+      client.stepAgent(1);
+      expect(client.selectedPaneId, 'p_blocked');
+
+      // Stepping backward (up the list)
+      client.stepAgent(-1);
+      expect(client.selectedPaneId, 'p_done');
+      client.stepAgent(-1);
+      expect(client.selectedPaneId, 'p_working');
+      client.stepAgent(-1);
+      expect(client.selectedPaneId, 'p_blocked');
+    });
+
     testWidgets('TerminalScreen responds to Alt keybindings', (tester) async {
       final client = HerdrClientService();
       final snap = SessionSnapshot.fromJson({
@@ -2789,19 +2834,19 @@ void main() {
       await tester.pump();
       expect(client.selectedPaneId, 'p2');
 
-      // Alt + Down -> next agent (from a plain shell, the first one)
+      // Alt + Down -> next agent (from a plain shell, the first one on the agents page)
       await tester.sendKeyDownEvent(LogicalKeyboardKey.altLeft);
       await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
       await tester.sendKeyUpEvent(LogicalKeyboardKey.altLeft);
       await tester.pump();
-      expect(client.selectedPaneId, 'p1');
+      expect(client.selectedPaneId, 'p3');
 
-      // Alt + Up -> previous agent, wrapping around
+      // Alt + Up -> previous agent, wrapping around to the last one
       await tester.sendKeyDownEvent(LogicalKeyboardKey.altLeft);
       await tester.sendKeyEvent(LogicalKeyboardKey.arrowUp);
       await tester.sendKeyUpEvent(LogicalKeyboardKey.altLeft);
       await tester.pump();
-      expect(client.selectedPaneId, 'p3');
+      expect(client.selectedPaneId, 'p1');
 
       // Alt + O -> jump to attention
       client.selectPane('p1');

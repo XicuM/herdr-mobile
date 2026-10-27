@@ -11,9 +11,6 @@ import '../widgets/workspaces.dart';
 import 'settings_screen.dart';
 import 'terminal_screen.dart';
 
-/// Most urgent first; any other status after these.
-const _urgency = ['blocked', 'working', 'monitoring', 'done', 'idle'];
-
 /// The home screen, like a chat list: every agent on every connected machine, most urgent first and
 /// within that most recently changed first. Each row shows, as its terminal's top bar does, the summary
 /// the agent's terminal title gives, and under it its workspace, tab and status.
@@ -482,24 +479,7 @@ class _AgentsHomeScreenState extends State<AgentsHomeScreen> {
         final machines = client.machines;
         final on = machines.where((m) => !client.isOff(m)).toList();
         final connected = on.where(client.isConnected).toList();
-        final rows = <(String, SessionSnapshot, AgentModel, PaneModel?)>[];
-        for (final m in on) {
-          final s = client.snapshotOf(m);
-          if (s == null) continue;
-          final pane = {for (final p in s.panes) p.id: p};
-          for (final a in s.agents) {
-            rows.add((m, s, a, pane[a.paneId]));
-          }
-        }
-        int rank(AgentModel a) => switch (_urgency.indexOf(a.displayStatus)) { -1 => _urgency.length, final i => i };
-        DateTime at(String m, AgentModel a) => client.changedAt(a.paneId, m) ?? DateTime(0);
-        // Those with no time (there before the app saw them change) by herdr's seq, one counter for all its panes.
-        rows.sort((x, y) => rank(x.$3) != rank(y.$3)
-            ? rank(x.$3) - rank(y.$3)
-            : switch (at(y.$1, y.$3).compareTo(at(x.$1, x.$3))) {
-                0 => (y.$3.stateChangeSeq ?? 0) - (x.$3.stateChangeSeq ?? 0),
-                final c => c,
-              });
+        final rows = client.agentRows();
         // Agents that have gone drop out of the selection.
         _selected.retainWhere((a) => rows.any((r) => r.$1 == a.$1 && r.$3.paneId == a.$2));
         final selecting = _selected.isNotEmpty;
