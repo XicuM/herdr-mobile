@@ -1167,7 +1167,8 @@ class HerdrClientService extends ChangeNotifier {
   }
 
   /// Hides [keys] (`machine/id` of panes, tabs or workspaces) at once, and once [undone] completes shows
-  /// them again: after [close] has closed them, unless it was undone.
+  /// them again: after [close] has closed them, unless it was undone, which also selects again the pane that
+  /// was selected if the close took it away.
   Future<void> closeUnlessUndone(List<String> keys, Future<bool> undone, Future<void> Function() close) async {
     void show() {
       for (final m in _conns.keys) {
@@ -1176,11 +1177,21 @@ class HerdrClientService extends ChangeNotifier {
       notifyListeners();
     }
 
+    final selected = {for (final e in _conns.entries) e.key: e.value.selectedPaneId};
     _hidden.addAll(keys);
     show();
-    if (!await undone) await close();
+    selected.removeWhere((m, id) => _conns[m]!.selectedPaneId == id);
+    final wasUndone = await undone;
+    if (!wasUndone) await close();
     _hidden.removeAll(keys);
     show();
+    if (wasUndone) {
+      for (final e in selected.entries) {
+        final c = _conns[e.key]!;
+        if (e.value != null && c.snapshot?.panes.any((p) => p.id == e.value) == true) c.selectedPaneId = e.value;
+      }
+      notifyListeners();
+    }
   }
 
   /// The pane to show once the selected one is gone (its shell exited, or its tab or workspace closed):

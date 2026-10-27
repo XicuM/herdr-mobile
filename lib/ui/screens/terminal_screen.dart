@@ -99,19 +99,12 @@ class _TerminalScreenState extends State<TerminalScreen> {
   int? _scrollRow; // widget scrolled (an alternate-screen app only scrolls the widget under the wheel)
   bool _left = false; // popped back to the agents, since the machine went off
 
-  // Pinch-to-zoom, two-finger swipes between agents, a two-finger swipe down to close the tab,
-  // and history scrolling, tracked from raw pointers so they don't fight the terminal's own gestures.
+  // Pinch-to-zoom and history scrolling, tracked from raw pointers so they don't fight the terminal's own gestures.
   final _pointers = <int, Offset>{};
-  Offset? _twoAt; // where two fingers' midpoint started, while two are down
-  double _twoDistance = 0; // and how far apart they were
-  bool? _swiping; // what two fingers do: null until they pinch (false) or move sideways together (true)
-  double _swipeDx = 0; // how far the terminal follows a sideways swipe; past [_swipeAt] on release, it switches
-  static const _swipeAt = 80.0;
-  double _swipeDy = 0; // how far two fingers moved down together; past [_swipeDownAt] on release, it closes the tab
-  static const _swipeDownAt = 80.0;
-  bool _swipeDown = false; // two fingers heading down together, not swiping sideways nor pinching
-  Offset _padPan = Offset.zero; // a touchpad's two-finger pan so far, until it picks an axis
-  Axis? _padAxis;
+  double? _twoDistance; // how far apart two fingers were when they went down, while two are down
+  bool _pinching = false; // two fingers have moved apart or together
+  Offset _padPan = Offset.zero; // a touchpad's two-finger pan so far, until it picks a direction
+  bool? _padVertical; // whether that pan scrolls: it keeps the direction it first moves along
   double _pinchFont = 0;
   Offset _downAt = Offset.zero;
   int? _downPointer; // the press that may be a tap; a right or middle click never is
@@ -1301,56 +1294,20 @@ class _TerminalScreenState extends State<TerminalScreen> {
     }
     if (e is PointerMoveEvent && _pointers.length == 1 && !_pinched) return _scroll(e);
     if (_pointers.length != 2) {
-      if (_twoAt != null) _endSwipe();
-      _twoAt = null;
+      _twoDistance = null;
       return;
     }
     _pinched = true; // the rest of the gesture never scrolls
     final p = _pointers.values.toList();
     final distance = (p[0] - p[1]).distance;
-    final centre = (p[0] + p[1]) / 2;
-    if (_twoAt == null) {
-      _twoAt = centre;
+    if (_twoDistance == null) {
       _twoDistance = distance;
       _pinchFont = widget.client.fontSize;
-      _swiping = null;
-      _swipeDown = false;
-      _swipeDy = 0;
+      _pinching = false;
       return;
     }
-    // Fingers moving sideways together swipe; moving apart or together pinch; moving down together
-    // close the tab on release; whichever shows first wins.
-    final dx = centre.dx - _twoAt!.dx;
-    final dy = centre.dy - _twoAt!.dy;
-    final stretch = distance - _twoDistance;
-    if (!_swipeDown) {
-      _swiping ??= dx.abs() > kPanSlop && dx.abs() > stretch.abs()
-          ? true
-          : stretch.abs() > kPanSlop && widget.client.pinchZoom
-              ? false
-              : null;
-    }
-    if (!_swipeDown && _swiping == null && dy > kPanSlop && dy > dx.abs() && dy > stretch.abs()) {
-      _swipeDown = true;
-    }
-    if (_swiping == false) widget.client.setFontSize((_pinchFont * distance / _twoDistance).roundToDouble());
-    if (_swiping == true) _swipe(dx);
-    if (_swipeDown) {
-      if ((dy >= _swipeDownAt) != (_swipeDy >= _swipeDownAt)) HapticFeedback.selectionClick();
-      _swipeDy = dy;
-    }
-  }
-
-  /// Where a swipe [step] agents along leads, named as the list does: the agent's summary, then where it is.
-  String? _peek(int step) {
-    final client = widget.client;
-    final (m, paneId) = client.agentAt(step) ?? ('', '');
-    final snapshot = client.snapshotOf(m);
-    final pane = snapshot?.panes.where((p) => p.id == paneId).firstOrNull;
-    if (pane == null) return null;
-    final agent = snapshot!.agents.where((a) => a.paneId == paneId).firstOrNull;
-    final place = [snapshot.placeOf(pane), if (m != client.machine) client.nameOf(m)].join(' · ');
-    return '${pane.terminalTitle.isNotEmpty ? pane.terminalTitle : agent?.name ?? ''}\n$place';
+    if (!_pinching && (distance - _twoDistance!).abs() > kPanSlop && widget.client.pinchZoom) _pinching = true;
+    if (_pinching) widget.client.setFontSize((_pinchFont * distance / _twoDistance!).roundToDouble());
   }
 
   /// The soft keyboard never opens on a tap: typing is what the control keys are for, and opening it
@@ -1470,36 +1427,6 @@ class _TerminalScreenState extends State<TerminalScreen> {
     _view.currentState?.requestKeyboard();
   }
 
-  /// Two fingers have moved [dx] sideways together: the terminal follows them, with a tick as they pass the
-  /// point where letting go switches agent ([_endSwipe]).
-  void _swipe(double dx) {
-    if ((dx.abs() >= _swipeAt) != (_swipeDx.abs() >= _swipeAt)) HapticFeedback.selectionClick();
-    setState(() => _swipeDx = dx);
-  }
-
-  /// Fingers lifted: past [_swipeAt], the next agent (fingers gone left, as a page turns) or the previous
-  /// ([stepAgent]); either way the terminal springs back into place. Two fingers swiped down together
-  /// past [_swipeDownAt] close the current tab instead ([_closeTabByGesture]).
-  void _endSwipe() {
-    if (_swipeDx.abs() >= _swipeAt) widget.client.stepAgent(_swipeDx < 0 ? 1 : -1);
-    if (_swipeDx != 0) setState(() => _swipeDx = 0);
-    if (_swipeDown && _swipeDy >= _swipeDownAt) _closeTabByGesture();
-    _swipeDown = false;
-    _swipeDy = 0;
-  }
-
-  /// Two fingers swiped down together close the current tab, undoable like its menu's Close tab. Never
-  /// with text selected: that gesture is for the selection, not the tab.
-  void _closeTabByGesture() {
-    if (_controller.selection != null) return;
-    final tabId = widget.client.selectedPane?.tabId;
-    if (tabId == null) return;
-    final client = widget.client;
-    final m = client.machine;
-    HapticFeedback.mediumImpact();
-    closeWithUndo(context, client, 'Tab closed', ['$m/$tabId'], () => client.closeTab(tabId, m), above: _messageBar);
-  }
-
   /// Herdr holds the pane's history (see [PtyChannel.connect]), so dragging scrolls herdr's view a line
   /// per text row moved. A press held still past the long-press timeout is text selection instead, and
   /// so is any mouse drag: a mouse scrolls with its wheel ([_scrollSignal]).
@@ -1515,23 +1442,20 @@ class _TerminalScreenState extends State<TerminalScreen> {
   }
 
   /// A mouse wheel scrolls herdr's view like a drag does, and so does a desktop touchpad's two-finger pan
-  /// up or down; sideways, it swipes between agents as two fingers on a phone do. A pan keeps the axis
-  /// it first moves along.
+  /// up or down.
   void _scrollSignal(PointerEvent e) {
     if (e is PointerScrollEvent) _scrollBy(-e.scrollDelta.dy, e.position);
     if (e is PointerPanZoomStartEvent) {
       _padPan = Offset.zero;
-      _padAxis = null;
+      _padVertical = null;
     }
-    if (e is PointerPanZoomEndEvent) _endSwipe();
     if (e is! PointerPanZoomUpdateEvent) return;
     _padPan += e.panDelta;
-    if (_padAxis == null && _padPan.distance > kTouchSlop) {
-      _padAxis = _padPan.dx.abs() > _padPan.dy.abs() ? Axis.horizontal : Axis.vertical;
-      if (_padAxis == Axis.vertical) return _scrollBy(_padPan.dy, e.position);
+    if (_padVertical == null && _padPan.distance > kTouchSlop) {
+      _padVertical = _padPan.dy.abs() > _padPan.dx.abs();
+      if (_padVertical!) return _scrollBy(_padPan.dy, e.position);
     }
-    if (_padAxis == Axis.vertical) _scrollBy(e.panDelta.dy, e.position);
-    if (_padAxis == Axis.horizontal) _swipe(_padPan.dx);
+    if (_padVertical == true) _scrollBy(e.panDelta.dy, e.position);
   }
 
   /// The 0-based screen cell under [global], or null when the terminal has no size yet.
@@ -2153,31 +2077,7 @@ class _TerminalScreenState extends State<TerminalScreen> {
                             child: Container(
                                 color: background,
                                 padding: EdgeInsets.symmetric(horizontal: widget.embedded ? 4 : 0),
-                                // Following a two-finger swipe until it switches agent, and springing back after;
-                                // behind it, where each way leads.
-                                child: Stack(children: [
-                                  if (_swipeDx != 0)
-                                    Positioned.fill(
-                                      child: Row(children: [
-                                        for (final step in [-1, 1])
-                                          if (_peek(step) case final label?)
-                                            Expanded(
-                                              child: Padding(
-                                                padding: const EdgeInsets.symmetric(horizontal: 12),
-                                                child: Text(step < 0 ? '‹ $label' : '$label ›',
-                                                    maxLines: 4,
-                                                    overflow: TextOverflow.ellipsis,
-                                                    textAlign: step < 0 ? TextAlign.left : TextAlign.right,
-                                                    style: Theme.of(context).textTheme.labelLarge),
-                                              ),
-                                            ),
-                                      ]),
-                                    ),
-                                  AnimatedContainer(
-                                    duration: _swipeDx == 0 ? const Duration(milliseconds: 150) : Duration.zero,
-                                    curve: Curves.easeOut,
-                                    transform: Matrix4.translationValues(_swipeDx, 0, 0),
-                                    child: TerminalView(
+                                child: TerminalView(
                                       _terminal,
                                       key: _view,
                                       controller: _controller,
@@ -2220,9 +2120,8 @@ class _TerminalScreenState extends State<TerminalScreen> {
                                       // For a hardware keyboard; on a phone it would open the soft one with every agent.
                                       autofocus: !Platform.isAndroid,
                                       simulateScroll: false,
-                                    )),
-                                  ]),
-                                ),
+                                    ),
+                            ),
                           ),
                         ),
                         if (_copyTop() case final top?)

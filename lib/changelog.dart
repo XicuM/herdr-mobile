@@ -1,6 +1,13 @@
 /// Newest first. Shown once after an update; add an entry when bumping the version in pubspec.yaml.
 const changelog = <(String, List<String>)>[
   (
+    '1.22.3',
+    [
+      'Undoing a close takes you back to the pane you had open.',
+      'The two-finger swipes (sideways between agents, down to close the tab) are gone; pinch-zoom stays.',
+    ]
+  ),
+  (
     '1.22.2',
     [
       'Keyboard navigation: Alt+K and Alt+J fallback scrolling for keyboards without PageUp/PageDown.',
