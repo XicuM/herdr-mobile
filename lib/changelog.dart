@@ -1,6 +1,16 @@
 /// Newest first. Shown once after an update; add an entry when bumping the version in pubspec.yaml.
 const changelog = <(String, List<String>)>[
   (
+    '1.22.0',
+    [
+      'Keyboard navigation: Alt+W closes the active tab/pane.',
+      'Alt+A jumps to agents needing attention.',
+      'Shift+PageUp / Alt+PageUp and Shift+PageDown / Alt+PageDown scrolls conversation history; Home/End jumps to top/live output.',
+      'Workspace drawer starts cycling from the currently active workspace, and Space opens the workspace actions menu.',
+      'Alt+I and Esc properly return focus to the terminal from the message input.',
+    ]
+  ),
+  (
     '1.21.1',
     [
       'Alt+↑/↓ traverses agents in the order shown on the agents page.',

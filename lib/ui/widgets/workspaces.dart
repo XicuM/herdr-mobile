@@ -46,14 +46,20 @@ class WorkspaceList extends StatelessWidget {
       action();
     }
 
+    final currentWsId = client.selectedPane?.workspaceId ?? client.snapshot?.workspaces.firstOrNull?.id;
+    final currentMachine = client.machine;
+
     // [drag] is its index to long-press and drag it by.
     Widget row(String m, WorkspaceModel ws, {double indent = 0, int? drag, Widget? trailing}) {
       void menu(Offset p) => at(m, () => showWorkspaceContextMenu(context, client, ws, p, onShow: open));
+      final isCurrent = m == currentMachine && ws.id == currentWsId;
       final tile = HoldMenu(
         key: ValueKey('$m/${ws.id}'),
         onMenu: menu,
         child: ListTile(
           key: ValueKey('$m/${ws.id}-tile'),
+          autofocus: isCurrent,
+          selected: isCurrent,
           contentPadding: EdgeInsets.only(left: 16 + indent, right: 8),
           leading: StatusDot(ws.agentStatus, size: 10),
           minLeadingWidth: 10,
@@ -90,15 +96,18 @@ class WorkspaceList extends StatelessWidget {
                               overflow: TextOverflow.ellipsis,
                               style: Theme.of(context).textTheme.titleSmall?.copyWith(color: scheme.primary)),
                         ),
-                        IconButton(
-                          tooltip: 'New workspace on ${client.nameOf(m)}',
-                          color: scheme.primary,
-                          icon: const Icon(Icons.add),
-                          onPressed: () => at(m, () async {
-                            final before = client.selectedPaneId;
-                            await client.createWorkspace();
-                            if (client.selectedPaneId != before) open();
-                          }),
+                        Focus(
+                          skipTraversal: true,
+                          child: IconButton(
+                            tooltip: 'New workspace on ${client.nameOf(m)}',
+                            color: scheme.primary,
+                            icon: const Icon(Icons.add),
+                            onPressed: () => at(m, () async {
+                              final before = client.selectedPaneId;
+                              await client.createWorkspace();
+                              if (client.selectedPaneId != before) open();
+                            }),
+                          ),
                         ),
                       ],
                     ),
@@ -136,14 +145,17 @@ class WorkspaceList extends StatelessWidget {
                   drag: blocks.length < 2 ? null : i,
                   trailing: block.length < 2
                       ? null
-                      : IconButton(
-                          tooltip: hidden.contains('$m/${block.first.id}') ? 'Show worktrees' : 'Hide worktrees',
-                          icon: Icon(hidden.contains('$m/${block.first.id}') ? Icons.expand_more : Icons.expand_less),
-                          onPressed: () => collapsed.value = {
-                            for (final k in hidden)
-                              if (k != '$m/${block.first.id}') k,
-                            if (!hidden.contains('$m/${block.first.id}')) '$m/${block.first.id}',
-                          },
+                      : Focus(
+                          skipTraversal: true,
+                          child: IconButton(
+                            tooltip: hidden.contains('$m/${block.first.id}') ? 'Show worktrees' : 'Hide worktrees',
+                            icon: Icon(hidden.contains('$m/${block.first.id}') ? Icons.expand_more : Icons.expand_less),
+                            onPressed: () => collapsed.value = {
+                              for (final k in hidden)
+                                if (k != '$m/${block.first.id}') k,
+                              if (!hidden.contains('$m/${block.first.id}')) '$m/${block.first.id}',
+                            },
+                          ),
                         )),
               // The worktrees reorder among themselves, staying under their workspace.
               if (!hidden.contains('$m/${block.first.id}'))
@@ -187,21 +199,32 @@ class WorkspacesDrawer extends StatelessWidget {
   @override
   Widget build(BuildContext context) => Drawer(
         child: SafeArea(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Padding(
-                padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
-                child: Text('Workspaces', style: Theme.of(context).textTheme.titleLarge),
+          child: Shortcuts(
+            shortcuts: const {
+              SingleActivator(LogicalKeyboardKey.arrowDown): DirectionalFocusIntent(TraversalDirection.down),
+              SingleActivator(LogicalKeyboardKey.arrowUp): DirectionalFocusIntent(TraversalDirection.up),
+              SingleActivator(LogicalKeyboardKey.arrowDown, alt: true): DirectionalFocusIntent(TraversalDirection.down),
+              SingleActivator(LogicalKeyboardKey.arrowUp, alt: true): DirectionalFocusIntent(TraversalDirection.up),
+            },
+            child: FocusTraversalGroup(
+              policy: ReadingOrderTraversalPolicy(),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
+                    child: Text('Workspaces', style: Theme.of(context).textTheme.titleLarge),
+                  ),
+                  Expanded(child: WorkspaceList(client: client, open: open)),
+                  const Divider(height: 1),
+                  ListTile(
+                    leading: const Icon(Icons.settings_outlined),
+                    title: const Text('Settings'),
+                    onTap: onSettings,
+                  ),
+                ],
               ),
-              Expanded(child: WorkspaceList(client: client, open: open)),
-              const Divider(height: 1),
-              ListTile(
-                leading: const Icon(Icons.settings_outlined),
-                title: const Text('Settings'),
-                onTap: onSettings,
-              ),
-            ],
+            ),
           ),
         ),
       );
@@ -419,28 +442,44 @@ class _HoldMenuState extends State<HoldMenu> {
     _held = false;
   }
 
+  void _triggerMenu(BuildContext ctx) {
+    final box = ctx.findRenderObject() as RenderBox?;
+    final at = box != null ? box.localToGlobal(box.size.center(Offset.zero)) : Offset.zero;
+    widget.onMenu(at);
+  }
+
   // Once a drag lifts the row, a reorderable list builds a placeholder in its place, disposing this; the
   // release still reaches the listener it pressed, so the timer is left to run rather than cancelled then.
   @override
-  Widget build(BuildContext context) => Listener(
-        onPointerDown: (e) {
-          if (e.buttons != kPrimaryButton) return;
-          _reset();
-          _down = e.position;
-          _hold = Timer(kLongPressTimeout, () {
-            _held = true;
-            HapticFeedback.selectionClick();
-          });
+  Widget build(BuildContext context) => Focus(
+        canRequestFocus: false,
+        onKeyEvent: (node, event) {
+          if (event is KeyDownEvent && event.logicalKey == LogicalKeyboardKey.space) {
+            _triggerMenu(context);
+            return KeyEventResult.handled;
+          }
+          return KeyEventResult.ignored;
         },
-        onPointerMove: (e) {
-          if (_down != null && (e.position - _down!).distance > kTouchSlop) _reset();
-        },
-        onPointerUp: (e) {
-          if (_held) widget.onMenu(e.position);
-          _reset();
-        },
-        onPointerCancel: (_) => _reset(),
-        child: GestureDetector(onSecondaryTapUp: (d) => widget.onMenu(d.globalPosition), child: widget.child),
+        child: Listener(
+          onPointerDown: (e) {
+            if (e.buttons != kPrimaryButton) return;
+            _reset();
+            _down = e.position;
+            _hold = Timer(kLongPressTimeout, () {
+              _held = true;
+              HapticFeedback.selectionClick();
+            });
+          },
+          onPointerMove: (e) {
+            if (_down != null && (e.position - _down!).distance > kTouchSlop) _reset();
+          },
+          onPointerUp: (e) {
+            if (_held) widget.onMenu(e.position);
+            _reset();
+          },
+          onPointerCancel: (_) => _reset(),
+          child: GestureDetector(onSecondaryTapUp: (d) => widget.onMenu(d.globalPosition), child: widget.child),
+        ),
       );
 }
 

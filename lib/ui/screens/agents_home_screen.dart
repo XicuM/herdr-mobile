@@ -138,6 +138,11 @@ class _AgentsHomeScreenState extends State<AgentsHomeScreen> {
     if (!isAlt || isCtrl) return false;
 
     final key = event.logicalKey;
+    if (_scaffold.currentState?.isDrawerOpen == true) {
+      if (key == LogicalKeyboardKey.arrowUp || key == LogicalKeyboardKey.arrowDown) {
+        return false;
+      }
+    }
     if (key == LogicalKeyboardKey.keyB) {
       if (event is! KeyUpEvent) {
         if (_scaffold.currentState?.isDrawerOpen == true) {
@@ -161,11 +166,22 @@ class _AgentsHomeScreenState extends State<AgentsHomeScreen> {
       }
       return true;
     }
-    if (key == LogicalKeyboardKey.keyO) {
+    if (key == LogicalKeyboardKey.keyO || key == LogicalKeyboardKey.keyA) {
       if (event is! KeyUpEvent) {
         client.jumpToAttention();
         if (client.selectedPaneId != null && !_isWide(context)) {
           _openTerminal(context);
+        }
+      }
+      return true;
+    }
+    if (key == LogicalKeyboardKey.keyW) {
+      if (event is! KeyUpEvent) {
+        final pane = client.selectedPane;
+        if (pane != null) {
+          final m = client.machine;
+          closeWithUndo(context, client, client.snapshot?.agentOf(pane.id) != null ? 'Agent closed' : 'Pane closed',
+              ['$m/${pane.id}'], () => client.closePane(pane.id, m));
         }
       }
       return true;

@@ -201,11 +201,41 @@ class _TerminalScreenState extends State<TerminalScreen> {
         return KeyEventResult.handled;
       }
     }
+    final isShift = HardwareKeyboard.instance.isShiftPressed ||
+        HardwareKeyboard.instance.isLogicalKeyPressed(LogicalKeyboardKey.shift) ||
+        HardwareKeyboard.instance.isPhysicalKeyPressed(PhysicalKeyboardKey.shiftLeft) ||
+        HardwareKeyboard.instance.isPhysicalKeyPressed(PhysicalKeyboardKey.shiftRight);
+    final isAlt = HardwareKeyboard.instance.isAltPressed;
+
+    if (isShift || isAlt) {
+      final lineHeight = widget.client.fontSize * 1.1;
+      final pageLines = ((_terminal.viewHeight - 2).clamp(1, 100)).toDouble();
+      if (event.logicalKey == LogicalKeyboardKey.pageUp) {
+        if (event is KeyDownEvent) {
+          _scrollBy(pageLines * lineHeight);
+        }
+        return KeyEventResult.handled;
+      }
+      if (event.logicalKey == LogicalKeyboardKey.pageDown) {
+        if (event is KeyDownEvent) {
+          _scrollBy(-pageLines * lineHeight);
+        }
+        return KeyEventResult.handled;
+      }
+      if (event.logicalKey == LogicalKeyboardKey.home) {
+        if (event is KeyDownEvent) {
+          _toBeginning();
+        }
+        return KeyEventResult.handled;
+      }
+      if (event.logicalKey == LogicalKeyboardKey.end) {
+        if (event is KeyDownEvent) {
+          _toLive();
+        }
+        return KeyEventResult.handled;
+      }
+    }
     if (event.logicalKey == LogicalKeyboardKey.enter || event.logicalKey == LogicalKeyboardKey.numpadEnter) {
-      final isShift = HardwareKeyboard.instance.isShiftPressed ||
-          HardwareKeyboard.instance.isLogicalKeyPressed(LogicalKeyboardKey.shift) ||
-          HardwareKeyboard.instance.isPhysicalKeyPressed(PhysicalKeyboardKey.shiftLeft) ||
-          HardwareKeyboard.instance.isPhysicalKeyPressed(PhysicalKeyboardKey.shiftRight);
       if (isShift) {
         if (event is KeyDownEvent) {
           _send('\n');
@@ -222,6 +252,16 @@ class _TerminalScreenState extends State<TerminalScreen> {
 
   KeyEventResult _onMessageKeyEvent(FocusNode node, KeyEvent event) {
     if (event is! KeyDownEvent && event is! KeyRepeatEvent) return KeyEventResult.ignored;
+    if (event.logicalKey == LogicalKeyboardKey.escape && !HardwareKeyboard.instance.isAltPressed) {
+      if (_showingHistory) {
+        _closeHistory();
+        return KeyEventResult.handled;
+      }
+      _messageFocus.unfocus();
+      _termFocus.canRequestFocus = true;
+      _termFocus.requestFocus();
+      return KeyEventResult.handled;
+    }
     if (event.logicalKey == LogicalKeyboardKey.enter || event.logicalKey == LogicalKeyboardKey.numpadEnter) {
       final isCtrl = HardwareKeyboard.instance.isControlPressed || HardwareKeyboard.instance.isMetaPressed;
       final isShift = HardwareKeyboard.instance.isShiftPressed;
@@ -328,6 +368,11 @@ class _TerminalScreenState extends State<TerminalScreen> {
     final isCtrl = HardwareKeyboard.instance.isControlPressed;
 
     if (isAlt && !isCtrl) {
+      if (_scaffold.currentState?.isDrawerOpen == true) {
+        if (key == LogicalKeyboardKey.arrowUp || key == LogicalKeyboardKey.arrowDown) {
+          return false;
+        }
+      }
       if (key == LogicalKeyboardKey.arrowLeft) {
         if (event is! KeyUpEvent) {
           if (isShift) {
@@ -356,7 +401,7 @@ class _TerminalScreenState extends State<TerminalScreen> {
         if (event is! KeyUpEvent) client.stepAgent(1);
         return true;
       }
-      if (key == LogicalKeyboardKey.escape) {
+      if (key == LogicalKeyboardKey.keyW) {
         if (event is! KeyUpEvent) {
           final pane = client.selectedPane;
           if (pane != null) {
@@ -387,7 +432,7 @@ class _TerminalScreenState extends State<TerminalScreen> {
         }
         return true;
       }
-      if (key == LogicalKeyboardKey.keyO) {
+      if (key == LogicalKeyboardKey.keyO || key == LogicalKeyboardKey.keyA) {
         if (event is! KeyUpEvent) client.jumpToAttention();
         return true;
       }
@@ -417,6 +462,8 @@ class _TerminalScreenState extends State<TerminalScreen> {
         if (event is! KeyUpEvent) {
           if (_messageFocus.hasFocus) {
             _messageFocus.unfocus();
+            _termFocus.canRequestFocus = true;
+            _termFocus.requestFocus();
           } else {
             _messageFocus.requestFocus();
           }
@@ -975,6 +1022,17 @@ class _TerminalScreenState extends State<TerminalScreen> {
       _ptyChannel?.sendScroll(-65535, column: _scrollColumn, row: _scrollRow);
     }
     setState(() => _scrolledUp = _scrolledLines = 0);
+  }
+
+  /// Scrolls to the beginning of the pane's history.
+  void _toBeginning() {
+    if (_controller.selection != null) _controller.clearSelection();
+    _ptyChannel?.sendScroll(65535, column: _scrollColumn, row: _scrollRow);
+    _scrolledSeq = widget.client.snapshot?.agentOf(widget.client.selectedPaneId ?? '')?.stateChangeSeq;
+    setState(() {
+      _scrolledUp = 1000;
+      _scrolledLines = 65535;
+    });
   }
 
   /// The agent running in a tab (focused pane's first), or null if it runs none.
