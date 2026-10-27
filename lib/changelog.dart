@@ -1,6 +1,12 @@
 /// Newest first. Shown once after an update; add an entry when bumping the version in pubspec.yaml.
 const changelog = <(String, List<String>)>[
   (
+    '1.22.2',
+    [
+      'Keyboard navigation: Alt+K and Alt+J fallback scrolling for keyboards without PageUp/PageDown.',
+    ]
+  ),
+  (
     '1.22.1',
     [
       'Keyboard navigation: Alt+N opens a new tab alongside Alt+T.',

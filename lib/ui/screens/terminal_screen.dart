@@ -210,26 +210,26 @@ class _TerminalScreenState extends State<TerminalScreen> {
     if (isShift || isAlt) {
       final lineHeight = widget.client.fontSize * 1.1;
       final pageLines = ((_terminal.viewHeight - 2).clamp(1, 100)).toDouble();
-      if (event.logicalKey == LogicalKeyboardKey.pageUp) {
-        if (event is KeyDownEvent) {
+      if (event.logicalKey == LogicalKeyboardKey.pageUp || (isAlt && event.logicalKey == LogicalKeyboardKey.keyK)) {
+        if (event is KeyDownEvent || event is KeyRepeatEvent) {
           _scrollBy(pageLines * lineHeight);
         }
         return KeyEventResult.handled;
       }
-      if (event.logicalKey == LogicalKeyboardKey.pageDown) {
-        if (event is KeyDownEvent) {
+      if (event.logicalKey == LogicalKeyboardKey.pageDown || (isAlt && event.logicalKey == LogicalKeyboardKey.keyJ)) {
+        if (event is KeyDownEvent || event is KeyRepeatEvent) {
           _scrollBy(-pageLines * lineHeight);
         }
         return KeyEventResult.handled;
       }
       if (event.logicalKey == LogicalKeyboardKey.home) {
-        if (event is KeyDownEvent) {
+        if (event is KeyDownEvent || event is KeyRepeatEvent) {
           _toBeginning();
         }
         return KeyEventResult.handled;
       }
       if (event.logicalKey == LogicalKeyboardKey.end) {
-        if (event is KeyDownEvent) {
+        if (event is KeyDownEvent || event is KeyRepeatEvent) {
           _toLive();
         }
         return KeyEventResult.handled;
@@ -369,9 +369,38 @@ class _TerminalScreenState extends State<TerminalScreen> {
 
     if (isAlt && !isCtrl) {
       if (_scaffold.currentState?.isDrawerOpen == true) {
-        if (key == LogicalKeyboardKey.arrowUp || key == LogicalKeyboardKey.arrowDown) {
+        if (key == LogicalKeyboardKey.arrowUp ||
+            key == LogicalKeyboardKey.arrowDown ||
+            key == LogicalKeyboardKey.keyJ ||
+            key == LogicalKeyboardKey.keyK ||
+            key == LogicalKeyboardKey.pageUp ||
+            key == LogicalKeyboardKey.pageDown) {
           return false;
         }
+      }
+      if (key == LogicalKeyboardKey.pageUp || key == LogicalKeyboardKey.keyK) {
+        if (event is! KeyUpEvent) {
+          final lineHeight = widget.client.fontSize * 1.1;
+          final pageLines = ((_terminal.viewHeight - 2).clamp(1, 100)).toDouble();
+          _scrollBy(pageLines * lineHeight);
+        }
+        return true;
+      }
+      if (key == LogicalKeyboardKey.pageDown || key == LogicalKeyboardKey.keyJ) {
+        if (event is! KeyUpEvent) {
+          final lineHeight = widget.client.fontSize * 1.1;
+          final pageLines = ((_terminal.viewHeight - 2).clamp(1, 100)).toDouble();
+          _scrollBy(-pageLines * lineHeight);
+        }
+        return true;
+      }
+      if (key == LogicalKeyboardKey.home) {
+        if (event is! KeyUpEvent) _toBeginning();
+        return true;
+      }
+      if (key == LogicalKeyboardKey.end) {
+        if (event is! KeyUpEvent) _toLive();
+        return true;
       }
       if (key == LogicalKeyboardKey.arrowLeft) {
         if (event is! KeyUpEvent) {

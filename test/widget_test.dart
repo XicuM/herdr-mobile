@@ -2907,6 +2907,20 @@ void main() {
       await tester.sendKeyUpEvent(LogicalKeyboardKey.altLeft);
       await tester.pump();
       expect(lastError, contains('create tab'));
+
+      // Alt + K / Alt + J -> scroll conversation history
+      expect(find.byTooltip('Back to live'), findsNothing);
+      await tester.sendKeyDownEvent(LogicalKeyboardKey.altLeft);
+      await tester.sendKeyEvent(LogicalKeyboardKey.keyK);
+      await tester.sendKeyUpEvent(LogicalKeyboardKey.altLeft);
+      await tester.pump();
+      expect(find.byTooltip('Back to live'), findsOneWidget);
+
+      await tester.sendKeyDownEvent(LogicalKeyboardKey.altLeft);
+      await tester.sendKeyEvent(LogicalKeyboardKey.keyJ);
+      await tester.sendKeyUpEvent(LogicalKeyboardKey.altLeft);
+      await tester.pump();
+      expect(find.byTooltip('Back to live'), findsNothing);
     });
 
     testWidgets('Tapping an agent notification opens TerminalScreen, but general notification does not', (tester) async {
