@@ -281,7 +281,7 @@ void main() {
       await tester.pumpWidget(MaterialApp(home: TerminalScreen(client: client)));
       final at = tester.getCenter(find.byType(TerminalView));
 
-      // Herdr's order: coder (w1:p1), helper (w1:p2), ui (w2:p4), wrapping around.
+      // Agents page order: ui (w2:p4, blocked), helper (w1:p2, done), coder (w1:p1, idle), wrapping around.
       Future<void> swipe(double dx, {Future<void> Function()? before}) async {
         final a = await tester.startGesture(at - const Offset(0, 40));
         final b = await tester.startGesture(at + const Offset(0, 40));
@@ -297,17 +297,17 @@ void main() {
       }
 
       // Short of switching, it peeks at where it leads, and springs back on release.
-      await swipe(-60, before: () async => expect(find.textContaining('helper'), findsOneWidget));
+      await swipe(-60, before: () async => expect(find.textContaining('ui'), findsOneWidget));
       expect(client.selectedPaneId, 'w1:p1');
-      expect(find.textContaining('helper'), findsNothing);
+      expect(find.textContaining('ui'), findsNothing);
 
       // Past the threshold, it switches only once the fingers lift.
       await swipe(-120, before: () async => expect(client.selectedPaneId, 'w1:p1'));
-      expect(client.selectedPaneId, 'w1:p2');
+      expect(client.selectedPaneId, 'w2:p4');
       await swipe(120);
       expect(client.selectedPaneId, 'w1:p1');
       await swipe(120);
-      expect(client.selectedPaneId, 'w2:p4');
+      expect(client.selectedPaneId, 'w1:p2');
     });
 
     testWidgets('Two fingers swiped down close the current tab, with Undo', (tester) async {
@@ -2891,6 +2891,22 @@ void main() {
       await tester.sendKeyUpEvent(LogicalKeyboardKey.altLeft);
       await tester.pump();
       expect(tester.widget<TextField>(textField).focusNode?.hasFocus, isTrue);
+
+      // Alt + N and Alt + T -> create tab
+      String? lastError;
+      client.onError = (e) => lastError = e;
+      await tester.sendKeyDownEvent(LogicalKeyboardKey.altLeft);
+      await tester.sendKeyEvent(LogicalKeyboardKey.keyN);
+      await tester.sendKeyUpEvent(LogicalKeyboardKey.altLeft);
+      await tester.pump();
+      expect(lastError, contains('create tab'));
+
+      lastError = null;
+      await tester.sendKeyDownEvent(LogicalKeyboardKey.altLeft);
+      await tester.sendKeyEvent(LogicalKeyboardKey.keyT);
+      await tester.sendKeyUpEvent(LogicalKeyboardKey.altLeft);
+      await tester.pump();
+      expect(lastError, contains('create tab'));
     });
 
     testWidgets('Tapping an agent notification opens TerminalScreen, but general notification does not', (tester) async {

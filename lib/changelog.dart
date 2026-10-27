@@ -1,6 +1,13 @@
 /// Newest first. Shown once after an update; add an entry when bumping the version in pubspec.yaml.
 const changelog = <(String, List<String>)>[
   (
+    '1.22.1',
+    [
+      'Keyboard navigation: Alt+N opens a new tab alongside Alt+T.',
+      'Synchronize theme with Omarchy colors on Linux desktop.',
+    ]
+  ),
+  (
     '1.22.0',
     [
       'Keyboard navigation: Alt+W closes the active tab/pane.',

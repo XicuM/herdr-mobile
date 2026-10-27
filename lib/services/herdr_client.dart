@@ -197,13 +197,99 @@ class HerdrClientService extends ChangeNotifier {
   /// Android 13+ confirms a copy itself, so the app shouldn't too.
   bool get systemShowsCopies => (_sdk ?? 0) >= 33;
 
+  StreamSubscription<FileSystemEvent>? _themeSub;
+  Color? _systemBackground;
+  Color? _systemDarkBackground;
+  Color? _systemDarkerBackground;
+  Color? _systemLighterBackground;
+  Color? _systemForeground;
+  String? _systemMode;
+
   /// Reread on every resume, since the wallpaper may have changed.
-  void _loadSystemSeed() => _android.invokeMethod<int>('systemColor').then((c) {
+  void _loadSystemSeed() {
+    if (Platform.isAndroid) {
+      _android.invokeMethod<int>('systemColor').then((c) {
         final seed = c == null ? null : Color(c);
         if (seed == _systemSeed) return;
         _systemSeed = seed;
         notifyListeners();
       }).ignore();
+    } else if (Platform.isLinux) {
+      _loadLinuxSystemSeed();
+    }
+  }
+
+  void _loadLinuxSystemSeed() {
+    try {
+      final home = Platform.environment['HOME'];
+      if (home == null) return;
+      final file = File('$home/.local/state/omarchy/current/theme/colors.toml');
+      if (!file.existsSync()) return;
+      final lines = file.readAsLinesSync();
+
+      Color? parseColor(String key) {
+        for (final line in lines) {
+          final trimmed = line.trim();
+          if (trimmed.startsWith(key)) {
+            final match = RegExp(r'''^\s*''' + RegExp.escape(key) + r'''\s*=\s*["']#?([0-9a-fA-F]{6})["']''').firstMatch(trimmed);
+            if (match != null) {
+              final hex = int.tryParse(match.group(1)!, radix: 16);
+              if (hex != null) return Color(0xFF000000 | hex);
+            }
+          }
+        }
+        return null;
+      }
+
+      String? parseString(String key) {
+        for (final line in lines) {
+          final trimmed = line.trim();
+          if (trimmed.startsWith(key)) {
+            final match = RegExp(r'''^\s*''' + RegExp.escape(key) + r'''\s*=\s*["']([^"']+)["']''').firstMatch(trimmed);
+            if (match != null) return match.group(1);
+          }
+        }
+        return null;
+      }
+
+      final seed = parseColor('accent');
+      final bg = parseColor('background');
+      final darkBg = parseColor('dark_background');
+      final darkerBg = parseColor('darker_background');
+      final lighterBg = parseColor('lighter_background');
+      final fg = parseColor('foreground');
+      final mode = parseString('mode');
+
+      bool changed = false;
+      if (seed != _systemSeed) {
+        _systemSeed = seed;
+        changed = true;
+      }
+      if (bg != _systemBackground || darkBg != _systemDarkBackground || darkerBg != _systemDarkerBackground || fg != _systemForeground || mode != _systemMode) {
+        _systemBackground = bg;
+        _systemDarkBackground = darkBg;
+        _systemDarkerBackground = darkerBg;
+        _systemLighterBackground = lighterBg;
+        _systemForeground = fg;
+        _systemMode = mode;
+        changed = true;
+      }
+      if (changed) notifyListeners();
+    } catch (_) {}
+  }
+
+  void _watchLinuxTheme() {
+    if (!Platform.isLinux) return;
+    try {
+      final home = Platform.environment['HOME'];
+      if (home == null) return;
+      final dir = Directory('$home/.local/state/omarchy/current');
+      if (dir.existsSync()) {
+        _themeSub?.cancel();
+        _themeSub = dir.watch().listen((_) => _loadLinuxSystemSeed());
+      }
+    } catch (_) {}
+  }
 
   /// The machine on screen, as stored in [machines].
   String get machine => _machine;
@@ -225,6 +311,14 @@ class HerdrClientService extends ChangeNotifier {
 
   /// Material You's accent, null before Android 12.
   Color? get systemSeed => _systemSeed;
+
+  /// Background colors from Omarchy's colors.toml.
+  Color? get systemBackground => _systemBackground;
+  Color? get systemDarkBackground => _systemDarkBackground;
+  Color? get systemDarkerBackground => _systemDarkerBackground;
+  Color? get systemLighterBackground => _systemLighterBackground;
+  Color? get systemForeground => _systemForeground;
+  String? get systemMode => _systemMode;
 
   /// Light or dark; null follows the system.
   Brightness? get brightness => _brightness;
@@ -450,6 +544,7 @@ class HerdrClientService extends ChangeNotifier {
     _started = true;
     warmAgentIcons();
     warmAlertSounds();
+    _watchLinuxTheme();
     if (_alerts) _native('askPermissions');
     notifyListeners();
   }
@@ -1500,6 +1595,7 @@ class HerdrClientService extends ChangeNotifier {
   @override
   void dispose() {
     _disposed = true;
+    _themeSub?.cancel();
     _conns.keys.toList().forEach(_close);
     super.dispose();
   }

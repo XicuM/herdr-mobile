@@ -229,7 +229,7 @@ class _AgentsHomeScreenState extends State<AgentsHomeScreen> {
       }
       return true;
     }
-    if (key == LogicalKeyboardKey.keyT) {
+    if (key == LogicalKeyboardKey.keyT || key == LogicalKeyboardKey.keyN) {
       if (event is! KeyUpEvent) {
         final wsId = client.selectedPane?.workspaceId ?? client.snapshot?.workspaces.firstOrNull?.id;
         if (wsId != null) client.createTab(wsId);
