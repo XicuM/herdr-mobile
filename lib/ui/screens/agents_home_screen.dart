@@ -127,6 +127,14 @@ class _AgentsHomeScreenState extends State<AgentsHomeScreen> {
 
   bool _onHardwareKey(KeyEvent event) {
     if (!mounted || ModalRoute.of(context)?.isCurrent != true) return false;
+    // On wide screens, the terminal is embedded beside the agents and handles pane/tab shortcuts.
+    final wideTerminalActive = _isWide(context) &&
+        _detail == null &&
+        client.selectedPaneId != null &&
+        !client.isDisconnected &&
+        (client.snapshot == null || client.selectedPane != null);
+    if (wideTerminalActive) return false;
+
     final isAlt = HardwareKeyboard.instance.isAltPressed;
     final isShift = HardwareKeyboard.instance.isShiftPressed;
     final isCtrl = HardwareKeyboard.instance.isControlPressed;

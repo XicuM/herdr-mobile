@@ -1,6 +1,15 @@
 /// Newest first. Shown once after an update; add an entry when bumping the version in pubspec.yaml.
 const changelog = <(String, List<String>)>[
   (
+    '1.21.0',
+    [
+      'Fix Alt shortcuts (switching tabs, stepping agents, new tab) triggering twice in wide/desktop view.',
+      'Open the machine\'s settings page directly by tapping the machine chip in the terminal.',
+      'Tap the workspace name in the terminal header to open the workspaces panel.',
+      'Attach images using each agent\'s native mention syntax.',
+    ]
+  ),
+  (
     '1.20.0',
     [
       'Tap https links in the terminal to open them directly in the browser.',
