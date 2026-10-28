@@ -1,6 +1,8 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'package:dynamic_color/dynamic_color.dart';
+import 'package:material_color_utilities/material_color_utilities.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart';
 import 'package:web_socket_channel/io.dart';
@@ -95,6 +97,7 @@ class HerdrClientService extends ChangeNotifier {
   double _fontSize = defaultFontSize;
   Color? _seed;
   Color? _systemSeed;
+  CorePalette? _systemPalette;
   Brightness? _brightness;
   List<String> _machines = [];
   Map<String, String> _names = {};
@@ -208,6 +211,11 @@ class HerdrClientService extends ChangeNotifier {
   /// Reread on every resume, since the wallpaper may have changed.
   void _loadSystemSeed() {
     if (Platform.isAndroid) {
+      DynamicColorPlugin.getCorePalette().then((p) {
+        if (p?.primary.get(40) == _systemPalette?.primary.get(40) && p?.neutral.get(10) == _systemPalette?.neutral.get(10)) return;
+        _systemPalette = p;
+        notifyListeners();
+      }).ignore();
       _android.invokeMethod<int>('systemColor').then((c) {
         final seed = c == null ? null : Color(c);
         if (seed == _systemSeed) return;
@@ -308,6 +316,9 @@ class HerdrClientService extends ChangeNotifier {
 
   /// The accent picked in Settings; null follows the system's.
   Color? get pickedSeed => _seed;
+
+  /// Material You's tonal palettes, null before Android 12 and off Android.
+  CorePalette? get systemPalette => _systemPalette;
 
   /// Material You's accent, null before Android 12.
   Color? get systemSeed => _systemSeed;

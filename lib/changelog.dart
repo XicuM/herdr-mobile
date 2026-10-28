@@ -1,6 +1,12 @@
 /// Newest first. Shown once after an update; add an entry when bumping the version in pubspec.yaml.
 const changelog = <(String, List<String>)>[
   (
+    '1.22.5',
+    [
+      'Follows your phone\'s Material You colors as they are: a white or grey system accent no longer turns the buttons blue.',
+    ]
+  ),
+  (
     '1.22.4',
     [
       'The "Take over" banner stays when another client holds the pane, instead of vanishing as the error appears.',

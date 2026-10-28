@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:material_color_utilities/material_color_utilities.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'services/herdr_client.dart';
 import 'ui/screens/agents_home_screen.dart';
@@ -29,14 +30,17 @@ class HerdrMobileApp extends StatelessWidget {
     ThemeData theme(Brightness brightness) {
       final isDark = brightness == Brightness.dark;
       // On Linux/Omarchy, use Omarchy's dark surface (background in colors.toml, #0c0b0c).
-      // On Android, darkSurface is null so it uses Google's 100% native Material You dynamic scheme from the wallpaper.
+      // On Android, darkSurface is null and, with no accent picked, `palette` is the device's own Material You scheme.
       final darkSurface = (isDark && client.systemBackground != null) ? client.systemBackground : null;
 
-      var scheme = ColorScheme.fromSeed(
-        seedColor: client.seed,
-        brightness: brightness,
-        surface: darkSurface,
-      );
+      final palette = client.pickedSeed == null ? client.systemPalette : null;
+      var scheme = palette != null
+          ? _fromPalette(palette, brightness)
+          : ColorScheme.fromSeed(
+              seedColor: client.seed,
+              brightness: brightness,
+              surface: darkSurface,
+            );
 
       if (isDark && darkSurface != null) {
         final bg = darkSurface;
@@ -63,7 +67,7 @@ class HerdrMobileApp extends StatelessWidget {
     return ListenableBuilder(
       listenable: client,
       builder: (_, home) {
-        final key = (client.seed, client.systemBackground);
+        final key = (client.seed, client.systemBackground, client.pickedSeed, client.systemSeed);
         if (_themes?.$1 != key) _themes = (key, theme(Brightness.light), theme(Brightness.dark));
         return MaterialApp(
           title: 'Herdr Mobile',
@@ -82,4 +86,41 @@ class HerdrMobileApp extends StatelessWidget {
       child: AgentsHomeScreen(client: client),
     );
   }
+}
+
+/// The device's Material You scheme, from its tonal palettes as Android resolves them, not regenerated from
+/// one seed: a neutral accent stays neutral. `fromSeed` fills the roles the legacy `Scheme` lacks.
+ColorScheme _fromPalette(CorePalette palette, Brightness brightness) {
+  final s = brightness == Brightness.dark
+      ? Scheme.darkFromCorePalette(palette)
+      : Scheme.lightFromCorePalette(palette);
+  return ColorScheme.fromSeed(
+          seedColor: Color(s.primary), brightness: brightness)
+      .copyWith(
+    primary: Color(s.primary),
+    onPrimary: Color(s.onPrimary),
+    primaryContainer: Color(s.primaryContainer),
+    onPrimaryContainer: Color(s.onPrimaryContainer),
+    secondary: Color(s.secondary),
+    onSecondary: Color(s.onSecondary),
+    secondaryContainer: Color(s.secondaryContainer),
+    onSecondaryContainer: Color(s.onSecondaryContainer),
+    tertiary: Color(s.tertiary),
+    onTertiary: Color(s.onTertiary),
+    tertiaryContainer: Color(s.tertiaryContainer),
+    onTertiaryContainer: Color(s.onTertiaryContainer),
+    error: Color(s.error),
+    onError: Color(s.onError),
+    errorContainer: Color(s.errorContainer),
+    onErrorContainer: Color(s.onErrorContainer),
+    outline: Color(s.outline),
+    outlineVariant: Color(s.outlineVariant),
+    surface: Color(s.surface),
+    onSurface: Color(s.onSurface),
+    onSurfaceVariant: Color(s.onSurfaceVariant),
+    inverseSurface: Color(s.inverseSurface),
+    onInverseSurface: Color(s.inverseOnSurface),
+    inversePrimary: Color(s.inversePrimary),
+    surfaceTint: Color(s.primary),
+  );
 }
