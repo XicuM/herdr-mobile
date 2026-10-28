@@ -11,7 +11,9 @@ import '../../services/herdr_client.dart';
 List<InlineSpan> aheadBehind(WorkspaceModel ws) {
   InlineSpan count(IconData icon, int n, Color color) => TextSpan(children: [
         const TextSpan(text: ' '),
-        WidgetSpan(alignment: PlaceholderAlignment.middle, child: Icon(icon, size: 12, color: color)),
+        WidgetSpan(
+            alignment: PlaceholderAlignment.middle,
+            child: Icon(icon, size: 12, color: color)),
         TextSpan(text: '$n', style: TextStyle(color: color)),
       ]);
   return [
@@ -31,14 +33,25 @@ class WorkspaceList extends StatelessWidget {
   /// `machine/workspace` of the workspaces whose worktrees are hidden; static so it outlives the drawer.
   static final collapsed = ValueNotifier<Set<String>>({});
 
-  const WorkspaceList({super.key, required this.client, required this.open});
+  /// Whether the current workspace is marked: not when no terminal is showing.
+  final bool showCurrent;
+
+  const WorkspaceList(
+      {super.key,
+      required this.client,
+      required this.open,
+      this.showCurrent = true});
 
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
     final on = [
       for (final m in client.machines)
-        if (!client.isOff(m) && client.isConnected(m) && client.errorOf(m) == null && client.snapshotOf(m) != null) m
+        if (!client.isOff(m) &&
+            client.isConnected(m) &&
+            client.errorOf(m) == null &&
+            client.snapshotOf(m) != null)
+          m
     ];
     // Requests go to the active machine, so each acts on its row's machine first.
     void at(String m, VoidCallback action) {
@@ -46,13 +59,17 @@ class WorkspaceList extends StatelessWidget {
       action();
     }
 
-    final currentWsId = client.selectedPane?.workspaceId ?? client.snapshot?.workspaces.firstOrNull?.id;
+    final currentWsId = client.selectedPane?.workspaceId ??
+        client.snapshot?.workspaces.firstOrNull?.id;
     final currentMachine = client.machine;
 
     // [drag] is its index to long-press and drag it by.
-    Widget row(String m, WorkspaceModel ws, {double indent = 0, int? drag, Widget? trailing}) {
-      void menu(Offset p) => at(m, () => showWorkspaceContextMenu(context, client, ws, p, onShow: open));
-      final isCurrent = m == currentMachine && ws.id == currentWsId;
+    Widget row(String m, WorkspaceModel ws,
+        {double indent = 0, int? drag, Widget? trailing}) {
+      void menu(Offset p) => at(m,
+          () => showWorkspaceContextMenu(context, client, ws, p, onShow: open));
+      final isCurrent =
+          showCurrent && m == currentMachine && ws.id == currentWsId;
       final tile = HoldMenu(
         key: ValueKey('$m/${ws.id}'),
         onMenu: menu,
@@ -65,18 +82,27 @@ class WorkspaceList extends StatelessWidget {
           minLeadingWidth: 10,
           trailing: trailing,
           // A linked worktree is named after its branch, so its ↑↓ follow its name.
-          title: Text.rich(TextSpan(text: ws.displayName, children: ws.isLinkedWorktree ? aheadBehind(ws) : null),
-              maxLines: 1, overflow: TextOverflow.ellipsis),
+          title: Text.rich(
+              TextSpan(
+                  text: ws.displayName,
+                  children: ws.isLinkedWorktree ? aheadBehind(ws) : null),
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis),
           subtitle: ws.isLinkedWorktree || ws.gitBranch == null
               ? null
-              : Text.rich(TextSpan(text: ws.gitBranch, children: aheadBehind(ws)), maxLines: 1),
+              : Text.rich(
+                  TextSpan(text: ws.gitBranch, children: aheadBehind(ws)),
+                  maxLines: 1),
           onTap: () => at(m, () {
             client.selectWorkspace(ws.id);
             open();
           }),
         ),
       );
-      return drag == null ? tile : ReorderableDelayedDragStartListener(key: tile.key, index: drag, child: tile);
+      return drag == null
+          ? tile
+          : ReorderableDelayedDragStartListener(
+              key: tile.key, index: drag, child: tile);
     }
 
     return ValueListenableBuilder<Set<String>>(
@@ -94,7 +120,10 @@ class WorkspaceList extends StatelessWidget {
                           child: Text(client.nameOf(m),
                               maxLines: 1,
                               overflow: TextOverflow.ellipsis,
-                              style: Theme.of(context).textTheme.titleSmall?.copyWith(color: scheme.primary)),
+                              style: Theme.of(context)
+                                  .textTheme
+                                  .titleSmall
+                                  ?.copyWith(color: scheme.primary)),
                         ),
                         Focus(
                           skipTraversal: true,
@@ -119,8 +148,13 @@ class WorkspaceList extends StatelessWidget {
   }
 
   /// One machine's workspaces, one block per top-level workspace so it is dragged with its worktrees.
-  Widget _machine(String m, Widget Function(String, WorkspaceModel, {double indent, int? drag, Widget? trailing}) row,
-      void Function(String, VoidCallback) at, Set<String> hidden) {
+  Widget _machine(
+      String m,
+      Widget Function(String, WorkspaceModel,
+              {double indent, int? drag, Widget? trailing})
+          row,
+      void Function(String, VoidCallback) at,
+      Set<String> hidden) {
     final blocks = client.snapshotOf(m)!.worktreeBlocks;
     // Indices as ReorderableListView gives them: [to] counts in the order before the move.
     void moveBlock(int from, int to) {
@@ -128,7 +162,10 @@ class WorkspaceList extends StatelessWidget {
       if (to == from) return;
       final rest = [...blocks];
       final moved = rest.removeAt(from);
-      at(m, () => client.moveWorkspaces([for (final w in moved) w.id], to < rest.length ? rest[to].first.id : null));
+      at(
+          m,
+          () => client.moveWorkspaces([for (final w in moved) w.id],
+              to < rest.length ? rest[to].first.id : null));
     }
 
     return ReorderableListView(
@@ -148,12 +185,17 @@ class WorkspaceList extends StatelessWidget {
                       : Focus(
                           skipTraversal: true,
                           child: IconButton(
-                            tooltip: hidden.contains('$m/${block.first.id}') ? 'Show worktrees' : 'Hide worktrees',
-                            icon: Icon(hidden.contains('$m/${block.first.id}') ? Icons.expand_more : Icons.expand_less),
+                            tooltip: hidden.contains('$m/${block.first.id}')
+                                ? 'Show worktrees'
+                                : 'Hide worktrees',
+                            icon: Icon(hidden.contains('$m/${block.first.id}')
+                                ? Icons.expand_more
+                                : Icons.expand_less),
                             onPressed: () => collapsed.value = {
                               for (final k in hidden)
                                 if (k != '$m/${block.first.id}') k,
-                              if (!hidden.contains('$m/${block.first.id}')) '$m/${block.first.id}',
+                              if (!hidden.contains('$m/${block.first.id}'))
+                                '$m/${block.first.id}',
                             },
                           ),
                         )),
@@ -166,8 +208,12 @@ class WorkspaceList extends StatelessWidget {
                     if (to == from) return;
                     final rest = [...trees];
                     final moved = rest.removeAt(from);
-                    final after = i + 1 < blocks.length ? blocks[i + 1].first.id : null;
-                    at(m, () => client.moveWorkspaces([moved.id], to < rest.length ? rest[to].id : after));
+                    final after =
+                        i + 1 < blocks.length ? blocks[i + 1].first.id : null;
+                    at(
+                        m,
+                        () => client.moveWorkspaces([moved.id],
+                            to < rest.length ? rest[to].id : after));
                   }
 
                   return ReorderableListView(
@@ -176,7 +222,9 @@ class WorkspaceList extends StatelessWidget {
                     buildDefaultDragHandles: false,
                     onReorder: moveTree,
                     children: [
-                      for (final (j, ws) in trees.indexed) row(m, ws, indent: 24, drag: trees.length < 2 ? null : j),
+                      for (final (j, ws) in trees.indexed)
+                        row(m, ws,
+                            indent: 24, drag: trees.length < 2 ? null : j),
                     ],
                   );
                 }),
@@ -194,17 +242,28 @@ class WorkspacesDrawer extends StatelessWidget {
   final VoidCallback open;
   final VoidCallback onSettings;
 
-  const WorkspacesDrawer({super.key, required this.client, required this.open, required this.onSettings});
+  final bool showCurrent;
+
+  const WorkspacesDrawer(
+      {super.key,
+      required this.client,
+      required this.open,
+      required this.onSettings,
+      this.showCurrent = true});
 
   @override
   Widget build(BuildContext context) => Drawer(
         child: SafeArea(
           child: Shortcuts(
             shortcuts: const {
-              SingleActivator(LogicalKeyboardKey.arrowDown): DirectionalFocusIntent(TraversalDirection.down),
-              SingleActivator(LogicalKeyboardKey.arrowUp): DirectionalFocusIntent(TraversalDirection.up),
-              SingleActivator(LogicalKeyboardKey.arrowDown, alt: true): DirectionalFocusIntent(TraversalDirection.down),
-              SingleActivator(LogicalKeyboardKey.arrowUp, alt: true): DirectionalFocusIntent(TraversalDirection.up),
+              SingleActivator(LogicalKeyboardKey.arrowDown):
+                  DirectionalFocusIntent(TraversalDirection.down),
+              SingleActivator(LogicalKeyboardKey.arrowUp):
+                  DirectionalFocusIntent(TraversalDirection.up),
+              SingleActivator(LogicalKeyboardKey.arrowDown, alt: true):
+                  DirectionalFocusIntent(TraversalDirection.down),
+              SingleActivator(LogicalKeyboardKey.arrowUp, alt: true):
+                  DirectionalFocusIntent(TraversalDirection.up),
             },
             child: FocusTraversalGroup(
               policy: ReadingOrderTraversalPolicy(),
@@ -213,9 +272,14 @@ class WorkspacesDrawer extends StatelessWidget {
                 children: [
                   Padding(
                     padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
-                    child: Text('Workspaces', style: Theme.of(context).textTheme.titleLarge),
+                    child: Text('Workspaces',
+                        style: Theme.of(context).textTheme.titleLarge),
                   ),
-                  Expanded(child: WorkspaceList(client: client, open: open)),
+                  Expanded(
+                      child: WorkspaceList(
+                          client: client,
+                          open: open,
+                          showCurrent: showCurrent)),
                   const Divider(height: 1),
                   ListTile(
                     leading: const Icon(Icons.settings_outlined),
@@ -245,40 +309,60 @@ Future<void> showWorkspaceContextMenu(
   final m = client.machine;
   final group = [
     if (!ws.isLinkedWorktree && ws.repoKey != null)
-      ...?client.snapshotOf(m)?.workspaces.where((w) => w.repoKey == ws.repoKey),
+      ...?client
+          .snapshotOf(m)
+          ?.workspaces
+          .where((w) => w.repoKey == ws.repoKey),
   ];
   final hasChildren = group.any((w) => w.isLinkedWorktree);
   final isGit = ws.repoKey != null || ws.gitBranch != null;
-  PopupMenuItem<String> item(String value, IconData icon, String text, [Color? color]) => PopupMenuItem(
-      value: value,
-      child: ListTile(
-          leading: Icon(icon, color: color), title: Text(text, style: color == null ? null : TextStyle(color: color))));
+  PopupMenuItem<String> item(String value, IconData icon, String text,
+          [Color? color]) =>
+      PopupMenuItem(
+          value: value,
+          child: ListTile(
+              leading: Icon(icon, color: color),
+              title: Text(text,
+                  style: color == null ? null : TextStyle(color: color))));
   final picked = await showMenu<String>(
     context: context,
     position: RelativeRect.fromLTRB(at.dx, at.dy, at.dx, at.dy),
     items: [
       item('rename', Icons.edit_outlined, 'Rename'),
-      hasChildren ? item('group', Icons.close, 'Close group') : item('close', Icons.close, 'Close'),
+      hasChildren
+          ? item('group', Icons.close, 'Close group')
+          : item('close', Icons.close, 'Close'),
       if (isGit && !ws.isLinkedWorktree) ...[
         item('new', Icons.add, 'New worktree'),
         item('open', Icons.call_split, 'Open worktree…'),
       ],
-      if (ws.isLinkedWorktree) item('delete', Icons.delete_outline, 'Delete worktree checkout', scheme.error),
+      if (ws.isLinkedWorktree)
+        item('delete', Icons.delete_outline, 'Delete worktree checkout',
+            scheme.error),
     ],
   );
   if (picked == null || !context.mounted) return;
   switch (picked) {
     case 'rename':
-      final name = await prompt(context, 'Rename workspace', 'Workspace name', initial: ws.label);
+      final name = await prompt(context, 'Rename workspace', 'Workspace name',
+          initial: ws.label);
       if (name != null) await client.renameWorkspace(ws.id, name, on: m);
     case 'close':
-      closeWithUndo(context, client, 'Workspace closed', ['$m/${ws.id}'], () => client.deleteWorkspace(ws.id, on: m));
+      closeWithUndo(context, client, 'Workspace closed', ['$m/${ws.id}'],
+          () => client.deleteWorkspace(ws.id, on: m));
     case 'group':
-      closeWithUndo(context, client, '${group.length} workspaces closed', [for (final w in group) '$m/${w.id}'],
+      closeWithUndo(
+          context,
+          client,
+          '${group.length} workspaces closed',
+          [for (final w in group) '$m/${w.id}'],
           () => client.deleteWorkspace(ws.id, closeGroup: true, on: m));
     case 'new':
-      final branch = await prompt(context, 'New worktree', 'Branch', hint: 'e.g. feat/my-feature');
-      if (branch != null && await client.createWorktree(ws.id, branch, on: m) && context.mounted) {
+      final branch = await prompt(context, 'New worktree', 'Branch',
+          hint: 'e.g. feat/my-feature');
+      if (branch != null &&
+          await client.createWorktree(ws.id, branch, on: m) &&
+          context.mounted) {
         onShow?.call();
       }
     case 'open':
@@ -291,18 +375,24 @@ Future<void> showWorkspaceContextMenu(
 /// Deletes [ws]'s linked worktree checkout (`git worktree remove`; its branch stays), asking first and closing
 /// its workspace once it has gone, with no Undo: a checkout gone is gone. Since herdr says a checkout is dirty
 /// only by refusing it, the one question warns of that and the removal is forced after it.
-void _deleteCheckout(BuildContext context, HerdrClientService client, WorkspaceModel ws, String m) async {
-  final navigator = Navigator.of(context, rootNavigator: true); // still there once this screen has gone
+void _deleteCheckout(BuildContext context, HerdrClientService client,
+    WorkspaceModel ws, String m) async {
+  final navigator = Navigator.of(context,
+      rootNavigator: true); // still there once this screen has gone
   final sure = await showDialog<bool>(
     context: navigator.context,
     builder: (dialogContext) => AlertDialog(
       title: Text('Delete ${ws.displayName}?'),
-      content: const Text('Its checkout is removed, and anything uncommitted in it is lost for good. '
+      content: const Text(
+          'Its checkout is removed, and anything uncommitted in it is lost for good. '
           'Its branch is kept.'),
       actions: [
-        TextButton(onPressed: () => Navigator.pop(dialogContext, false), child: const Text('Keep')),
         TextButton(
-          style: TextButton.styleFrom(foregroundColor: Theme.of(dialogContext).colorScheme.error),
+            onPressed: () => Navigator.pop(dialogContext, false),
+            child: const Text('Keep')),
+        TextButton(
+          style: TextButton.styleFrom(
+              foregroundColor: Theme.of(dialogContext).colorScheme.error),
           onPressed: () => Navigator.pop(dialogContext, true),
           child: const Text('Delete'),
         ),
@@ -319,7 +409,8 @@ Completer<bool>? _activeUndoCompleter;
 /// Shows [message] and an Undo action in a snackbar just above the bar whose key is [above] (the message bar),
 /// or at the bottom of the screen when there is none, as Gmail's undo bars do, for four seconds or until
 /// another replaces it.
-Future<bool> _showUndoSnackBar(BuildContext context, String message, GlobalKey? above) {
+Future<bool> _showUndoSnackBar(
+    BuildContext context, String message, GlobalKey? above) {
   _activeUndoCompleter?.complete(false);
   _activeUndoEntry?.remove();
   _activeUndoEntry = null;
@@ -354,8 +445,13 @@ Future<bool> _showUndoSnackBar(BuildContext context, String message, GlobalKey? 
       final systemInset = MediaQuery.paddingOf(ctx).bottom;
       final keyboard = MediaQuery.viewInsetsOf(ctx).bottom;
       var bottom = 16.0 + (keyboard > systemInset ? keyboard : systemInset);
-      if (bar != null && bar.attached && overlayBox != null && overlayBox.attached) {
-        bottom = overlayBox.size.height - bar.localToGlobal(Offset.zero, ancestor: overlayBox).dy + 8;
+      if (bar != null &&
+          bar.attached &&
+          overlayBox != null &&
+          overlayBox.attached) {
+        bottom = overlayBox.size.height -
+            bar.localToGlobal(Offset.zero, ancestor: overlayBox).dy +
+            8;
       }
       return Align(
         alignment: Alignment.bottomCenter,
@@ -368,8 +464,10 @@ Future<bool> _showUndoSnackBar(BuildContext context, String message, GlobalKey? 
               duration: const Duration(milliseconds: 200),
               curve: Curves.easeOut,
               tween: Tween(begin: 0, end: 1),
-              builder: (_, t, child) =>
-                  Opacity(opacity: t, child: Transform.translate(offset: Offset(0, (1 - t) * 16), child: child)),
+              builder: (_, t, child) => Opacity(
+                  opacity: t,
+                  child: Transform.translate(
+                      offset: Offset(0, (1 - t) * 16), child: child)),
               child: Material(
                 // M3's snackbar roles, as Gmail's: near white in a dark theme, charcoal in a light one.
                 color: scheme.inverseSurface,
@@ -381,7 +479,9 @@ Future<bool> _showUndoSnackBar(BuildContext context, String message, GlobalKey? 
                   child: Row(
                     children: [
                       Expanded(
-                        child: Text(message, style: TextStyle(color: scheme.onInverseSurface, fontSize: 14)),
+                        child: Text(message,
+                            style: TextStyle(
+                                color: scheme.onInverseSurface, fontSize: 14)),
                       ),
                       TextButton(
                         style: TextButton.styleFrom(
@@ -389,7 +489,8 @@ Future<bool> _showUndoSnackBar(BuildContext context, String message, GlobalKey? 
                           visualDensity: VisualDensity.compact,
                         ),
                         onPressed: () => dismiss(true),
-                        child: const Text('Undo', style: TextStyle(fontWeight: FontWeight.bold)),
+                        child: const Text('Undo',
+                            style: TextStyle(fontWeight: FontWeight.bold)),
                       ),
                     ],
                   ),
@@ -412,8 +513,9 @@ Future<bool> _showUndoSnackBar(BuildContext context, String message, GlobalKey? 
 /// Hides what [keys] name (`machine/id` of panes, tabs or workspaces) at once and runs [close] once the
 /// snackbar saying [message] goes without Undo, or another replaces it. [above] is the bar it sits over,
 /// when the screen has one.
-void closeWithUndo(BuildContext context, HerdrClientService client, String message, List<String> keys,
-    Future<void> Function() close, {GlobalKey? above}) {
+void closeWithUndo(BuildContext context, HerdrClientService client,
+    String message, List<String> keys, Future<void> Function() close,
+    {GlobalKey? above}) {
   final undone = _showUndoSnackBar(context, message, above);
   client.closeUnlessUndone(keys, undone, close);
 }
@@ -444,7 +546,9 @@ class _HoldMenuState extends State<HoldMenu> {
 
   void _triggerMenu(BuildContext ctx) {
     final box = ctx.findRenderObject() as RenderBox?;
-    final at = box != null ? box.localToGlobal(box.size.center(Offset.zero)) : Offset.zero;
+    final at = box != null
+        ? box.localToGlobal(box.size.center(Offset.zero))
+        : Offset.zero;
     widget.onMenu(at);
   }
 
@@ -454,7 +558,8 @@ class _HoldMenuState extends State<HoldMenu> {
   Widget build(BuildContext context) => Focus(
         canRequestFocus: false,
         onKeyEvent: (node, event) {
-          if (event is KeyDownEvent && event.logicalKey == LogicalKeyboardKey.space) {
+          if (event is KeyDownEvent &&
+              event.logicalKey == LogicalKeyboardKey.space) {
             _triggerMenu(context);
             return KeyEventResult.handled;
           }
@@ -471,20 +576,24 @@ class _HoldMenuState extends State<HoldMenu> {
             });
           },
           onPointerMove: (e) {
-            if (_down != null && (e.position - _down!).distance > kTouchSlop) _reset();
+            if (_down != null && (e.position - _down!).distance > kTouchSlop)
+              _reset();
           },
           onPointerUp: (e) {
             if (_held) widget.onMenu(e.position);
             _reset();
           },
           onPointerCancel: (_) => _reset(),
-          child: GestureDetector(onSecondaryTapUp: (d) => widget.onMenu(d.globalPosition), child: widget.child),
+          child: GestureDetector(
+              onSecondaryTapUp: (d) => widget.onMenu(d.globalPosition),
+              child: widget.child),
         ),
       );
 }
 
 /// The trimmed text entered, or null when cancelled or empty.
-Future<String?> prompt(BuildContext context, String title, String label, {String initial = '', String? hint}) async {
+Future<String?> prompt(BuildContext context, String title, String label,
+    {String initial = '', String? hint}) async {
   final controller = TextEditingController(text: initial);
   final text = await showDialog<String>(
     context: context,
@@ -493,12 +602,19 @@ Future<String?> prompt(BuildContext context, String title, String label, {String
       content: TextField(
         controller: controller,
         autofocus: true,
-        decoration: InputDecoration(labelText: label, hintText: hint, border: const OutlineInputBorder()),
+        decoration: InputDecoration(
+            labelText: label,
+            hintText: hint,
+            border: const OutlineInputBorder()),
         onSubmitted: (v) => Navigator.pop(dialogContext, v),
       ),
       actions: [
-        TextButton(onPressed: () => Navigator.pop(dialogContext), child: const Text('Cancel')),
-        TextButton(onPressed: () => Navigator.pop(dialogContext, controller.text), child: const Text('OK')),
+        TextButton(
+            onPressed: () => Navigator.pop(dialogContext),
+            child: const Text('Cancel')),
+        TextButton(
+            onPressed: () => Navigator.pop(dialogContext, controller.text),
+            child: const Text('OK')),
       ],
     ),
   );
@@ -508,7 +624,8 @@ Future<String?> prompt(BuildContext context, String title, String label, {String
 
 /// The linked worktrees of [ws]'s repository (as `git worktree list` has them, less what herdr can't open),
 /// to open one, or show it when it's open already.
-void _openWorktree(BuildContext context, HerdrClientService client, WorkspaceModel ws, String m, VoidCallback? onShow) {
+void _openWorktree(BuildContext context, HerdrClientService client,
+    WorkspaceModel ws, String m, VoidCallback? onShow) {
   // Hoisted, so a rebuild (e.g. a snapshot landing while the dialog is open) can't restart it
   // back into its spinner: a FutureBuilder with an inline future loads forever then.
   final worktrees = client.listWorktrees(ws.id, on: m);
@@ -527,21 +644,32 @@ void _openWorktree(BuildContext context, HerdrClientService client, WorkspaceMod
           content: SizedBox(
             width: double.maxFinite,
             child: result.connectionState == ConnectionState.waiting
-                ? const SizedBox(height: 100, child: Center(child: CircularProgressIndicator()))
+                ? const SizedBox(
+                    height: 100,
+                    child: Center(child: CircularProgressIndicator()))
                 : result.hasError || result.data == null
                     ? const Padding(
-                        padding: EdgeInsets.symmetric(horizontal: 24), child: Text('Could not load worktrees'))
+                        padding: EdgeInsets.symmetric(horizontal: 24),
+                        child: Text('Could not load worktrees'))
                     : list.isEmpty
-                        ? const Padding(padding: EdgeInsets.symmetric(horizontal: 24), child: Text('No worktrees yet'))
+                        ? const Padding(
+                            padding: EdgeInsets.symmetric(horizontal: 24),
+                            child: Text('No worktrees yet'))
                         : ListView(
                             shrinkWrap: true,
                             children: [
                               for (final wt in list)
                                 ListTile(
-                                  contentPadding: const EdgeInsets.symmetric(horizontal: 24),
+                                  contentPadding: const EdgeInsets.symmetric(
+                                      horizontal: 24),
                                   leading: const Icon(Icons.call_split),
-                                  title: Text(wt['branch']?.toString() ?? wt['label']?.toString() ?? 'detached'),
-                                  subtitle: Text(wt['open_workspace_id'] != null ? 'Open' : wt['path'].toString(),
+                                  title: Text(wt['branch']?.toString() ??
+                                      wt['label']?.toString() ??
+                                      'detached'),
+                                  subtitle: Text(
+                                      wt['open_workspace_id'] != null
+                                          ? 'Open'
+                                          : wt['path'].toString(),
                                       overflow: TextOverflow.ellipsis),
                                   onTap: () async {
                                     Navigator.pop(dialogContext);
@@ -550,7 +678,9 @@ void _openWorktree(BuildContext context, HerdrClientService client, WorkspaceMod
                                       if (client.machine != m) return;
                                       client.selectWorkspace(open);
                                     } else {
-                                      if (!await client.openWorktree(ws.id, wt['path'].toString(), on: m)) return;
+                                      if (!await client.openWorktree(
+                                          ws.id, wt['path'].toString(), on: m))
+                                        return;
                                     }
                                     onShow?.call();
                                   },
@@ -558,7 +688,11 @@ void _openWorktree(BuildContext context, HerdrClientService client, WorkspaceMod
                             ],
                           ),
           ),
-          actions: [TextButton(onPressed: () => Navigator.pop(dialogContext), child: const Text('Cancel'))],
+          actions: [
+            TextButton(
+                onPressed: () => Navigator.pop(dialogContext),
+                child: const Text('Cancel'))
+          ],
         );
       },
     ),

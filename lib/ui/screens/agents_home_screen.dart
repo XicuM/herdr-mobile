@@ -726,6 +726,7 @@ class _AgentsHomeScreenState extends State<AgentsHomeScreen> {
               drawerEnableOpenDragGesture: false,
               drawer: WorkspacesDrawer(
                 client: client,
+                showCurrent: wide && _detail == null && showing,
                 open: () => _fromDrawer(_openTerminal),
                 onSettings: () => _fromDrawer(_openSettings),
               ),

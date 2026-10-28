@@ -1,7 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
-import 'package:dynamic_color/dynamic_color.dart';
 import 'package:material_color_utilities/material_color_utilities.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart';
@@ -211,7 +210,8 @@ class HerdrClientService extends ChangeNotifier {
   /// Reread on every resume, since the wallpaper may have changed.
   void _loadSystemSeed() {
     if (Platform.isAndroid) {
-      DynamicColorPlugin.getCorePalette().then((p) {
+      _android.invokeMethod<List<Object?>>('systemPalette').then((l) {
+        final p = l == null ? null : CorePalette.fromList(l.cast<int>());
         if (p?.primary.get(40) == _systemPalette?.primary.get(40) && p?.neutral.get(10) == _systemPalette?.neutral.get(10)) return;
         _systemPalette = p;
         notifyListeners();

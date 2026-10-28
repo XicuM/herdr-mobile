@@ -107,6 +107,9 @@ class HerdrApp : Application() {
                 "sdk" -> return@setMethodCallHandler result.success(Build.VERSION.SDK_INT)
                 "systemColor" -> return@setMethodCallHandler result.success(
                     if (Build.VERSION.SDK_INT >= 31) getColor(android.R.color.system_accent1_500) else null)
+                // The whole of it, as `CorePalette.fromList` reads it: five palettes, tones 1000 down to 0.
+                "systemPalette" -> return@setMethodCallHandler result.success(
+                    if (Build.VERSION.SDK_INT >= 31) systemPalette() else null)
             }
             result.success(null)
         }
@@ -286,6 +289,75 @@ class HerdrApp : Application() {
         const val FILES = "files"
         const val DISCONNECT = "disconnect"
     }
+
+    @android.annotation.SuppressLint("NewApi")
+    private fun systemPalette() = intArrayOf(
+        getColor(android.R.color.system_accent1_1000),
+        getColor(android.R.color.system_accent1_900),
+        getColor(android.R.color.system_accent1_800),
+        getColor(android.R.color.system_accent1_700),
+        getColor(android.R.color.system_accent1_600),
+        getColor(android.R.color.system_accent1_500),
+        getColor(android.R.color.system_accent1_400),
+        getColor(android.R.color.system_accent1_300),
+        getColor(android.R.color.system_accent1_200),
+        getColor(android.R.color.system_accent1_100),
+        getColor(android.R.color.system_accent1_50),
+        getColor(android.R.color.system_accent1_10),
+        getColor(android.R.color.system_accent1_0),
+        getColor(android.R.color.system_accent2_1000),
+        getColor(android.R.color.system_accent2_900),
+        getColor(android.R.color.system_accent2_800),
+        getColor(android.R.color.system_accent2_700),
+        getColor(android.R.color.system_accent2_600),
+        getColor(android.R.color.system_accent2_500),
+        getColor(android.R.color.system_accent2_400),
+        getColor(android.R.color.system_accent2_300),
+        getColor(android.R.color.system_accent2_200),
+        getColor(android.R.color.system_accent2_100),
+        getColor(android.R.color.system_accent2_50),
+        getColor(android.R.color.system_accent2_10),
+        getColor(android.R.color.system_accent2_0),
+        getColor(android.R.color.system_accent3_1000),
+        getColor(android.R.color.system_accent3_900),
+        getColor(android.R.color.system_accent3_800),
+        getColor(android.R.color.system_accent3_700),
+        getColor(android.R.color.system_accent3_600),
+        getColor(android.R.color.system_accent3_500),
+        getColor(android.R.color.system_accent3_400),
+        getColor(android.R.color.system_accent3_300),
+        getColor(android.R.color.system_accent3_200),
+        getColor(android.R.color.system_accent3_100),
+        getColor(android.R.color.system_accent3_50),
+        getColor(android.R.color.system_accent3_10),
+        getColor(android.R.color.system_accent3_0),
+        getColor(android.R.color.system_neutral1_1000),
+        getColor(android.R.color.system_neutral1_900),
+        getColor(android.R.color.system_neutral1_800),
+        getColor(android.R.color.system_neutral1_700),
+        getColor(android.R.color.system_neutral1_600),
+        getColor(android.R.color.system_neutral1_500),
+        getColor(android.R.color.system_neutral1_400),
+        getColor(android.R.color.system_neutral1_300),
+        getColor(android.R.color.system_neutral1_200),
+        getColor(android.R.color.system_neutral1_100),
+        getColor(android.R.color.system_neutral1_50),
+        getColor(android.R.color.system_neutral1_10),
+        getColor(android.R.color.system_neutral1_0),
+        getColor(android.R.color.system_neutral2_1000),
+        getColor(android.R.color.system_neutral2_900),
+        getColor(android.R.color.system_neutral2_800),
+        getColor(android.R.color.system_neutral2_700),
+        getColor(android.R.color.system_neutral2_600),
+        getColor(android.R.color.system_neutral2_500),
+        getColor(android.R.color.system_neutral2_400),
+        getColor(android.R.color.system_neutral2_300),
+        getColor(android.R.color.system_neutral2_200),
+        getColor(android.R.color.system_neutral2_100),
+        getColor(android.R.color.system_neutral2_50),
+        getColor(android.R.color.system_neutral2_10),
+        getColor(android.R.color.system_neutral2_0)
+    )
 }
 
 /** Exists only to keep the process, and with it the Dart connection, alive in the background. */
