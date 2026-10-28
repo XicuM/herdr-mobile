@@ -82,6 +82,7 @@ class PtyChannel {
     // and start each attach from a blank screen; herdr repaints the whole pane on attach. The clear goes
     // in front of the first frame, not here, so the old screen stays up until then instead of going black.
     var reset = '\x1b[?1049h\x1b[0m\x1b[H\x1b[2J';
+    var closed = false; // herdr ended this session: the frames after it are its reason, not the pane
     final take = _takeoverArmed;
     _takeoverArmed = false;
     final uri = Uri.parse(
@@ -112,6 +113,7 @@ class PtyChannel {
             final msg = jsonDecode(data);
             if (msg is Map && msg['type'] == 'term-closed' && msg['reason'] is String) {
               _closeReason = msg['reason'] as String;
+              closed = true;
               onClose?.call(_closeReason!);
             }
           } catch (_) {}
@@ -120,7 +122,7 @@ class PtyChannel {
         if (data is! List<int>) return;
         final text = const Utf8Decoder(allowMalformed: true).convert(data);
         _hold ? _held.write(reset + text) : terminal.write(reset + text);
-        if (reset.isNotEmpty) {
+        if (reset.isNotEmpty && !closed) {
           _reconnectTimer?.cancel();
           _fails = 0;
           _closeReason = null;

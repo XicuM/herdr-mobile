@@ -1,6 +1,12 @@
 /// Newest first. Shown once after an update; add an entry when bumping the version in pubspec.yaml.
 const changelog = <(String, List<String>)>[
   (
+    '1.22.4',
+    [
+      'The "Take over" banner stays when another client holds the pane, instead of vanishing as the error appears.',
+    ]
+  ),
+  (
     '1.22.3',
     [
       'Undoing a close takes you back to the pane you had open.',
