@@ -8,7 +8,7 @@ import '../../models/agent_status.dart';
 /// Name fragments herdr reports → the agent's logo in `assets/logos/` and its brand tint (null follows the
 /// scheme, so black marks show in dark mode too). The first match wins.
 const _logos = [
-  (['antigravity', 'agy'], 'antigravity.png', null),
+  (['antigravity', 'agy'], 'antigravity.svg', null),
   (['claude', 'anthropic'], 'claude.svg', Color(0xFFD97757)),
   (['gemini'], 'gemini.svg', Color(0xFF4285F4)),
   (['codex', 'openai', 'gpt'], 'openai.svg', Color(0xFF10A37F)),
@@ -17,6 +17,9 @@ const _logos = [
   (['copilot'], 'copilot.svg', null),
   (['opencode'], 'opencode.svg', null),
 ];
+
+/// Logos whose own colours show, whatever the scheme.
+const _ownColours = {'cursor.svg', 'antigravity.svg'};
 
 final _iconCache = <String, Uint8List>{};
 final _iconPathCache = <String, String>{};
@@ -53,7 +56,7 @@ String? agentIconPath(String name) {
     final bytes = _iconCache[file];
     if (bytes != null && Platform.isLinux) {
       try {
-        final clean = file.replaceAll('.svg', '').replaceAll('.png', '');
+        final clean = file.replaceAll('.svg', '');
         final f = File('${Directory.systemTemp.path}/herdr_logo_$clean.png');
         if (!f.existsSync()) f.writeAsBytesSync(bytes);
         _iconPathCache[file] = f.path;
@@ -76,34 +79,24 @@ Future<Uint8List?> _renderIcon(String file) async {
   final bgPaint = Paint()..color = const Color(0xFF2C2D30);
   canvas.drawCircle(const Offset(size / 2, size / 2), size / 2, bgPaint);
 
-  if (file.endsWith('.png')) {
-    final data = await rootBundle.load('assets/logos/$file');
-    final codec = await ui.instantiateImageCodec(data.buffer.asUint8List());
-    final frame = await codec.getNextFrame();
-    final img = frame.image;
-    final src = Rect.fromLTWH(0, 0, img.width.toDouble(), img.height.toDouble());
-    final dst = Rect.fromCircle(center: const Offset(size / 2, size / 2), radius: size * 0.35);
-    canvas.drawImageRect(img, src, dst, Paint());
-  } else {
-    final color = tint ?? Colors.white;
-    final filter = file == 'cursor.svg' ? null : ColorFilter.mode(color, BlendMode.srcIn);
-    final loader = SvgAssetLoader('assets/logos/$file');
-    final pictureInfo = await vg.loadPicture(loader, null);
-    final pic = pictureInfo.picture;
-    final picSize = pictureInfo.size;
-    final scale = (size * 0.6) / (picSize.width > picSize.height ? picSize.width : picSize.height);
-    canvas.save();
-    canvas.translate((size - picSize.width * scale) / 2, (size - picSize.height * scale) / 2);
-    canvas.scale(scale);
-    if (filter != null) {
-      canvas.saveLayer(null, Paint()..colorFilter = filter);
-      canvas.drawPicture(pic);
-      canvas.restore();
-    } else {
-      canvas.drawPicture(pic);
-    }
+  final color = tint ?? Colors.white;
+  final filter = _ownColours.contains(file) ? null : ColorFilter.mode(color, BlendMode.srcIn);
+  final loader = SvgAssetLoader('assets/logos/$file');
+  final pictureInfo = await vg.loadPicture(loader, null);
+  final pic = pictureInfo.picture;
+  final picSize = pictureInfo.size;
+  final scale = (size * 0.6) / (picSize.width > picSize.height ? picSize.width : picSize.height);
+  canvas.save();
+  canvas.translate((size - picSize.width * scale) / 2, (size - picSize.height * scale) / 2);
+  canvas.scale(scale);
+  if (filter != null) {
+    canvas.saveLayer(null, Paint()..colorFilter = filter);
+    canvas.drawPicture(pic);
     canvas.restore();
+  } else {
+    canvas.drawPicture(pic);
   }
+  canvas.restore();
 
   final picture = recorder.endRecording();
   final img = await picture.toImage(size.toInt(), size.toInt());
@@ -113,7 +106,7 @@ Future<Uint8List?> _renderIcon(String file) async {
     _iconCache[file] = bytes;
     if (Platform.isLinux) {
       try {
-        final clean = file.replaceAll('.svg', '').replaceAll('.png', '');
+        final clean = file.replaceAll('.svg', '');
         final f = File('${Directory.systemTemp.path}/herdr_logo_$clean.png');
         if (!f.existsSync()) f.writeAsBytesSync(bytes);
         _iconPathCache[file] = f.path;
@@ -145,13 +138,12 @@ class AgentAvatar extends StatelessWidget {
       backgroundColor: scheme.surfaceContainerHighest,
       child: switch (logo) {
         null => Icon(Icons.terminal, size: size, color: scheme.onSurfaceVariant),
-        (_, final file, _) when file.endsWith('.png') => Image.asset('assets/logos/$file', width: size, height: size),
         (_, final file, final tint) => SvgPicture.asset(
             'assets/logos/$file',
             width: size,
             height: size,
-            // Cursor's cube keeps its own colours.
-            colorFilter: file == 'cursor.svg' ? null : ColorFilter.mode(tint ?? scheme.onSurface, BlendMode.srcIn),
+            // Cursor's cube and Antigravity's gradient keep their own colours.
+            colorFilter: _ownColours.contains(file) ? null : ColorFilter.mode(tint ?? scheme.onSurface, BlendMode.srcIn),
           ),
       },
     );
@@ -191,18 +183,13 @@ class AgentIcon extends StatelessWidget {
 
     return switch (logo) {
       null => Icon(Icons.terminal, size: size, color: effectiveColor),
-      (_, final file, _) when file.endsWith('.png') => Image.asset(
-          'assets/logos/$file',
-          width: size,
-          height: size,
-          color: color,
-          colorBlendMode: color != null ? BlendMode.srcIn : null,
-        ),
       (_, final file, final tint) => SvgPicture.asset(
           'assets/logos/$file',
           width: size,
           height: size,
-          colorFilter: ColorFilter.mode(color ?? tint ?? scheme.onSurface, BlendMode.srcIn),
+          colorFilter: color == null && _ownColours.contains(file)
+              ? null
+              : ColorFilter.mode(color ?? tint ?? scheme.onSurface, BlendMode.srcIn),
         ),
     };
   }

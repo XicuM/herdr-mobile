@@ -15,10 +15,14 @@ void main() async {
 
 class HerdrMobileApp extends StatelessWidget {
   final HerdrClientService client;
+  final GlobalKey<ScaffoldMessengerState> _messenger;
 
-  HerdrMobileApp({super.key, required this.client});
-
-  final _messenger = GlobalKey<ScaffoldMessengerState>();
+  HerdrMobileApp({super.key, required this.client, GlobalKey<ScaffoldMessengerState>? messengerKey})
+      : _messenger = messengerKey ?? GlobalKey<ScaffoldMessengerState>() {
+    client.onError = (message) {
+      _messenger.currentState?.showSnackBar(SnackBar(content: Text(message)));
+    };
+  }
 
   /// The light and dark themes of an accent: this rebuilds with every snapshot, and making them is costly.
   static (Object, ThemeData, ThemeData)? _themes;

@@ -57,7 +57,7 @@ Herdr Mobile is composed of two minimal, zero-bloat pieces:
 
 ## 🚀 Quickstart: Deploying the Bridge
 
-The app talks to [**herdr-bridge**](https://github.com/XicuM/herdr-bridge), a user daemon on the machine where Herdr runs (no root needed). Install it from its [releases](https://github.com/XicuM/herdr-bridge/releases) or source with `./plugin/install.sh` (also a herdr plugin: `herdr plugin install XicuM/herdr-bridge/plugin`); `install.sh --phone` then shows a QR code that pairs the app with it.
+The app talks to [**herdr-bridge**](https://github.com/XicuM/herdr-bridge), a user daemon on the machine where Herdr runs (no root needed). Install it from its [releases](https://github.com/XicuM/herdr-bridge/releases), from source with `./plugin/install.sh`, or as a herdr plugin with `herdr plugin install XicuM/herdr-bridge`; `install.sh --phone` then shows a QR code that pairs the app with it.
 
 ---
 

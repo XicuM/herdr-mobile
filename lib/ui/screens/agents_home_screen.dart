@@ -367,14 +367,16 @@ class _AgentsHomeScreenState extends State<AgentsHomeScreen> {
     setState(_selected.clear);
   }
 
-  /// Closes [agents] without an Undo snackbar. One at a time, so each close sees the snapshot
-  /// after the last and keeps their workspace alive.
+  /// Closes [agents] once a SnackBar ("Agent closed") ends without Undo, or another replaces it. One at a
+  /// time, so each close sees the snapshot after the last and keeps their workspace alive.
   void _close(List<(String, String)> agents) {
+    if (agents.isEmpty) return;
     setState(() {
       _selected.clear();
       _openKey = null;
     });
-    client.closeUnlessUndone([for (final (m, id) in agents) '$m/$id'], Future.value(false), () async {
+    closeWithUndo(context, client, agents.length == 1 ? 'Agent closed' : 'Agents closed',
+        [for (final (m, id) in agents) '$m/$id'], () async {
       for (final (m, id) in agents) {
         await client.closePane(id, m);
       }
@@ -395,6 +397,7 @@ class _AgentsHomeScreenState extends State<AgentsHomeScreen> {
     if (_scaffold.currentState?.isEndDrawerOpen == true) {
       _scaffold.currentState?.closeEndDrawer();
     } else {
+      client.discoverMachines();
       _scaffold.currentState?.openEndDrawer();
     }
   }

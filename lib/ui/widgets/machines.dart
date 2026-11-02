@@ -228,6 +228,9 @@ class _MachineScreenState extends State<MachineScreen> {
   String? get m => widget.machine;
 
   late bool reached;
+  late List<String> bridges;
+  String? via;
+  var ssh = false;
   var busy = false;
   late final TextEditingController name;
   late final TextEditingController address;
@@ -237,7 +240,10 @@ class _MachineScreenState extends State<MachineScreen> {
   @override
   void initState() {
     super.initState();
+    client.discoverMachines();
     reached = m != null && HerdrClientService.parentOf(m!) != null;
+    bridges = client.machines.where((x) => HerdrClientService.parentOf(x) == null).toList();
+    via = bridges.where(client.isConnected).firstOrNull ?? bridges.firstOrNull;
     name = TextEditingController(text: m == null || client.nameOf(m!) == m ? '' : client.nameOf(m!));
     address = TextEditingController(text: m ?? '');
     target = TextEditingController(text: reached ? client.targetOf(m!) ?? '' : '');
@@ -262,10 +268,12 @@ class _MachineScreenState extends State<MachineScreen> {
   }
 
   Future<void> _save() async {
-    if (reached) {
-      if (target.text.trim().isEmpty) return;
+    if (ssh || reached) {
+      if (target.text.trim().isEmpty || (!reached && via == null)) return;
       setState(() => busy = true);
-      final done = await client.editSshMachine(m!, target.text.trim(), name.text.trim());
+      final done = reached
+          ? await client.editSshMachine(m!, target.text.trim(), name.text.trim())
+          : await client.addSshMachine(via!, target.text.trim(), name.text.trim());
       if (!mounted) return;
       if (done) return _close();
       return setState(() => busy = false);
@@ -376,8 +384,11 @@ class _MachineScreenState extends State<MachineScreen> {
                       setDialogState(() => adding = true);
                       final ok = await client.addSshMachine(m!, t, nameCtrl.text.trim());
                       if (!dialogCtx.mounted) return;
-                      if (ok) Navigator.pop(dialogCtx);
-                      setDialogState(() => adding = false);
+                      if (ok) {
+                        Navigator.pop(dialogCtx);
+                      } else {
+                        setDialogState(() => adding = false);
+                      }
                     },
               child: adding
                   ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2))
@@ -433,6 +444,17 @@ class _MachineScreenState extends State<MachineScreen> {
             padding: const EdgeInsets.fromLTRB(16, 16, 16, 32),
             children: [
               if (m != null) machineStatusCard(client, m!, theme),
+              if (m == null && bridges.isNotEmpty) ...[
+                SegmentedButton<bool>(
+                  segments: const [
+                    ButtonSegment(value: false, icon: Icon(Icons.lan_outlined), label: Text('Bridge')),
+                    ButtonSegment(value: true, icon: Icon(Icons.terminal), label: Text('SSH')),
+                  ],
+                  selected: {ssh},
+                  onSelectionChanged: busy ? null : (v) => setState(() => ssh = v.first),
+                ),
+                const SizedBox(height: 16),
+              ],
               section('Connection'),
               if (reached)
                 TextField(
@@ -448,7 +470,34 @@ class _MachineScreenState extends State<MachineScreen> {
                     border: const OutlineInputBorder(),
                   ),
                 )
-              else ...[
+              else if (ssh) ...[
+                if (bridges.length > 1) ...[
+                  DropdownMenu<String>(
+                    initialSelection: via,
+                    expandedInsets: EdgeInsets.zero,
+                    label: const Text('Via'),
+                    leadingIcon: const Icon(Icons.lan_outlined),
+                    enabled: !busy,
+                    onSelected: (b) => setState(() => via = b),
+                    dropdownMenuEntries: [
+                      for (final b in bridges) DropdownMenuEntry(value: b, label: client.nameOf(b))
+                    ],
+                  ),
+                  const SizedBox(height: 16),
+                ],
+                TextField(
+                  controller: target,
+                  autofocus: true,
+                  enabled: !busy,
+                  keyboardType: TextInputType.url,
+                  decoration: InputDecoration(
+                    labelText: 'SSH target',
+                    prefixIcon: const Icon(Icons.terminal),
+                    helperText: 'user@host, saved in herdr on ${client.nameOf(via ?? '')}',
+                    border: const OutlineInputBorder(),
+                  ),
+                ),
+              ] else ...[
                 TextField(
                   controller: address,
                   autofocus: m == null,
@@ -476,7 +525,7 @@ class _MachineScreenState extends State<MachineScreen> {
                 decoration: InputDecoration(
                   labelText: 'Name',
                   prefixIcon: const Icon(Icons.label_outline),
-                  hintText: reached ? target.text : address.text,
+                  hintText: reached || ssh ? target.text : address.text,
                   helperText: 'Optional; the address is shown without one',
                   border: const OutlineInputBorder(),
                 ),

@@ -1,6 +1,13 @@
 /// Newest first. Shown once after an update; add an entry when bumping the version in pubspec.yaml.
 const changelog = <(String, List<String>)>[
   (
+    '1.22.6',
+    [
+      'Add SSH machines directly from the machines list.',
+      'Externally added Herdr machines appear automatically.',
+    ]
+  ),
+  (
     '1.22.5',
     [
       'Follows your phone\'s Material You colors as they are: a white or grey system accent no longer turns the buttons blue.',

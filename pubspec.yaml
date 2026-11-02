@@ -1,7 +1,7 @@
 name: herdr_mobile
 description: "A terminal-first mobile client for Herdr AI coding agent workspaces."
 publish_to: "none"
-version: 1.22.5+51
+version: 1.22.6+52
 
 environment:
   sdk: ">=3.4.0 <4.0.0"
@@ -10,7 +10,8 @@ environment:
 dependencies:
   flutter:
     sdk: flutter
-  xterm: ^4.0.0
+  xterm:
+    path: third_party/xterm # 4.0.0 with its keyboard input fixed (see that copy's custom_text_edit.dart)
   web_socket_channel: ^3.0.1
   shared_preferences: ^2.2.3
   http: ^1.2.0

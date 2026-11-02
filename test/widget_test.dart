@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:ui' as ui;
 import 'dart:io';
 import 'package:flutter/gestures.dart';
@@ -946,6 +947,207 @@ void main() {
       expect(client.machine, other);
     });
 
+    test('addSshMachine and _discover add remote SSH machines and handle null labels', () async {
+      final prevOverrides = HttpOverrides.current;
+      HttpOverrides.global = null;
+      final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+      final bridge = '127.0.0.1:${server.port}';
+      final machineListResponse = [
+        {'id': 'm1', 'target': 'user@host1', 'label': 'server1'},
+        {'id': 'm2', 'target': 'user@host2', 'label': null},
+      ];
+      server.listen((req) async {
+        if (req.uri.path == '/api/machines' && req.method == 'POST') {
+          await req.drain();
+          req.response.statusCode = 200;
+          req.response.headers.contentType = ContentType.json;
+          req.response.write(jsonEncode({'ok': true}));
+          await req.response.close();
+        } else if (req.uri.path == '/api/machines' && req.method == 'GET') {
+          await req.drain();
+          req.response.statusCode = 200;
+          req.response.headers.contentType = ContentType.json;
+          req.response.write(jsonEncode({'machines': machineListResponse}));
+          await req.response.close();
+        } else {
+          await req.drain();
+          req.response.statusCode = 200;
+          req.response.headers.contentType = ContentType.json;
+          req.response.write(jsonEncode({'panes': []}));
+          await req.response.close();
+        }
+      });
+
+      try {
+        SharedPreferences.setMockInitialValues({});
+        final client = HerdrClientService()
+          ..setMachines([bridge], [], [])
+          ..configure(bridge, connect: false);
+
+        final ok = await client.addSshMachine(bridge, 'user@host1', 'server1');
+        expect(ok, isTrue);
+        expect(client.machines, contains('$bridge/m/m1'));
+        expect(client.machines, contains('$bridge/m/m2'));
+        expect(client.nameOf('$bridge/m/m1'), 'server1');
+        expect(client.nameOf('$bridge/m/m2'), 'user@host2');
+        expect(client.targetOf('$bridge/m/m1'), 'user@host1');
+        expect(client.targetOf('$bridge/m/m2'), 'user@host2');
+      } finally {
+        await server.close(force: true);
+        HttpOverrides.global = prevOverrides;
+      }
+    });
+
+    test('Externally added or removed machine is updated via discoverMachines and WS event', () async {
+      final prevOverrides = HttpOverrides.current;
+      HttpOverrides.global = null;
+      final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+      final bridge = '127.0.0.1:${server.port}';
+      var machineList = <Map<String, dynamic>>[];
+      server.listen((req) async {
+        await req.drain();
+        req.response.statusCode = 200;
+        req.response.headers.contentType = ContentType.json;
+        if (req.uri.path == '/api/machines' && req.method == 'GET') {
+          req.response.write(jsonEncode({'machines': machineList}));
+        } else {
+          req.response.write(jsonEncode({'panes': []}));
+        }
+        await req.response.close();
+      });
+
+      try {
+        SharedPreferences.setMockInitialValues({});
+        final client = HerdrClientService()
+          ..setMachines([bridge], [], [])
+          ..configure(bridge, connect: false);
+
+        expect(client.machines, [bridge]);
+
+        // External machine is added in herdr
+        machineList = [
+          {'id': 'ext1', 'target': 'user@remote1', 'label': 'external1'}
+        ];
+
+        // 1. WebSocket message {"type":"machines"} from bridge triggers discovery
+        client.handleMessageForTesting(bridge, jsonEncode({'type': 'machines'}));
+        // Wait for async HTTP discovery
+        for (var i = 0; i < 50 && !client.machines.contains('$bridge/m/ext1'); i++) {
+          await Future.delayed(const Duration(milliseconds: 20));
+        }
+
+        expect(client.machines, contains('$bridge/m/ext1'));
+        expect(client.nameOf('$bridge/m/ext1'), 'external1');
+
+        // 2. Direct payload {"type":"machines","machines":[...]} also updates
+        client.handleMessageForTesting(
+          bridge,
+          jsonEncode({
+            'type': 'machines',
+            'machines': [
+              {'id': 'ext1', 'target': 'user@remote1', 'label': 'external-renamed'},
+              {'id': 'ext2', 'target': 'user@remote2', 'label': 'external2'},
+            ],
+          }),
+        );
+
+        expect(client.machines, contains('$bridge/m/ext2'));
+        expect(client.nameOf('$bridge/m/ext1'), 'external-renamed');
+
+        // 3. discoverMachines() (called on resume or drawer open) discovers changes
+        machineList = [];
+        client.setConnectedForTesting(bridge, true);
+        await client.discoverMachines();
+        expect(client.machines.contains('$bridge/m/ext1'), isFalse);
+        expect(client.machines.contains('$bridge/m/ext2'), isFalse);
+        expect(client.machines, [bridge]);
+      } finally {
+        await server.close(force: true);
+        HttpOverrides.global = prevOverrides;
+      }
+    });
+
+    test('Machine hierarchy validation and remote machine WS push isolation', () {
+      expect(HerdrClientService.isValidMachine('127.0.0.1:7788'), isTrue);
+      expect(HerdrClientService.isValidMachine('127.0.0.1:7788/m/m1'), isTrue);
+      expect(HerdrClientService.isValidMachine('127.0.0.1:7788/m/m1/m/m2'), isFalse);
+      expect(HerdrClientService.isValidMachine('invalid/path'), isFalse);
+
+      expect(HerdrClientService.parentOf('127.0.0.1:7788'), isNull);
+      expect(HerdrClientService.parentOf('127.0.0.1:7788/m/m1'), '127.0.0.1:7788');
+
+      final client = HerdrClientService()
+        ..setMachines(['127.0.0.1:7788', '127.0.0.1:7788/m/m1', '127.0.0.1:7788/m/m1/m/m2'], ['127.0.0.1:7788/m/m1=Remote 1']);
+
+      // Nested/malformed machines are filtered out
+      expect(client.machines, ['127.0.0.1:7788', '127.0.0.1:7788/m/m1']);
+
+      // A WebSocket message sent on a remote machine does not add children or trigger discovery
+      client.handleMessageForTesting(
+        '127.0.0.1:7788/m/m1',
+        jsonEncode({
+          'type': 'machines',
+          'machines': [{'id': 'nested', 'target': 'user@nested'}],
+        }),
+      );
+      expect(client.machines, ['127.0.0.1:7788', '127.0.0.1:7788/m/m1']);
+    });
+
+    testWidgets('Adding an SSH machine through the UI calls addSshMachine', (tester) async {
+      SharedPreferences.setMockInitialValues({});
+      final client = _RecordingClient()
+        ..setMachines(['bridge1:7788', 'bridge2:7788'], [], [])
+        ..configure('bridge1:7788', connect: false);
+
+      await tester.pumpWidget(MaterialApp(
+        home: Builder(
+          builder: (context) => Scaffold(
+            body: ElevatedButton(
+              onPressed: () => showMachinePage(context, client),
+              child: const Text('Open'),
+            ),
+          ),
+        ),
+      ));
+
+      await tester.tap(find.text('Open'));
+      await tester.pumpAndSettle();
+
+      // Bridges exist, so SegmentedButton with Bridge and SSH is visible
+      expect(find.text('Bridge'), findsOneWidget);
+      expect(find.text('SSH'), findsOneWidget);
+
+      // Switch to SSH
+      await tester.tap(find.text('SSH'));
+      await tester.pumpAndSettle();
+
+      // Via dropdown is visible because there are 2 bridges
+      expect(find.text('Via'), findsOneWidget);
+      expect(find.widgetWithText(TextField, 'SSH target'), findsOneWidget);
+
+      await tester.enterText(find.widgetWithText(TextField, 'SSH target'), 'dev@remote');
+      await tester.enterText(find.widgetWithText(TextField, 'Name'), 'myserver');
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.text('Add'));
+      await tester.pumpAndSettle();
+
+      expect(client.addedBridge, 'bridge1:7788');
+      expect(client.addedTarget, 'dev@remote');
+      expect(client.addedName, 'myserver');
+      // Dialog has closed
+      expect(find.widgetWithText(TextField, 'SSH target'), findsNothing);
+    });
+
+    testWidgets('client.onError triggers a SnackBar in HerdrMobileApp', (tester) async {
+      SharedPreferences.setMockInitialValues({});
+      final client = HerdrClientService();
+      await tester.pumpWidget(HerdrMobileApp(client: client));
+      client.onError?.call('Could not add machine: Network unreachable');
+      await tester.pumpAndSettle();
+      expect(find.text('Could not add machine: Network unreachable'), findsOneWidget);
+    });
+
     testWidgets('A finished agent alerts once, even when an older snapshot lands in between', (tester) async {
       SharedPreferences.setMockInitialValues({});
       final alerts = <Object?>[];
@@ -1193,13 +1395,19 @@ void main() {
       expect(client.isMuted('w1:p2'), isTrue);
       expect(find.text('Connecting…'), findsOneWidget); // the selection is over
 
-      // Swiping it left reveals Close, and pressing Close closes it directly with no snackbar.
+      // Swiping it left reveals Close, and pressing Close closes it at once with an Undo snackbar.
       await tester.drag(find.text('antigravity-refactor'), const Offset(-500, 0));
       await tester.pumpAndSettle();
       expect(find.text('Close'), findsOneWidget);
       await tester.tap(find.text('Close'));
       await tester.pumpAndSettle();
       expect(find.text('antigravity-refactor'), findsNothing);
+      expect(find.text('Agent closed'), findsOneWidget);
+
+      // Undo brings it back, the snackbar going with it.
+      await tester.tap(find.text('Undo'));
+      await tester.pumpAndSettle();
+      expect(find.text('antigravity-refactor'), findsOneWidget);
       expect(find.text('Agent closed'), findsNothing);
     });
 
@@ -2869,5 +3077,34 @@ void main() {
       expect(client.selectedPaneId, 'w2:p4');
     });
   });
+  testWidgets('Fast typing into the terminal sends each character once', (tester) async {
+    // Voxtype types through wtype a character a millisecond, faster than the input method takes a reset,
+    // so its text keeps growing: each update must send only what is new, and a correction backspaces.
+    final terminal = Terminal();
+    final out = StringBuffer();
+    terminal.onOutput = out.write;
+    final focus = FocusNode();
+    await tester.pumpWidget(MaterialApp(home: TerminalView(terminal, focusNode: focus, autofocus: true)));
+    await tester.pump();
+    for (final text in ['p', 'pr', 'pro', 'prob', 'probl', 'proble', 'problem', 'problems', 'problem']) {
+      tester.testTextInput.updateEditingValue(TextEditingValue(text: text));
+    }
+    expect(out.toString(), 'problems\x7f');
+    focus.dispose();
+  });
+}
+
+class _RecordingClient extends HerdrClientService {
+  String? addedBridge;
+  String? addedTarget;
+  String? addedName;
+
+  @override
+  Future<bool> addSshMachine(String bridge, String target, String name) async {
+    addedBridge = bridge;
+    addedTarget = target;
+    addedName = name;
+    return true;
+  }
 }
 

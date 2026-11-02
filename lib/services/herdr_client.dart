@@ -178,8 +178,12 @@ class HerdrClientService extends ChangeNotifier {
         for (final m in _machines) {
           if (!_off.contains(m) && (parentOf(m) == null || !_off.contains(parentOf(m)!)) && !isConnected(m)) _close(m);
         }
+        discoverMachines();
+        _startDiscoveryTimer();
         notifyListeners();
       },
+      onPause: _stopDiscoveryTimer,
+      onHide: _stopDiscoveryTimer,
       onStateChange: (_) {
         for (final c in _conns.values) {
           c.socket?.pingInterval = _ping;
@@ -349,7 +353,18 @@ class HerdrClientService extends ChangeNotifier {
 
   /// The bridge that reaches [m] over SSH (`host:port/m/<id>`, from its `/api/machines`), or null when
   /// [m] runs its own.
-  static String? parentOf(String m) => m.contains('/') ? m.substring(0, m.indexOf('/')) : null;
+  static String? parentOf(String m) {
+    final i = m.indexOf('/m/');
+    return i > 0 ? m.substring(0, i) : null;
+  }
+
+  /// Whether [m] is a valid bridge (`host:port`) or SSH machine (`host:port/m/<id>`).
+  static bool isValidMachine(String m) {
+    final parts = m.split('/m/');
+    if (parts.length == 1) return !m.contains('/');
+    if (parts.length == 2) return !parts[0].contains('/') && !parts[1].contains('/') && parts[1].isNotEmpty;
+    return false;
+  }
 
   /// Disconnected by the user (as opposed to connecting, or connected).
   bool isOff(String m) => _off.contains(m);
@@ -366,6 +381,9 @@ class HerdrClientService extends ChangeNotifier {
     (_conns[m] ??= _Conn()).connected = connected;
     notifyListeners();
   }
+
+  @visibleForTesting
+  void handleMessageForTesting(String m, dynamic message) => _handleMessage(m, message);
 
   /// The name given to [machine] when it was added, or its address.
   String nameOf(String machine) => _names[machine] ?? machine;
@@ -556,6 +574,7 @@ class HerdrClientService extends ChangeNotifier {
     warmAgentIcons();
     warmAlertSounds();
     _watchLinuxTheme();
+    _startDiscoveryTimer();
     if (_alerts) _native('askPermissions');
     notifyListeners();
   }
@@ -767,9 +786,9 @@ class HerdrClientService extends ChangeNotifier {
   /// [machines] are as in [machines]; [names] are `machine=name`; [off] are the disconnected ones, as
   /// stored in prefs.
   void setMachines(List<String> machines, List<String> names, [List<String> off = const []]) {
-    _machines = machines;
-    _names = _pairs(names);
-    _off = off.toSet();
+    _machines = machines.where(isValidMachine).toList();
+    _names = _pairs(names)..removeWhere((k, _) => !isValidMachine(k));
+    _off = off.where(isValidMachine).toSet();
     notifyListeners();
   }
 
@@ -792,6 +811,7 @@ class HerdrClientService extends ChangeNotifier {
   }
 
   void _forget(Iterable<String> gone) {
+    if (gone.isEmpty) return;
     for (final m in gone) {
       _close(m);
       _conns.remove(m);
@@ -807,10 +827,11 @@ class HerdrClientService extends ChangeNotifier {
   /// ready there; the bridge then reaches it like the machines saved there already. False on failure,
   /// reported to [onError].
   Future<bool> addSshMachine(String bridge, String target, String name) async {
-    final before = _machines.length;
-    await _request('add $target', 'POST', '/api/machines', body: {'target': target, 'label': name}, on: bridge);
+    final res = await _request('add $target', 'POST', '/api/machines',
+        body: {'target': target, if (name.isNotEmpty) 'label': name}, on: bridge);
+    if (res == null) return false;
     await _discover(bridge);
-    return _machines.length > before;
+    return true;
   }
 
   /// Renames [m], a machine a bridge reaches, in that bridge's herdr and, given another [target], moves it
@@ -865,6 +886,7 @@ class HerdrClientService extends ChangeNotifier {
   /// Adds the machines [m]'s bridge reaches over SSH (those saved in its herdr) right after it, named as
   /// there, and forgets the ones it no longer does. A bridge without `/api/machines` reaches none.
   Future<void> _discover(String m) async {
+    if (parentOf(m) != null) return;
     final List found;
     try {
       final res = await http.get(Uri.parse('http://$m/api/machines'), headers: headersOf(m));
@@ -873,19 +895,74 @@ class HerdrClientService extends ChangeNotifier {
     } catch (_) {
       return;
     }
-    if (!_machines.contains(m)) return;
-    final children = {for (final f in found) '$m/m/${f['id']}': f['label'] as String};
-    _targets = {..._targets, for (final f in found) '$m/m/${f['id']}': f['target'] as String};
-    _forget(_machines.where((x) => parentOf(x) == m && !children.containsKey(x)).toList());
+    _applyDiscovered(m, found);
+  }
+
+  void _applyDiscovered(String m, List found) {
+    if (parentOf(m) != null || !_machines.contains(m)) return;
+    final children = {
+      for (final f in found)
+        '$m/m/${f['id']}': (f['label'] as String?)?.isNotEmpty == true
+            ? f['label'] as String
+            : (f['target'] as String?) ?? ''
+    };
+    final newTargets = {
+      for (final f in found)
+        '$m/m/${f['id']}': (f['target'] as String?) ?? ''
+    };
+    final removed = _machines.where((x) => parentOf(x) == m && !children.containsKey(x)).toList();
+    final kept = _machines.where((x) => parentOf(x) == m && children.containsKey(x)).toList();
+    final added = children.keys.where((x) => !_machines.contains(x)).toList();
+
+    final namesChanged = children.entries.any((e) => _names[e.key] != e.value);
+    final targetsChanged = newTargets.entries.any((e) => _targets[e.key] != e.value);
+
+    if (removed.isEmpty && added.isEmpty && !namesChanged && !targetsChanged) {
+      return;
+    }
+
+    if (removed.isNotEmpty) {
+      _forget(removed);
+      _targets = {..._targets}..removeWhere((k, _) => removed.contains(k));
+    }
+    _targets = {..._targets, ...newTargets};
     if (!_machines.contains(machine)) _setActive(m);
     final i = _machines.indexOf(m);
-    final kept = _machines.where((x) => parentOf(x) == m).toList();
-    final added = children.keys.where((x) => !_machines.contains(x)).toList();
-    if (added.isEmpty) return notifyListeners();
-    _machines = [..._machines.sublist(0, i + 1 + kept.length), ...added, ..._machines.sublist(i + 1 + kept.length)];
-    _names = {..._names, for (final x in added) x: children[x]!};
+    if (added.isNotEmpty) {
+      _machines = [..._machines.sublist(0, i + 1 + kept.length), ...added, ..._machines.sublist(i + 1 + kept.length)];
+    }
+    _names = {..._names, for (final e in children.entries) e.key: e.value};
     _saveMachines();
+    _sync();
     notifyListeners();
+  }
+
+  /// Discovers remote machines for every connected bridge.
+  Future<void> discoverMachines() async {
+    final bridges = _machines.where((x) => parentOf(x) == null && isConnected(x)).toList();
+    for (final b in bridges) {
+      await _discover(b);
+    }
+  }
+
+  Timer? _discoveryTimer;
+
+  void _startDiscoveryTimer() {
+    if (!_started || _disposed) return;
+    _discoveryTimer?.cancel();
+    _discoveryTimer = Timer.periodic(const Duration(seconds: 10), (_) {
+      if (!_started || _disposed) return;
+      if (WidgetsBinding.instance.lifecycleState != null &&
+          WidgetsBinding.instance.lifecycleState != AppLifecycleState.resumed) {
+        return;
+      }
+      discoverMachines();
+    });
+  }
+
+  void _stopDiscoveryTimer() {
+    _discoveryTimer?.cancel();
+    _discoveryTimer = null;
   }
 
   void _saveMachines() => SharedPreferences.getInstance().then((p) => p
@@ -1084,6 +1161,14 @@ class HerdrClientService extends ChangeNotifier {
       if (type == 'snapshot') {
         _conns[m]?.error = null;
         _apply(m, SessionSnapshot.fromJson(data['data']));
+      } else if (type == 'machines') {
+        if (parentOf(m) != null) return;
+        final list = data['machines'];
+        if (list is List) {
+          _applyDiscovered(m, list);
+        } else {
+          _discover(m);
+        }
       } else if (type == 'error') {
         _conns[m]?.error = data['error'].toString();
         notifyListeners();
@@ -1617,6 +1702,7 @@ class HerdrClientService extends ChangeNotifier {
   @override
   void dispose() {
     _disposed = true;
+    _stopDiscoveryTimer();
     _themeSub?.cancel();
     _conns.keys.toList().forEach(_close);
     super.dispose();
