@@ -2055,7 +2055,7 @@ class _TerminalScreenState extends State<TerminalScreen> {
                             const SizedBox(height: 12),
                             Text(unavailable.$2, style: Theme.of(context).textTheme.titleMedium),
                             const SizedBox(height: 8),
-                            Text(unavailable.$3,
+                            SelectableText(unavailable.$3,
                                 textAlign: TextAlign.center, style: TextStyle(color: scheme.onSurfaceVariant)),
                           ],
                         ),
