@@ -16,6 +16,8 @@ const _logos = [
   (['cursor'], 'cursor.svg', null),
   (['copilot'], 'copilot.svg', null),
   (['opencode'], 'opencode.svg', null),
+  // Last: `amp` is short enough to turn up inside other names.
+  (['amp'], 'amp.svg', null),
 ];
 
 /// Logos whose own colours show, whatever the scheme.
