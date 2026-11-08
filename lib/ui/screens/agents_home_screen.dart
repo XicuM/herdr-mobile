@@ -574,6 +574,9 @@ class _AgentsHomeScreenState extends State<AgentsHomeScreen> {
 
         final PreferredSizeWidget bar = selecting
             ? AppBar(
+                // The list isn't content scrolling under the bar: keep the bar's colour, the
+                // same as the agents' background, instead of M3's scrolled-under surfaceContainer.
+                notificationPredicate: (_) => false,
                 leading: IconButton(
                   tooltip: 'Clear selection',
                   icon: const Icon(Icons.arrow_back),
@@ -601,6 +604,8 @@ class _AgentsHomeScreenState extends State<AgentsHomeScreen> {
             // The ☰ for the workspaces, the search between, and the machines on the right: each icon in
             // a 56dp slot, so the search sits in the middle.
             : AppBar(
+                // The same, so the bar keeps the agents' background however far the list is scrolled.
+                notificationPredicate: (_) => false,
                 leadingWidth: 56,
                 leading: searching
                     ? BackButton(onPressed: _closeSearch)
@@ -777,26 +782,21 @@ class _AgentsHomeScreenState extends State<AgentsHomeScreen> {
                                 onClose: () => setState(() => _detail = null),
                               ),
                             null => showing
-                                // Its scrolling (the terminal's output, the tab strip) stops here, or it would tint
-                                // the agents' top bar as if the list had scrolled under it.
-                                ? NotificationListener<Notification>(
-                                    onNotification: (n) => n is ScrollNotification || n is ScrollMetricsNotification,
-                                    child: TerminalScreen(
-                                      client: client,
-                                      embedded: true,
-                                      onOpenDrawer: () {
-                                        if (_scaffold.currentState?.isDrawerOpen == true) {
-                                          _scaffold.currentState?.closeDrawer();
-                                        } else {
-                                          _scaffold.currentState?.openDrawer();
-                                        }
-                                      },
-                                      onOpenMachines: _openMachines,
-                                      onOpenSearch: () {
-                                        _searchFocus.requestFocus();
-                                        setState(() => _query = _query ?? '');
-                                      },
-                                    ),
+                                ? TerminalScreen(
+                                    client: client,
+                                    embedded: true,
+                                    onOpenDrawer: () {
+                                      if (_scaffold.currentState?.isDrawerOpen == true) {
+                                        _scaffold.currentState?.closeDrawer();
+                                      } else {
+                                        _scaffold.currentState?.openDrawer();
+                                      }
+                                    },
+                                    onOpenMachines: _openMachines,
+                                    onOpenSearch: () {
+                                      _searchFocus.requestFocus();
+                                      setState(() => _query = _query ?? '');
+                                    },
                                   )
                                 : _empty(
                                     context, Icons.terminal, 'No agent open', 'Pick one to see its terminal.', null),

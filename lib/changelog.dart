@@ -1,6 +1,13 @@
 /// Newest first. Shown once after an update; add an entry when bumping the version in pubspec.yaml.
 const changelog = <(String, List<String>)>[
   (
+    '1.22.7',
+    [
+      'The agents list\'s top bar keeps the list\'s own colour while scrolling instead of changing shade.',
+      'Amp agents show the Amp logo.',
+    ]
+  ),
+  (
     '1.22.6',
     [
       'Add SSH machines directly from the machines list.',
