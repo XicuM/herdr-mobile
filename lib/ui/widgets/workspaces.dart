@@ -193,7 +193,8 @@ Future<void> showWorkspaceContextMenu(
   if (picked == null || !context.mounted) return;
   switch (picked) {
     case 'rename':
-      final name = await prompt(context, 'Rename workspace', 'Workspace name', initial: ws.label);
+      // Empty goes back to naming it after its folder.
+      final name = await prompt(context, 'Rename workspace', 'Workspace name', initial: ws.name, hint: ws.label);
       if (name != null) await client.renameWorkspace(ws.id, name, on: m);
     case 'close':
       closeWithUndo(context, client, 'Workspace closed', ['$m/${ws.id}'], () => client.deleteWorkspace(ws.id, on: m));
@@ -388,7 +389,7 @@ class _HoldMenuState extends State<HoldMenu> {
       );
 }
 
-/// The trimmed text entered, or null when cancelled or empty.
+/// The trimmed text entered (maybe empty), or null when cancelled.
 Future<String?> prompt(BuildContext context, String title, String label,
     {String initial = '', String? hint}) async {
   final controller = TextEditingController(text: initial);
@@ -415,7 +416,6 @@ Future<String?> prompt(BuildContext context, String title, String label,
       ],
     ),
   );
-  final trimmed = text?.trim() ?? '';
-  return trimmed.isEmpty ? null : trimmed;
+  return text?.trim();
 }
 

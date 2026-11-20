@@ -857,6 +857,7 @@ class HerdrClientService extends ChangeNotifier {
       workspaces.add(WorkspaceModel(
         id: space['id'],
         number: i + 1,
+        name: space['name'] as String? ?? '',
         label: (space['name'] as String?)?.isNotEmpty == true
             ? space['name']
             : _placeName('${(first?['foreground'] as Map?)?['cwd'] ?? first?['cwd'] ?? space['folder'] ?? ''}'),
@@ -1425,10 +1426,7 @@ class HerdrClientService extends ChangeNotifier {
   String? _fallbackPane(String m, String? selected, SessionSnapshot? before, SessionSnapshot now) {
     final gone = before?.panes.where((p) => p.id == selected).firstOrNull;
     if (gone == null) return now.focusedPaneId ?? now.panes.firstOrNull?.id;
-    if (now.panes.isEmpty) {
-      if (m == machine) createWorkspace();
-      return null;
-    }
+    if (now.panes.isEmpty) return null;
     List<String> around(List<String> ids, String id) {
       final i = ids.indexOf(id);
       return [...ids.sublist(0, i).reversed, ...ids.sublist(i + 1)];
@@ -1544,20 +1542,35 @@ class HerdrClientService extends ChangeNotifier {
   /// dials: its window shows the machines its core reaches too), through herdr-core. Spaces and tabs are
   /// the app's, so changing them needs its window open there. Failures go to [onError] as "Could not
   /// [what]"; gives the command's answer, or null on failure.
-  Future<dynamic> _app(String what, String command, Map<String, dynamic> args, {String? on}) async {
+  Future<dynamic> _app(String what, String command, Map<String, dynamic> args, {String? on, bool report = true}) async {
     final m = on ?? machine;
     final root = parentOf(m) ?? m;
+    // The window names a reached machine's spaces, tabs and panes `<machine>/<id>`.
+    if (parentOf(m) != null) {
+      final prefix = '${m.substring(m.lastIndexOf('/') + 1)}/';
+      args = {
+        for (final e in args.entries)
+          e.key: const {'id', 'space', 'pane'}.contains(e.key) && e.value is String ? '$prefix${e.value}' : e.value,
+      };
+    }
     try {
       final link = _conns[root]?.link;
       if (link == null) throw '${nameOf(root)} is not connected';
-      final res = await link.call('machine.exec', {
+      final Map res;
+      try {
+        res = await link.call('machine.exec', {
         'argv': ['herdr-app', 'do', command, jsonEncode(args)],
         'timeout': 20,
-      }) as Map;
+        }) as Map;
+      } on HcError catch (e) {
+        // Run without a shell, a missing program fails to start rather than exiting 127.
+        if (e.kind == 'spawn_failed') throw "Herdr isn't installed on ${nameOf(root)}";
+        rethrow;
+      }
       final out = utf8.decode(base64.decode(res['stdout'] ?? ''), allowMalformed: true).trim();
       final err = utf8.decode(base64.decode(res['stderr'] ?? ''), allowMalformed: true).trim();
       if (res['code'] != 0) {
-        if (err.contains('no Herdr window') || res['code'] == 127) throw 'open Herdr on ${nameOf(root)} to change its spaces';
+        if (err.contains('no Herdr window')) throw 'open Herdr on ${nameOf(root)} to change its spaces';
         throw _parseError(out.isNotEmpty ? out : err);
       }
       try {
@@ -1567,7 +1580,7 @@ class HerdrClientService extends ChangeNotifier {
       }
     } catch (e) {
       debugPrint('herdr-app do $command on $root failed: $e');
-      onError?.call('Could not $what: $e');
+      if (report) onError?.call('Could not $what: $e');
       return null;
     }
   }
@@ -1582,8 +1595,14 @@ class HerdrClientService extends ChangeNotifier {
     return e.toString();
   }
 
-  Future<void> createTab(String workspaceId) =>
-      _app('create tab', 'tab.new', {'space': workspaceId, 'focus': false});
+  Future<void> createTab(String workspaceId) async =>
+      _openCreated(machine, await _app('create tab', 'tab.new', {'space': workspaceId, 'focus': false}));
+
+  /// Shows the terminal a `tab.new` or `space.new` on [m] made, unless another machine is on screen now.
+  void _openCreated(String m, Object? res) {
+    final t = res is Map ? res['terminal'] : null;
+    if (t is String && m == machine) selectPane(t.substring(t.lastIndexOf('/') + 1));
+  }
 
   /// Puts image [bytes] beside the selected terminal, on its machine, for its agent to read. Returns the
   /// path for `@`-references, or null (already reported to [onError]).
@@ -1611,9 +1630,8 @@ class HerdrClientService extends ChangeNotifier {
     c?.raw?.panes.removeWhere((p) => p.id == paneId);
     c?.raw?.agents.removeWhere((a) => a.paneId == paneId);
     final block = inTab ? _blockOf(c!.layout, paneId) : null;
-    if (block != null) {
-      await _app('close agent', 'pane.close', {'pane': block}, on: on);
-    } else {
+    // Without the Herdr window open its pane can't be closed: end the terminal instead.
+    if (block == null || await _app('close agent', 'pane.close', {'pane': block}, on: on, report: false) == null) {
       await _core('close agent', on, 'terminal.kill', {'terminal': '${_route(on).$2}$paneId'});
     }
     _rebuild(on);
@@ -1654,10 +1672,15 @@ class HerdrClientService extends ChangeNotifier {
   }
 
   /// A new space on the active machine, in its home.
-  Future<void> createWorkspace() => _app('create workspace', 'space.new', {
-        'machine': parentOf(machine) == null ? '' : machine.substring(machine.lastIndexOf('/') + 1),
-        'focus': false,
-      });
+  Future<void> createWorkspace() async {
+    final m = machine;
+    _openCreated(
+        m,
+        await _app('create workspace', 'space.new', {
+          'machine': parentOf(m) == null ? '' : m.substring(m.lastIndexOf('/') + 1),
+          'focus': false,
+        }));
+  }
 
   /// Closes a space and ends its terminals.
   Future<void> deleteWorkspace(String workspaceId, {String? on}) =>

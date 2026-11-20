@@ -54,6 +54,9 @@ class WorkspaceModel {
   final String id;
   final int number;
   final String label;
+
+  /// Its own name in Herdr, empty when it's named after its folder ([label] then holds that).
+  final String name;
   final String? activeTabId;
   final String agentStatus;
 
@@ -61,6 +64,7 @@ class WorkspaceModel {
     required this.id,
     required this.number,
     required this.label,
+    this.name = '',
     this.activeTabId,
     required this.agentStatus,
   });
