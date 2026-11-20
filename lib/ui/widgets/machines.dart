@@ -557,6 +557,8 @@ class _PhoneKeyCard extends StatelessWidget {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final key = client.publicKey;
+    // Ready to paste into a terminal on the computer.
+    final command = "mkdir -p ~/.ssh && echo '$key' >> ~/.ssh/authorized_keys";
     return Card.outlined(
       margin: EdgeInsets.zero,
       child: Padding(
@@ -569,9 +571,9 @@ class _PhoneKeyCard extends StatelessWidget {
                 Expanded(child: Text("This phone's key", style: theme.textTheme.titleSmall)),
                 IconButton(
                   icon: const Icon(Icons.copy),
-                  tooltip: 'Copy',
+                  tooltip: 'Copy the command',
                   onPressed: () {
-                    Clipboard.setData(ClipboardData(text: key));
+                    Clipboard.setData(ClipboardData(text: command));
                     if (!client.systemShowsCopies) {
                       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Copied')));
                     }
@@ -581,7 +583,7 @@ class _PhoneKeyCard extends StatelessWidget {
             ),
             SelectableText(key, style: theme.textTheme.bodySmall?.copyWith(fontFamily: 'monospace')),
             const SizedBox(height: 8),
-            Text('On the computer: echo \'<key>\' >> ~/.ssh/authorized_keys',
+            Text('Copy gives the command to run on the computer, which adds this key to ~/.ssh/authorized_keys',
                 style: theme.textTheme.bodySmall?.copyWith(color: theme.colorScheme.onSurfaceVariant)),
           ],
         ),
