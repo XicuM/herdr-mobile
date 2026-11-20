@@ -54,6 +54,7 @@ class HcLink {
   final _calls = <int, Completer<dynamic>>{};
   final _streams = <int, void Function(int kind, Uint8List payload)>{};
   final _early = <int, List<(int, Uint8List)>>{};
+  final _gone = <int>{};
   var _id = 0;
   final _buf = BytesBuilder(copy: false);
   final _done = Completer<String?>();
@@ -80,13 +81,24 @@ class HcLink {
       onVerifyHostKey: (_, fp) => verifyHostKey(fp.map((b) => b.toRadixString(16).padLeft(2, '0')).join(':')),
       keepAliveInterval: const Duration(seconds: 20),
     );
-    final session = await ssh.execute(_line);
+    final SSHSession session;
+    try {
+      session = await ssh.execute(_line);
+    } catch (_) {
+      ssh.close();
+      rethrow;
+    }
     final link = HcLink(session.stdout, session.write, () {
       session.close();
       ssh.close();
     }, errors: session.stderr);
     ssh.done.then((_) => link._drop(null), onError: (e) => link._drop('$e'));
-    await link.hello();
+    try {
+      await link.hello();
+    } catch (_) {
+      link.dispose();
+      rethrow;
+    }
     return link;
   }
 
@@ -129,7 +141,12 @@ class HcLink {
         final kind = head.getUint8(4);
         final on = _streams[channel];
         // A stream's first frames can come with the reply that opens it, before anyone listens.
-        on != null ? on(kind, payload) : (_early[channel] ??= []).add((kind, Uint8List.fromList(payload)));
+        // Frames still in flight for a stream already let go of are dropped.
+        if (on != null) {
+          on(kind, payload);
+        } else if (!_gone.contains(channel)) {
+          (_early[channel] ??= []).add((kind, Uint8List.fromList(payload)));
+        }
       }
     }
     if (at < all.length) _buf.add(Uint8List.fromList(all.sublist(at)));
@@ -183,6 +200,7 @@ class HcLink {
   }
 
   void forget(int channel) {
+    _gone.add(channel);
     _streams.remove(channel);
     _early.remove(channel);
   }
@@ -193,9 +211,14 @@ class HcLink {
     final res = await call('events.subscribe') as Map;
     final channel = res['channel'] as int;
     var partial = '';
+    // A character can be split across frames: decode the stream, not each frame.
+    final text = StringBuffer();
+    final decoder = const Utf8Decoder(allowMalformed: true).startChunkedConversion(StringConversionSink.fromStringSink(text));
     listen(channel, (kind, payload) {
       if (kind != data) return;
-      final lines = (partial + utf8.decode(payload, allowMalformed: true)).split('\n');
+      decoder.add(payload);
+      final lines = (partial + text.toString()).split('\n');
+      text.clear();
       partial = lines.removeLast();
       for (final line in lines) {
         if (line.isNotEmpty) onNotification(jsonDecode(line));

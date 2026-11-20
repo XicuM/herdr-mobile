@@ -22,6 +22,9 @@ class _Conn {
   /// The SSH link to this machine's herdr-core, once connected; roots only.
   HcLink? link;
   bool dialing = false;
+
+  /// The connect attempt in flight; any other that completes is stale and let go.
+  Object? attempt;
   Timer? retry;
 
   /// Failed attempts in a row, which space the retries out.
@@ -133,7 +136,11 @@ class HerdrClientService extends ChangeNotifier {
       onResume: () {
         _loadSystemSeed();
         for (final m in _machines) {
-          if (!_off.contains(m) && (parentOf(m) == null || !_off.contains(parentOf(m)!)) && !isConnected(m)) _close(m);
+          // One still dialing is left to finish (it times out): another would race it.
+          if (!_off.contains(m) && (parentOf(m) == null || !_off.contains(parentOf(m)!)) && !isConnected(m) &&
+              _conns[m]?.dialing != true) {
+            _close(m);
+          }
         }
         discoverMachines();
         _startDiscoveryTimer();
@@ -600,14 +607,20 @@ class HerdrClientService extends ChangeNotifier {
 
   Future<void> _open(String m, _Conn c) async {
     c.dialing = true;
+    final attempt = c.attempt = Object();
     HcLink? link;
     try {
-      // Without a timeout, an attempt made while the network is down can hang and never retry.
-      link = await HcLink.open(m, _key ??= _loadKey(), (fp) => _trust(m, fp))
-          .timeout(const Duration(seconds: 30));
-      if (!c.dialing) return link.dispose(); // closed meanwhile
+      // Without a timeout, an attempt made while the network is down can hang and never retry; one that
+      // answers after it is closed.
+      final opening = HcLink.open(m, _key ??= _loadKey(), (fp) => _trust(m, fp));
+      link = await opening.timeout(const Duration(seconds: 30), onTimeout: () {
+        opening.then((l) => l.dispose()).ignore();
+        throw TimeoutException('connect', const Duration(seconds: 30));
+      });
+      if (c.attempt != attempt) return link.dispose(); // closed or redialed meanwhile
       c.link = link;
       final first = await link.subscribe((n) => _onNotification(m, n));
+      if (c.attempt != attempt) return; // closed meanwhile: _close disposed it
       c
         ..dialing = false
         ..connected = true
@@ -621,7 +634,7 @@ class HerdrClientService extends ChangeNotifier {
       await _fetchUsage(m);
     } catch (e) {
       link?.dispose();
-      if (!c.dialing && c.link == null) return;
+      if (c.attempt != attempt) return;
       c.failure = _words(m, e);
       debugPrint('Could not connect to $m: $e');
       _dropped(m, c, link, null);
@@ -657,6 +670,7 @@ class HerdrClientService extends ChangeNotifier {
     if (c.link != link || _disposed) return;
     if (why != null && c.connected) c.failure = _words(m, why);
     c
+      ..attempt = null
       ..link = null
       ..dialing = false
       ..connected = false;
@@ -679,6 +693,7 @@ class HerdrClientService extends ChangeNotifier {
     c.retry = null;
     c.fails = 0;
     c.dialing = false;
+    c.attempt = null;
     final link = c.link;
     c.link = null;
     link?.dispose();

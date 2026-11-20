@@ -690,7 +690,11 @@ class _AgentsHomeScreenState extends State<AgentsHomeScreen> {
                         FilledButton.tonal(onPressed: _openMachines, child: const Text('Machines')),
                       )
                     : rows.isEmpty && connected.isEmpty
-                        ? const Center(child: CircularProgressIndicator())
+                        ? switch ([for (final m in on) if (client.errorOf(m) case final e?) '${client.nameOf(m)}: $e']) {
+                            [] => const Center(child: CircularProgressIndicator()),
+                            final errors => _empty(context, Icons.cloud_off, "Can't reach your machines",
+                                errors.join('\n'), FilledButton.tonal(onPressed: _openMachines, child: const Text('Machines'))),
+                          }
                         : rows.isEmpty
                             ? _empty(context, Icons.smart_toy_outlined, 'No agents',
                                 'Agents started in herdr show up here.', null)
