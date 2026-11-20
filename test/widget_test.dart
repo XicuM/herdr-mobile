@@ -1,5 +1,4 @@
 import 'dart:async';
-import 'dart:convert';
 import 'dart:ui' as ui;
 import 'dart:io';
 import 'package:flutter/gestures.dart';
@@ -101,7 +100,7 @@ void main() {
     test('SessionSnapshot placeOf formats branch/workspace and tabs with parentheses', () {
       final snapshot = SessionSnapshot(
         workspaces: [
-          WorkspaceModel(id: 'w1', number: 1, label: 'frontend', gitBranch: 'feature-x', agentStatus: 'idle'),
+          WorkspaceModel(id: 'w1', number: 1, label: 'frontend', agentStatus: 'idle'),
           WorkspaceModel(id: 'w2', number: 2, label: 'backend', agentStatus: 'idle'),
         ],
         tabs: [
@@ -122,25 +121,6 @@ void main() {
       expect(snapshot.placeOf(snapshot.panes[1]), equals('frontend (tests)'));
       // Workspace without multiple tabs shows workspace label
       expect(snapshot.placeOf(snapshot.panes[2]), equals('backend'));
-    });
-
-    test('A delivery parses from the bridge message, with or without a title and pane', () {
-      final apk = Delivery('host:7788', {
-        'type': 'delivery',
-        'id': '045efe2bbdc0c1c1',
-        'name': 'app-release.apk',
-        'size': 61022208,
-        'mime': 'application/vnd.android.package-archive',
-        'title': 'Debug build',
-        'pane_id': 'w1:p2',
-      });
-      expect(apk.isApk, isTrue);
-      expect(apk.paneId, 'w1:p2');
-      expect(apk.detail, 'Debug build · 58.2 MB');
-      final pdf = Delivery('host:7788', {'id': 'a', 'name': 'r.pdf', 'size': 3000, 'mime': 'application/pdf', 'title': null, 'pane_id': null});
-      expect(pdf.isApk, isFalse);
-      expect(pdf.paneId, isNull);
-      expect(pdf.detail, '3 KB');
     });
 
     test('AgentStatus enum mapping works', () {
@@ -450,10 +430,9 @@ void main() {
         ..selectPane('w1:p1');
       await tester.pumpWidget(MaterialApp(home: TerminalScreen(client: client)));
 
-      // Top bar shows workspace and branch; under it the tabs with their summaries.
+      // Top bar shows the workspace; under it the tabs with their summaries.
       Finder inBar(String t) => find.descendant(of: find.byType(AppBar), matching: find.text(t));
       expect(inBar('backend'), findsOneWidget);
-      expect(inBar('backend-branch'), findsOneWidget);
       expect(inBar('coder'), findsOneWidget);
       expect(inBar('db'), findsOneWidget);
       expect(find.byType(TextField), findsOneWidget);
@@ -486,63 +465,6 @@ void main() {
       expect(client.nameOf('10.0.0.1:7788'), '10.0.0.1:7788');
     });
 
-    test('A bridge\'s token goes to it and the machines it reaches, and moves with it', () {
-      final client = HerdrClientService()
-        ..setMachines(['10.0.0.1:7788', '10.0.0.1:7788/m/m1'], [])
-        ..configure('10.0.0.1:7788', token: 'abc', connect: false);
-      expect(client.headersOf('10.0.0.1:7788/m/m1'), {'authorization': 'Bearer abc'});
-      client.updateMachine('10.0.0.1:7788', to: 'laptop:7788', name: '');
-      expect(client.tokenOf('laptop:7788'), 'abc');
-      expect(client.tokenOf('10.0.0.1:7788'), isNull);
-      client.updateMachine('laptop:7788', to: 'laptop:7788', name: '', token: '');
-      expect(client.headersOf('laptop:7788'), isEmpty);
-    });
-
-    test('An empty git branch counts as none', () {
-      expect(WorkspaceModel.fromJson({'git_branch': ''}).gitBranch, isNull);
-      expect(WorkspaceModel.fromJson({'git_branch': 'main'}).gitBranch, 'main');
-    });
-
-    test('Each linked worktree nests under exactly one parent, the first main of its repo', () {
-      Map<String, dynamic> ws(String id, String label, {String? repo, bool linked = false}) => {
-            'workspace_id': id,
-            'number': 1,
-            'label': label,
-            if (repo != null)
-              'worktree': {'repo_key': repo, 'is_linked_worktree': linked},
-          };
-      final snap = SessionSnapshot.fromJson({
-        'workspaces': [
-          ws('wS', 'cohort', repo: 'repo-a'),
-          ws('w1', 'worktree-x', repo: 'repo-a', linked: true),
-          ws('w2', 'worktree-y', repo: 'repo-a', linked: true),
-          ws('w2D', 'Podarcis', repo: 'repo-b'),
-          // A second workspace on the same checkout: it stands alone, it doesn't adopt the worktree too.
-          ws('w2G', 'herdr-mobile', repo: 'repo-b'),
-          ws('w2R', 'worktree-z', repo: 'repo-b', linked: true),
-          // No main workspace left for this repo: the orphan stands alone instead of vanishing.
-          ws('w9', 'worktree-orphan', repo: 'repo-c', linked: true),
-          ws('w26', '~'),
-        ],
-      });
-
-      expect(snap.mainOf('repo-a')?.id, 'wS');
-      expect(snap.mainOf('repo-b')?.id, 'w2D');
-      expect(snap.mainOf('repo-c'), isNull);
-      expect(snap.mainOf(null), isNull);
-
-      final blocks = snap.worktreeBlocks.map((b) => b.map((w) => w.id).toList()).toList();
-      expect(blocks, [
-        ['wS', 'w1', 'w2'],
-        ['w2D', 'w2R'],
-        ['w2G'],
-        ['w9'],
-        ['w26'],
-      ]);
-      // Every workspace exactly once: nothing duplicated, nothing lost.
-      expect([for (final b in blocks) ...b]..sort(), ['w1', 'w2', 'w26', 'w2D', 'w2G', 'w2R', 'w9', 'wS']);
-    });
-
     testWidgets("The ☰ drawer lists the workspaces; tap one for its terminal, hold one for its actions",
         (tester) async {
       SharedPreferences.setMockInitialValues({'last_seen_changelog': changelog.first.$1});
@@ -562,7 +484,6 @@ void main() {
       await settle();
       expect(find.text('Settings'), findsOneWidget);
       expect(find.text('backend'), findsOneWidget);
-      expect(find.text('backend-branch'), findsOneWidget);
       // Each machine's name carries its own +, in place of a FAB.
       expect(find.byTooltip('New workspace on 100.1.2.3:7788'), findsOneWidget);
       expect(find.byType(FloatingActionButton), findsNothing);
@@ -571,12 +492,9 @@ void main() {
       await tester.longPress(find.descendant(of: find.byType(WorkspaceList), matching: find.text('backend')));
       await settle();
       expect(find.byType(TerminalScreen), findsNothing); // the hold isn't a tap
-      // Herdr's sidebar menu for a git workspace with no worktrees open.
-      for (final item in ['Rename', 'Close', 'New worktree', 'Open worktree…']) {
+      for (final item in ['Rename', 'Close']) {
         expect(find.text(item), findsOneWidget);
       }
-      expect(find.text('Close group'), findsNothing);
-      expect(find.text('Delete worktree checkout'), findsNothing);
       await tester.tapAt(const Offset(10, 10)); // dismiss the menu
       await settle();
 
@@ -875,17 +793,14 @@ void main() {
       await settle();
       expect(find.text('Add'), findsOneWidget);
 
-      // The pairing link install.sh --phone shows, pasted into Address, fills in the whole form.
-      await tester.enterText(find.widgetWithText(TextField, 'Address'),
-          'herdrmobile://pair?to=100.64.0.7:7788&token=K3MF9QXA&name=pi');
-      await tester.pump();
-      expect(find.text('100.64.0.7:7788'), findsOneWidget);
-      expect(find.widgetWithText(TextField, 'pi'), findsOneWidget);
+      // A machine is its SSH target; the phone's key to authorize there is on the page.
+      expect(find.text("This phone's key"), findsOneWidget);
+      await tester.enterText(find.widgetWithText(TextField, 'SSH target'), 'me@100.64.0.7');
+      await tester.enterText(find.widgetWithText(TextField, 'Name'), 'pi');
       await tester.tap(find.text('Add'));
       await settle();
-      expect(client.machines, contains('100.64.0.7:7788'));
-      expect(client.tokenOf('100.64.0.7:7788'), 'K3MF9QXA');
-      expect(client.nameOf('100.64.0.7:7788'), 'pi');
+      expect(client.machines, contains('me@100.64.0.7'));
+      expect(client.nameOf('me@100.64.0.7'), 'pi');
     });
 
     test('Moving a machine keeps those a bridge reaches under it', () {
@@ -939,158 +854,12 @@ void main() {
       // The machine on screen is remembered with its path.
       await pumpEventQueue();
       final prefs = await SharedPreferences.getInstance();
-      expect(prefs.getString('herdr_path'), '/m/abc');
+      expect(prefs.getString('hc_active'), sert);
       expect((HerdrClientService()..load(prefs)).machine, sert);
 
       client.removeMachine(laptop);
       expect(client.machines, [other]);
       expect(client.machine, other);
-    });
-
-    test('addSshMachine and _discover add remote SSH machines and handle null labels', () async {
-      final prevOverrides = HttpOverrides.current;
-      HttpOverrides.global = null;
-      final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
-      final bridge = '127.0.0.1:${server.port}';
-      final machineListResponse = [
-        {'id': 'm1', 'target': 'user@host1', 'label': 'server1'},
-        {'id': 'm2', 'target': 'user@host2', 'label': null},
-      ];
-      server.listen((req) async {
-        if (req.uri.path == '/api/machines' && req.method == 'POST') {
-          await req.drain();
-          req.response.statusCode = 200;
-          req.response.headers.contentType = ContentType.json;
-          req.response.write(jsonEncode({'ok': true}));
-          await req.response.close();
-        } else if (req.uri.path == '/api/machines' && req.method == 'GET') {
-          await req.drain();
-          req.response.statusCode = 200;
-          req.response.headers.contentType = ContentType.json;
-          req.response.write(jsonEncode({'machines': machineListResponse}));
-          await req.response.close();
-        } else {
-          await req.drain();
-          req.response.statusCode = 200;
-          req.response.headers.contentType = ContentType.json;
-          req.response.write(jsonEncode({'panes': []}));
-          await req.response.close();
-        }
-      });
-
-      try {
-        SharedPreferences.setMockInitialValues({});
-        final client = HerdrClientService()
-          ..setMachines([bridge], [], [])
-          ..configure(bridge, connect: false);
-
-        final ok = await client.addSshMachine(bridge, 'user@host1', 'server1');
-        expect(ok, isTrue);
-        expect(client.machines, contains('$bridge/m/m1'));
-        expect(client.machines, contains('$bridge/m/m2'));
-        expect(client.nameOf('$bridge/m/m1'), 'server1');
-        expect(client.nameOf('$bridge/m/m2'), 'user@host2');
-        expect(client.targetOf('$bridge/m/m1'), 'user@host1');
-        expect(client.targetOf('$bridge/m/m2'), 'user@host2');
-      } finally {
-        await server.close(force: true);
-        HttpOverrides.global = prevOverrides;
-      }
-    });
-
-    test('Externally added or removed machine is updated via discoverMachines and WS event', () async {
-      final prevOverrides = HttpOverrides.current;
-      HttpOverrides.global = null;
-      final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
-      final bridge = '127.0.0.1:${server.port}';
-      var machineList = <Map<String, dynamic>>[];
-      server.listen((req) async {
-        await req.drain();
-        req.response.statusCode = 200;
-        req.response.headers.contentType = ContentType.json;
-        if (req.uri.path == '/api/machines' && req.method == 'GET') {
-          req.response.write(jsonEncode({'machines': machineList}));
-        } else {
-          req.response.write(jsonEncode({'panes': []}));
-        }
-        await req.response.close();
-      });
-
-      try {
-        SharedPreferences.setMockInitialValues({});
-        final client = HerdrClientService()
-          ..setMachines([bridge], [], [])
-          ..configure(bridge, connect: false);
-
-        expect(client.machines, [bridge]);
-
-        // External machine is added in herdr
-        machineList = [
-          {'id': 'ext1', 'target': 'user@remote1', 'label': 'external1'}
-        ];
-
-        // 1. WebSocket message {"type":"machines"} from bridge triggers discovery
-        client.handleMessageForTesting(bridge, jsonEncode({'type': 'machines'}));
-        // Wait for async HTTP discovery
-        for (var i = 0; i < 50 && !client.machines.contains('$bridge/m/ext1'); i++) {
-          await Future.delayed(const Duration(milliseconds: 20));
-        }
-
-        expect(client.machines, contains('$bridge/m/ext1'));
-        expect(client.nameOf('$bridge/m/ext1'), 'external1');
-
-        // 2. Direct payload {"type":"machines","machines":[...]} also updates
-        client.handleMessageForTesting(
-          bridge,
-          jsonEncode({
-            'type': 'machines',
-            'machines': [
-              {'id': 'ext1', 'target': 'user@remote1', 'label': 'external-renamed'},
-              {'id': 'ext2', 'target': 'user@remote2', 'label': 'external2'},
-            ],
-          }),
-        );
-
-        expect(client.machines, contains('$bridge/m/ext2'));
-        expect(client.nameOf('$bridge/m/ext1'), 'external-renamed');
-
-        // 3. discoverMachines() (called on resume or drawer open) discovers changes
-        machineList = [];
-        client.setConnectedForTesting(bridge, true);
-        await client.discoverMachines();
-        expect(client.machines.contains('$bridge/m/ext1'), isFalse);
-        expect(client.machines.contains('$bridge/m/ext2'), isFalse);
-        expect(client.machines, [bridge]);
-      } finally {
-        await server.close(force: true);
-        HttpOverrides.global = prevOverrides;
-      }
-    });
-
-    test('Machine hierarchy validation and remote machine WS push isolation', () {
-      expect(HerdrClientService.isValidMachine('127.0.0.1:7788'), isTrue);
-      expect(HerdrClientService.isValidMachine('127.0.0.1:7788/m/m1'), isTrue);
-      expect(HerdrClientService.isValidMachine('127.0.0.1:7788/m/m1/m/m2'), isFalse);
-      expect(HerdrClientService.isValidMachine('invalid/path'), isFalse);
-
-      expect(HerdrClientService.parentOf('127.0.0.1:7788'), isNull);
-      expect(HerdrClientService.parentOf('127.0.0.1:7788/m/m1'), '127.0.0.1:7788');
-
-      final client = HerdrClientService()
-        ..setMachines(['127.0.0.1:7788', '127.0.0.1:7788/m/m1', '127.0.0.1:7788/m/m1/m/m2'], ['127.0.0.1:7788/m/m1=Remote 1']);
-
-      // Nested/malformed machines are filtered out
-      expect(client.machines, ['127.0.0.1:7788', '127.0.0.1:7788/m/m1']);
-
-      // A WebSocket message sent on a remote machine does not add children or trigger discovery
-      client.handleMessageForTesting(
-        '127.0.0.1:7788/m/m1',
-        jsonEncode({
-          'type': 'machines',
-          'machines': [{'id': 'nested', 'target': 'user@nested'}],
-        }),
-      );
-      expect(client.machines, ['127.0.0.1:7788', '127.0.0.1:7788/m/m1']);
     });
 
     testWidgets('Adding an SSH machine through the UI calls addSshMachine', (tester) async {
@@ -1113,12 +882,11 @@ void main() {
       await tester.tap(find.text('Open'));
       await tester.pumpAndSettle();
 
-      // Bridges exist, so SegmentedButton with Bridge and SSH is visible
-      expect(find.text('Bridge'), findsOneWidget);
-      expect(find.text('SSH'), findsOneWidget);
+      // Machines exist, so a new one can be dialed from the phone or added through one's herdr-core
+      expect(find.text('From this phone'), findsOneWidget);
+      expect(find.text('Through Herdr'), findsOneWidget);
 
-      // Switch to SSH
-      await tester.tap(find.text('SSH'));
+      await tester.tap(find.text('Through Herdr'));
       await tester.pumpAndSettle();
 
       // Via dropdown is visible because there are 2 bridges
@@ -1436,7 +1204,7 @@ void main() {
         ..setMachines(['10.0.0.1:7788'], [])
         ..configure('10.0.0.1:7788', connect: false);
 
-      SessionSnapshot snap(int seq, String status) => SessionSnapshot.fromJson({
+      SessionSnapshot snap(int? seq, String status) => SessionSnapshot.fromJson({
             'workspaces': [
               {'workspace_id': 'w1', 'label': 'ws1', 'active_tab_id': 'w1:t1'}
             ],
@@ -1462,8 +1230,8 @@ void main() {
             ],
           });
 
-      // Initial snapshot: no timestamp yet
-      client.setSnapshotForTesting(snap(1, 'working'));
+      // No status time yet: none shown
+      client.setSnapshotForTesting(snap(null, 'working'));
       expect(client.changedAt('w1:p1'), isNull);
 
       await tester.pumpWidget(MaterialApp(
@@ -1471,9 +1239,10 @@ void main() {
       ));
       await tester.pumpAndSettle();
 
-      // Second snapshot with state change: timestamp is recorded
-      client.setSnapshotForTesting(snap(2, 'blocked'));
-      expect(client.changedAt('w1:p1'), isNotNull);
+      // herdr-core's status time is when it changed
+      final at = DateTime.now().millisecondsSinceEpoch;
+      client.setSnapshotForTesting(snap(at, 'blocked'));
+      expect(client.changedAt('w1:p1'), DateTime.fromMillisecondsSinceEpoch(at));
 
       await tester.pumpAndSettle();
       expect(find.text('agent-task'), findsOneWidget);
@@ -1486,53 +1255,6 @@ void main() {
       expect(tester.getBottomLeft(find.text('Needs you')).dy, closeTo(tester.getBottomLeft(find.text('ws1')).dy, 3.0));
     });
 
-    test('Viewing a done agent (idle, same seq) keeps when it changed', () {
-      final client = HerdrClientService()..configure('10.0.0.1:7788', connect: false);
-      SessionSnapshot snap(int seq, String status) => SessionSnapshot.fromJson({
-            'panes': [
-              {'pane_id': 'w1:p1', 'workspace_id': 'w1', 'tab_id': 'w1:t1', 'agent_status': status}
-            ],
-            'agents': [
-              {'agent': 'claude', 'pane_id': 'w1:p1', 'status': status, 'state_change_seq': seq}
-            ],
-          });
-      client.setSnapshotForTesting(snap(1, 'working'));
-      client.setSnapshotForTesting(snap(2, 'done'));
-      final at = client.changedAt('w1:p1');
-      expect(at, isNotNull);
-      client.setSnapshotForTesting(snap(2, 'idle'));
-      expect(client.changedAt('w1:p1'), at);
-    });
-
-    test('When an agent changed survives a restart while its seq is the one saved', () async {
-      SharedPreferences.setMockInitialValues({});
-      SessionSnapshot snap(int seq, String status) => SessionSnapshot.fromJson({
-            'panes': [
-              {'pane_id': 'w1:p1', 'workspace_id': 'w1', 'tab_id': 'w1:t1', 'agent_status': status}
-            ],
-            'agents': [
-              {'agent': 'claude', 'pane_id': 'w1:p1', 'status': status, 'state_change_seq': seq}
-            ],
-          });
-      final first = HerdrClientService()..configure('10.0.0.1:7788', connect: false);
-      first.setSnapshotForTesting(snap(1, 'working'));
-      first.setSnapshotForTesting(snap(2, 'done'));
-      final at = first.changedAt('w1:p1')!;
-      await Future<void>.delayed(Duration.zero);
-      final prefs = await SharedPreferences.getInstance();
-      HerdrClientService restarted() => HerdrClientService()
-        ..load(prefs)
-        ..configure('10.0.0.1:7788', connect: false);
-
-      // Viewed meanwhile (done → idle, same seq): still the same change.
-      final viewed = restarted()..setSnapshotForTesting(snap(2, 'idle'));
-      expect(viewed.changedAt('w1:p1')?.millisecondsSinceEpoch, at.millisecondsSinceEpoch);
-
-      // It changed while the app was closed: when is unknown.
-      final moved = restarted()..setSnapshotForTesting(snap(5, 'working'));
-      expect(moved.changedAt('w1:p1'), isNull);
-    });
-
     test('Agent titles lose their agent tags, and the agent is named by its program', () {
       String title(String t) => PaneModel.fromJson({'terminal_title_stripped': t, 'cwd': '/src/my-repo'}).terminalTitle;
       expect(title('OC | Fix scroll'), 'Fix scroll');
@@ -1541,49 +1263,6 @@ void main() {
       expect(title('my-repo'), '');
       expect(title('xicu@host:~/src/my-repo'), 'xicu@host:~/src/my-repo');
       expect(AgentModel.fromJson({'agent': 'opencode', 'name': 'scrollprobe', 'pane_id': 'p'}).name, 'opencode');
-    });
-
-    test('Monitoring shows instead of idle while background monitors run', () {
-      final idle = AgentModel.fromJson({'agent': 'claude', 'pane_id': 'p', 'status': 'idle'});
-      expect(idle.monitoring, isFalse);
-      expect(idle.displayStatus, 'idle');
-      final waiting =
-          AgentModel.fromJson({'agent': 'claude', 'pane_id': 'p', 'status': 'idle', 'monitoring': true});
-      expect(waiting.monitoring, isTrue);
-      expect(waiting.displayStatus, 'monitoring');
-      expect(AgentStatus.fromString(waiting.displayStatus), AgentStatus.monitoring);
-      expect(AgentStatus.monitoring.label, 'Monitoring…');
-      // Any other herdr status wins over the monitoring flag.
-      final working =
-          AgentModel.fromJson({'agent': 'claude', 'pane_id': 'p', 'status': 'working', 'monitoring': true});
-      expect(working.displayStatus, 'working');
-    });
-
-    testWidgets('The ongoing notification counts monitoring agents apart from idle', (tester) async {
-      SharedPreferences.setMockInitialValues({});
-      final statuses = <Map<dynamic, dynamic>>[];
-      tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(const MethodChannel('herdr/android'),
-          (call) async {
-        if (call.method == 'status' && call.arguments != null) {
-          statuses.add(Map<dynamic, dynamic>.from(call.arguments as Map));
-        }
-        return null;
-      });
-      final client = HerdrClientService()
-        ..setMachines(['10.0.0.1:7788'], [])
-        ..setAlerts(true, ask: false)
-        ..setConnectedForTesting('10.0.0.1:7788', true);
-      client.setSnapshotForTesting(
-          SessionSnapshot.fromJson({
-            'agents': [
-              {'name': 'coder', 'pane_id': 'w1:p1', 'status': 'idle', 'monitoring': true},
-              {'name': 'ui', 'pane_id': 'w1:p2', 'status': 'idle'},
-              {'name': 'api', 'pane_id': 'w1:p3', 'status': 'idle'},
-            ],
-          }),
-          '10.0.0.1:7788');
-      expect(client.summaryOf('10.0.0.1:7788'), '1 monitoring · 2 idle');
-      expect(statuses.last['title'], '1 agent monitoring');
     });
 
     testWidgets('Agent avatar shows status ring and no StatusDot on AgentsHomeScreen', (tester) async {
@@ -1964,120 +1643,6 @@ void main() {
       expect(client.muted, isEmpty);
     });
 
-    testWidgets('In a worktree, top bar shows server label and worktree chip before branch',
-        (tester) async {
-      SharedPreferences.setMockInitialValues({'last_seen_changelog': changelog.first.$1});
-      final client = HerdrClientService()
-        ..setMachines(['10.0.0.1:7788'], [])
-        ..configure('10.0.0.1:7788', connect: false);
-
-      final snap = SessionSnapshot.fromJson({
-        'workspaces': [
-          {
-            'workspace_id': 'w1',
-            'number': 1,
-            'label': 'herdr-mobile',
-            'active_tab_id': 'w1:t1',
-            'git_branch': 'main',
-            'worktree': {
-              'repo_key': 'repo-1',
-              'is_linked_worktree': false,
-            },
-          },
-          {
-            'workspace_id': 'w2',
-            'number': 2,
-            'label': 'worktree-feat-login', // herdr names the checkout after the branch
-            'active_tab_id': 'w2:t1',
-            'git_branch': 'worktree/feat-login',
-            'worktree': {
-              'repo_key': 'repo-1',
-              'is_linked_worktree': true,
-            },
-          },
-        ],
-        'tabs': [
-          {
-            'tab_id': 'w2:t1',
-            'workspace_id': 'w2',
-            'number': 1,
-            'label': 'main',
-          },
-        ],
-        'panes': [
-          {
-            'pane_id': 'w2:p1',
-            'workspace_id': 'w2',
-            'tab_id': 'w2:t1',
-            'terminal_title': 'login-feature',
-            'agent_status': 'working',
-          },
-        ],
-        'agents': [
-          {
-            'name': 'claude',
-            'pane_id': 'w2:p1',
-            'status': 'working',
-          },
-        ],
-      });
-
-      client.setSnapshotForTesting(snap);
-      client.selectPane('w2:p1');
-
-      await tester.pumpWidget(MaterialApp(home: TerminalScreen(client: client)));
-      await tester.pump(const Duration(milliseconds: 300));
-
-      // The server label is authoritative even when it matches the checkout folder.
-      final appBarFinder = find.byType(AppBar);
-      final chipInBar = find.descendant(of: appBarFinder, matching: find.text('worktree'));
-      final repoInBar = find.descendant(of: appBarFinder, matching: find.text('worktree-feat-login'));
-      final branchInBar = find.descendant(of: appBarFinder, matching: find.text('feat-login'));
-
-      expect(chipInBar, findsOneWidget);
-      expect(repoInBar, findsOneWidget);
-      expect(branchInBar, findsOneWidget);
-
-      // Chip is vertically below the repo name
-      expect(tester.getTopLeft(chipInBar).dy, greaterThan(tester.getTopLeft(repoInBar).dy));
-      // Chip is horizontally before the branch name on the bottom line
-      expect(tester.getTopLeft(chipInBar).dx, lessThan(tester.getTopLeft(branchInBar).dx));
-      // Branch is vertically below the repo name
-      expect(tester.getTopLeft(branchInBar).dy, greaterThan(tester.getTopLeft(repoInBar).dy));
-
-      // Its menu, as Herdr's sidebar has it: closed apart from its checkout being deleted; no worktree of a worktree.
-      showWorkspaceContextMenu(tester.element(appBarFinder), client, snap.workspaces[1], Offset.zero);
-      await tester.pump();
-      await tester.pump(const Duration(milliseconds: 300));
-      for (final item in ['Rename', 'Close', 'Delete worktree checkout']) {
-        expect(find.text(item), findsOneWidget);
-      }
-      expect(find.text('New worktree'), findsNothing);
-      Navigator.pop(tester.element(find.text('Rename'))); // dismiss the menu
-      await tester.pump();
-      await tester.pump(const Duration(seconds: 1));
-      expect(find.text('Delete worktree checkout'), findsNothing);
-
-      // The repository's workspace, with that worktree open, closes with it.
-      showWorkspaceContextMenu(tester.element(appBarFinder), client, snap.workspaces[0], Offset.zero);
-      await tester.pump();
-      await tester.pump(const Duration(milliseconds: 300));
-      expect(find.text('Close group'), findsOneWidget);
-      expect(find.text('Close'), findsNothing);
-    });
-
-    test('A worktree preserves server labels even when they match a branch slug', () {
-      WorkspaceModel tree(String label) => WorkspaceModel.fromJson({
-            'workspace_id': 'w2',
-            'label': label,
-            'git_branch': 'worktree/feat-login',
-            'worktree': {'repo_key': 'r', 'is_linked_worktree': true},
-          });
-      expect(tree('worktree-feat-login').displayName, 'worktree-feat-login');
-      expect(tree('login work').displayName, 'login work');
-      expect(tree('login work').branchName, 'feat-login');
-    });
-
     testWidgets('Ctrl + and Ctrl - change terminal zoom on Linux/desktop', (tester) async {
       final client = HerdrClientService();
       client.setFontSize(14);
@@ -2232,34 +1797,6 @@ void main() {
       expect(legacy.limits[0].isPrimary, isTrue);
       expect(legacy.limits[1].isPrimary, isFalse);
       expect(legacy.highestPercent, equals(0.4));
-    });
-
-    testWidgets('TerminalScreen tab shows a monitoring agent as monitoring, as the list does', (tester) async {
-      final client = HerdrClientService();
-      client.setSnapshotForTesting(SessionSnapshot.fromJson({
-        'focused_workspace_id': 'w1',
-        'focused_tab_id': 'w1:t1',
-        'focused_pane_id': 'w1:p1',
-        'workspaces': [
-          {'workspace_id': 'w1', 'number': 1, 'label': 'main', 'active_tab_id': 'w1:t1', 'agent_status': 'idle'},
-        ],
-        'tabs': [
-          {'tab_id': 'w1:t1', 'workspace_id': 'w1', 'number': 1, 'label': 'Tab 1', 'agent_status': 'idle'},
-        ],
-        'panes': [
-          {'pane_id': 'w1:p1', 'workspace_id': 'w1', 'tab_id': 'w1:t1', 'focused': true, 'agent_status': 'idle'},
-        ],
-        'agents': [
-          {'name': 'claude', 'pane_id': 'w1:p1', 'agent_status': 'idle', 'monitoring': true},
-        ],
-      }));
-      client.selectPane('w1:p1');
-
-      await tester.pumpWidget(MaterialApp(home: TerminalScreen(client: client)));
-      await tester.pump(const Duration(milliseconds: 300));
-
-      final tabAvatar = tester.widgetList<AgentAvatar>(find.byType(AgentAvatar)).firstWhere((a) => a.status != null);
-      expect(tabAvatar.status, 'monitoring');
     });
 
     testWidgets('TerminalScreen message box has quota bolt button that opens usage sheet', (tester) async {
@@ -2817,6 +2354,119 @@ void main() {
       expect(multilineSendButtonSize.height, equals(initialSendButtonSize.height));
     });
 
+    test("herdr-core's terminals and the Herdr app's layout make the snapshot", () {
+      const root = 'me@laptop';
+      final client = HerdrClientService()..setMachines([root, '$root/m/vps'], []);
+      Map term(String address, {String? state, String? app, int turn = 0, String cwd = '/home/me/proj', String? title}) => {
+            'address': address,
+            'state': 'live',
+            'cwd': cwd,
+            'title': title,
+            'turn': turn,
+            'status_ms': 1000,
+            'status': state == null ? null : {'app': app ?? 'claude-code', 'state': state},
+          };
+      client.resetForTesting(root, [
+        term('t1', state: 'working', title: 'Fixing the parser'),
+        term('t2'),
+        term('t3', state: 'blocked', app: 'opencode'), // a sub-agent, in no tab
+        {...term('t4', state: 'done'), 'state': 'finished'},
+        term('vps/t1', state: 'error', app: 'codex'),
+      ], {
+        'spaces': [
+          {
+            'id': 'spc1',
+            'name': '',
+            'folder': '/home/me/proj',
+            'tabs': [
+              {
+                'id': 'tb1',
+                'name': '',
+                'root': {
+                  'type': 'row',
+                  'children': [
+                    {'type': 'block', 'id': 'p1', 'content': {'terminal': 't1'}},
+                    {'type': 'block', 'id': 'p2', 'content': {'terminal': 't2'}},
+                  ],
+                },
+              },
+              {'id': 'tb2', 'name': 'logs', 'root': {'type': 'block', 'id': 'p4', 'content': {'terminal': 't4'}}},
+            ],
+          },
+        ],
+      });
+      final s = client.snapshotOf(root)!;
+      // An unnamed space is named after where its first terminal is, as the Herdr app does.
+      expect(s.workspaces.single.displayName, 'proj');
+      expect(s.workspaces.single.agentStatus, 'working'); // its tabs' most urgent agent
+      expect(s.tabs.map((t) => t.displayName), ['Tab 1', 'logs']);
+      expect(s.panes.map((p) => p.id), ['t1', 't2', 't3']); // finished t4 is gone
+      expect(s.panes.firstWhere((p) => p.id == 't3').tabId, '');
+      expect(s.panes.first.terminalTitle, 'Fixing the parser');
+      expect({for (final a in s.agents) a.paneId: '${a.name} ${a.status}'}, {'t1': 'claude working', 't3': 'opencode blocked'});
+      expect(client.changedAt('t1', root), DateTime.fromMillisecondsSinceEpoch(1000));
+      // A machine the root's core reaches has its own terminals, by their local address; an error needs you.
+      expect(client.snapshotOf('$root/m/vps')!.agents.single.paneId, 't1');
+      expect(client.snapshotOf('$root/m/vps')!.agents.single.status, 'blocked');
+
+      // Events keep it live.
+      client.handleNotificationForTesting(root, {
+        'method': 'event',
+        'params': {'type': 'status', 'terminal': 't1', 'data': {'status': {'app': 'claude-code', 'state': 'done'}, 'reported': true}},
+      });
+      expect(client.snapshotOf(root)!.agentOf('t1')!.status, 'done');
+      expect(client.changedAt('t1', root)!.isAfter(DateTime.fromMillisecondsSinceEpoch(1000)), isTrue);
+      client.handleNotificationForTesting(root, {
+        'method': 'event',
+        'params': {'type': 'finished', 'terminal': 'vps/t1', 'data': {'reason': 'exited'}},
+      });
+      expect(client.snapshotOf('$root/m/vps')!.agents, isEmpty);
+      client.handleNotificationForTesting(root, {
+        'method': 'event',
+        'params': {'type': 'created', 'terminal': 't9', 'data': term('t9', state: 'idle', app: 'pi')},
+      });
+      expect(client.snapshotOf(root)!.agentOf('t9')!.name, 'pi');
+      client.handleNotificationForTesting(root, {'method': 'missed', 'params': {'seq': 9, 'terminals': [term('t1')]}});
+      expect(client.snapshotOf(root)!.agents, isEmpty);
+      expect(client.snapshotOf(root)!.panes.map((p) => p.id), ['t1']);
+    });
+
+    test("An agent's finished turn alerts once", () {
+      const root = 'me@laptop';
+      final calls = <MethodCall>[];
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(const MethodChannel('herdr/android'), (c) async {
+        calls.add(c);
+        return null;
+      });
+      final client = HerdrClientService()
+        ..setMachines([root], [])
+        ..setAlerts(true, ask: false);
+      Map term(int turn, String state) => {
+            'address': 't1',
+            'state': 'live',
+            'cwd': '/w',
+            'turn': turn,
+            'status': {'app': 'claude-code', 'state': state},
+          };
+      client.resetForTesting(root, [term(3, 'working')]);
+      for (final (turn, state) in [(4, 'idle'), (4, 'idle'), (4, 'working')]) {
+        client.handleNotificationForTesting(root, {
+          'method': 'event',
+          'params': {'type': 'turn', 'terminal': 't1', 'data': {'turn': turn, 'state': state}},
+        });
+        client.handleNotificationForTesting(root, {
+          'method': 'event',
+          'params': {'type': 'status', 'terminal': 't1', 'data': {'status': {'app': 'claude-code', 'state': state}}},
+        });
+      }
+      final alerts = calls.where((c) => c.method == 'alert').toList();
+      expect(alerts.length, 1);
+      expect(alerts.single.arguments['title'], 'Claude finished');
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(const MethodChannel('herdr/android'), null);
+    });
+
     test('HerdrClientService tab and workspace navigation and jumpToAttention', () {
       final client = HerdrClientService();
       final snap = SessionSnapshot.fromJson({
@@ -3044,20 +2694,6 @@ void main() {
       await tester.sendKeyUpEvent(LogicalKeyboardKey.altLeft);
       await tester.pump();
       expect(lastError, contains('create tab'));
-
-      // Alt + K / Alt + J -> scroll conversation history
-      expect(find.byTooltip('Back to live'), findsNothing);
-      await tester.sendKeyDownEvent(LogicalKeyboardKey.altLeft);
-      await tester.sendKeyEvent(LogicalKeyboardKey.keyK);
-      await tester.sendKeyUpEvent(LogicalKeyboardKey.altLeft);
-      await tester.pump();
-      expect(find.byTooltip('Back to live'), findsOneWidget);
-
-      await tester.sendKeyDownEvent(LogicalKeyboardKey.altLeft);
-      await tester.sendKeyEvent(LogicalKeyboardKey.keyJ);
-      await tester.sendKeyUpEvent(LogicalKeyboardKey.altLeft);
-      await tester.pump();
-      expect(find.byTooltip('Back to live'), findsNothing);
     });
 
     testWidgets('Tapping an agent notification opens TerminalScreen, but general notification does not', (tester) async {

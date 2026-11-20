@@ -46,31 +46,8 @@ class SessionSnapshot {
     return [if (wsName != null) wsName, if (tab != null) '(${tab.displayName})'].join(' ');
   }
 
-  /// A repo's main workspace: the first non-linked one with [repoKey] in herdr's order, which is
-  /// also the workspace herdr's `worktree.list` answers from (`source_workspace_id`).
-  WorkspaceModel? mainOf(String? repoKey) {
-    if (repoKey == null) return null;
-    return workspaces.where((w) => !w.isLinkedWorktree && w.repoKey == repoKey).firstOrNull;
-  }
-
   /// Herdr's resolved workspace label, including any user rename.
   String titleOf(WorkspaceModel ws) => ws.displayName;
-
-  /// One block per top-level workspace, so a block drags with its worktrees: each linked worktree
-  /// nests under its repo's main workspace ([mainOf]); one whose repo has no open main workspace
-  /// stands alone. Every workspace appears exactly once, even when several workspaces share a repo.
-  List<List<WorkspaceModel>> get worktreeBlocks {
-    final blocks = <List<WorkspaceModel>>[];
-    for (final w in workspaces) {
-      if (w.isLinkedWorktree && mainOf(w.repoKey) != null) continue;
-      blocks.add([
-        w,
-        if (!w.isLinkedWorktree && w.repoKey != null)
-          ...workspaces.where((c) => c.isLinkedWorktree && c.repoKey == w.repoKey && mainOf(c.repoKey)?.id == w.id),
-      ]);
-    }
-    return blocks;
-  }
 }
 
 class WorkspaceModel {
@@ -80,55 +57,23 @@ class WorkspaceModel {
   final String? activeTabId;
   final String agentStatus;
 
-  /// Git repo identity from `worktree.repo_key`; linked worktrees nest under the repo's main workspace.
-  final String? repoKey;
-  final bool isLinkedWorktree;
-
-  /// Added by the bridge (`git branch --show-current` in the workspace's directory).
-  final String? gitBranch;
-
-  /// Commits the branch is ahead of and behind its upstream, as last fetched; null without one.
-  final int? gitAhead;
-  final int? gitBehind;
-
   WorkspaceModel({
     required this.id,
     required this.number,
     required this.label,
     this.activeTabId,
     required this.agentStatus,
-    this.repoKey,
-    this.isLinkedWorktree = false,
-    this.gitBranch,
-    this.gitAhead,
-    this.gitBehind,
   });
 
-  /// The API resolves automatic and custom labels. Inferring a rename from a branch loses
-  /// explicit names that happen to match the checkout folder.
   String get displayName => label.isNotEmpty ? label : 'workspace $number';
 
-  /// The checked-out branch, minus Herdr's `worktree/` prefix in a linked worktree.
-  String? get branchName => isLinkedWorktree && gitBranch?.startsWith('worktree/') == true
-      ? gitBranch!.substring('worktree/'.length)
-      : gitBranch;
-
-  factory WorkspaceModel.fromJson(Map<String, dynamic> json) {
-    // The bridge leaves the branch out outside a git repo or on a detached HEAD; an empty one counts as none too.
-    final branch = (json['git_branch'] as String?)?.trim();
-    return WorkspaceModel(
-      id: json['workspace_id'] ?? '',
-      number: json['number'] ?? 0,
-      label: json['label'] ?? '',
-      activeTabId: json['active_tab_id'],
-      agentStatus: json['agent_status'] ?? 'unknown',
-      repoKey: json['worktree']?['repo_key'],
-      isLinkedWorktree: json['worktree']?['is_linked_worktree'] ?? false,
-      gitBranch: branch == null || branch.isEmpty ? null : branch,
-      gitAhead: json['git_ahead'],
-      gitBehind: json['git_behind'],
-    );
-  }
+  factory WorkspaceModel.fromJson(Map<String, dynamic> json) => WorkspaceModel(
+        id: json['workspace_id'] ?? '',
+        number: json['number'] ?? 0,
+        label: json['label'] ?? '',
+        activeTabId: json['active_tab_id'],
+        agentStatus: json['agent_status'] ?? 'unknown',
+      );
 }
 
 class TabModel {
@@ -167,10 +112,6 @@ class PaneModel {
   final String terminalTitle;
   final String agentStatus;
 
-  /// Why herdr couldn't bring the pane back after a restart (its folder is gone, its shell won't start):
-  /// it has no terminal to show until that is fixed.
-  final String? restoreError;
-
   PaneModel({
     required this.id,
     required this.workspaceId,
@@ -178,7 +119,6 @@ class PaneModel {
     required this.focused,
     required this.terminalTitle,
     required this.agentStatus,
-    this.restoreError,
   });
 
   factory PaneModel.fromJson(Map<String, dynamic> json) {
@@ -194,7 +134,6 @@ class PaneModel {
       focused: json['focused'] ?? false,
       terminalTitle: title == 'Claude Code' || cwd.isNotEmpty && title == cwd.split('/').last ? '' : title,
       agentStatus: json['agent_status'] ?? 'unknown',
-      restoreError: json['restore_error'],
     );
   }
 }
@@ -203,10 +142,6 @@ class AgentModel {
   final String name;
   final String paneId;
   final String status;
-
-  /// True when the bridge saw background monitors running in the pane while
-  /// herdr calls it `idle`: the agent is waiting on a result, not idle.
-  final bool monitoring;
 
   /// While idle after completing work (not after an interrupt), the `state_change_seq` of that change, so it
   /// rises with each completion whether or not the pane was viewed; null otherwise.
@@ -222,7 +157,6 @@ class AgentModel {
     required this.name,
     required this.paneId,
     required this.status,
-    this.monitoring = false,
     this.completionSeq,
     this.stateChangeSeq,
     this.usage,
@@ -234,16 +168,11 @@ class AgentModel {
       name: json['agent'] ?? json['name'] ?? '',
       paneId: json['pane_id'] ?? '',
       status: json['status'] ?? json['agent_status'] ?? 'unknown',
-      monitoring: json['monitoring'] == true,
       completionSeq: json['completion_seq'],
       stateChangeSeq: json['state_change_seq'],
       usage: json['usage'] is Map<String, dynamic> ? AgentUsage.fromJson(json['usage'] as Map<String, dynamic>) : null,
     );
   }
-
-  /// What the agents list shows: `monitoring` while herdr says `idle` but the
-  /// bridge saw background monitors running. Any other herdr status wins.
-  String get displayStatus => status == 'idle' && monitoring ? 'monitoring' : status;
 }
 
 class AgentUsage {

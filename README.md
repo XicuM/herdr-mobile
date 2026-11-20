@@ -12,7 +12,6 @@
 <p align="center">
   <a href="https://github.com/XicuM/herdr-mobile/releases"><img src="https://img.shields.io/github/v/release/XicuM/herdr-mobile?color=blue&label=release" alt="Release"></a>
   <img src="https://img.shields.io/badge/Flutter-3.24+-02569B?logo=flutter&logoColor=white" alt="Flutter">
-  <img src="https://img.shields.io/badge/Rust-2021-DEA584?logo=rust&logoColor=white" alt="Rust">
   <img src="https://img.shields.io/badge/Tailscale-Ready-4E73DF?logo=tailscale&logoColor=white" alt="Tailscale">
   <img src="https://img.shields.io/badge/Platform-Android-3DDC84?logo=android&logoColor=white" alt="Android">
 </p>
@@ -31,11 +30,11 @@
 ## ✨ Features
 
 - 💬 **WhatsApp-Style Agent Feed**: All your AI coding agents across multiple machines aggregated in a single list, prioritized by urgency (`working`, `needs you`, `done`, `idle`).
-- ⚡ **Interactive Terminal Streaming**: Low-latency PTY streaming with rendered viewports, touch-friendly scrollback, and bracketed paste message input. It never steals a pane the desktop is viewing: that shows a Take over banner instead.
+- ⚡ **Interactive Terminal Streaming**: Low-latency PTY streaming with rendered viewports, touch-friendly scrollback, and bracketed paste message input. The terminal's history comes with it, so scrolling back is instant.
 - 🎛️ **Mobile-First Dev Keyboard**: One-tap access to essential terminal keys (`Esc`, `^C`, `Tab`, `⇧Tab`, `Ctrl`, arrow keys) and persistent prompt history / quick replies.
 - 🔔 **Instant Background Alerts**: Native Android background notifications ping you the second an agent requires feedback or completes a task.
-- 🌐 **Multi-Machine & Multi-Agent**: Manage local processes, remote SSH machines, and Tailscale nodes seamlessly from one app.
-- 📂 **Workspaces & Worktrees**: Full tab and workspace management with drag-and-drop reordering, branch switching, and worktree support.
+- 🌐 **Multi-Machine & Multi-Agent**: Every computer you add over SSH, and every machine its herdr-core reaches, in one app.
+- 📂 **Spaces & Tabs**: The Herdr app's spaces and tabs, with new, rename, close and drag-and-drop reordering.
 - 📱 **Responsive List-Detail UI**: Optimized for single-hand phone use and side-by-side split screen on tablets and foldable devices.
 
 ---
@@ -43,54 +42,51 @@
 ## 🏗️ Architecture
 
 ```text
-┌─────────────────┐       WebSocket / HTTP        ┌───────────────────┐       Unix Socket / SSH       ┌─────────────────┐
-│  Flutter Client │ ◄───────────────────────────► │    Rust Bridge    │ ◄───────────────────────────► │  Herdr Daemon   │
-│  (Android App)  │   Bearer Auth + Tailscale     │  (herdr-bridge)   │     ~/.config/herdr/herdr.sock │  (AI Agents)    │
-└─────────────────┘                               └───────────────────┘                               └─────────────────┘
+┌─────────────────┐            SSH            ┌──────────────────────────┐
+│  Herdr Mobile   │ ◄───────────────────────► │ herdr-core (hc connect)  │ ── its own machines (hc machine add)
+│  (Flutter)      │   herdr-core's framed     │ + the Herdr desktop app  │
+└─────────────────┘   JSON-RPC protocol       └──────────────────────────┘
 ```
 
-Herdr Mobile is composed of two minimal, zero-bloat pieces:
-1. **[herdr-bridge](https://github.com/XicuM/herdr-bridge)**: A lightweight companion daemon written in Rust (Axum + Tokio), in its own repository. Connects to Herdr's local IPC socket (`herdr.sock`), multiplexes remote machines over SSH, and streams real-time state and PTY sessions over authenticated WebSockets.
-2. **This repository**: A native Android Flutter client powered by `xterm.dart` and Material 3 design, delivering smooth terminal interaction and instant alerts.
+The app speaks [herdr-core](https://github.com/herdrdev/herdr-core)'s own API: it dials each computer over SSH and runs
+`herdr-core connect` there, as herdr-core itself dials the machines it adds. Nothing else runs on the computer.
+
+- **Agents** are the terminals whose programs report their status (`hc ls`), live through `events.subscribe`.
+- **Spaces and tabs** are the [Herdr app](https://github.com/herdrdev/herdr-app)'s layout (its `herdr-app` document).
+  Changing them runs `herdr-app do …` on that computer, so it needs the Herdr window open there.
+- **Terminals** stream with `terminal.attach`: the program's real output, its history included.
+- **Usage** comes from the `herdr-usage` mod's numbers on the desktop, when it's installed.
+
+The last version for herdr-bridge (Herdr TUI) is on the [`bridge`](https://github.com/XicuM/herdr-mobile/tree/bridge) branch.
 
 ---
 
-## 🚀 Quickstart: Deploying the Bridge
+## 📱 Setup
 
-The app talks to [**herdr-bridge**](https://github.com/XicuM/herdr-bridge), a user daemon on the machine where Herdr runs (no root needed). Install it from its [releases](https://github.com/XicuM/herdr-bridge/releases), from source with `./plugin/install.sh`, or as a herdr plugin with `herdr plugin install XicuM/herdr-bridge`; `install.sh --phone` then shows a QR code that pairs the app with it.
+1. Install the [Herdr app](https://herdr.dev) (or just herdr-core) on each computer.
+2. Grab the latest APK from the [**Releases**](https://github.com/XicuM/herdr-mobile/releases) page (a Linux desktop build, `herdr-mobile-linux-{x86_64,aarch64}.tar.gz`, is there too).
+3. Open the app, tap the **Machines** icon (top right) ➔ **+**, and give the computer's SSH target, e.g. `me@100.x.y.z` or
+   `me@laptop` (Tailscale MagicDNS); add `:port` if SSH isn't on 22.
+4. Copy **This phone's key** from that page into the computer's `~/.ssh/authorized_keys`. With
+   [Tailscale SSH](https://tailscale.com/kb/1193/tailscale-ssh) on, no key is needed.
 
----
-
-## 📱 Mobile App Setup
-
-1. Grab the latest APK from the [**Releases**](https://github.com/XicuM/herdr-mobile/releases) page (a Linux desktop build, `herdr-mobile-linux-{x86_64,aarch64}.tar.gz`, is there too).
-2. Open the app, tap the **Machines** icon (top right) ➔ **Add Bridge**.
-3. Scan the pairing QR code from `install.sh --phone` with the scan button in **Address** (or paste its link there), or enter:
-   - **Host / IP**: Your Tailscale IP (e.g. `100.x.y.z` or MagicDNS name)
-   - **Port**: `7788` (default)
-   - **Token**: The 8-character token printed by the bridge's installer (or `herdr-bridge --print-token`)
-4. That's it! Your active agents and workspaces will sync immediately.
+Machines that computer's herdr-core reaches (`hc machine ls`) show up under it by themselves.
 
 ---
 
 ## 🔒 Security & Networking
 
-Herdr Mobile is designed to be secure by default:
-
-- **Token Authentication**: Every request (except `/health`) requires `Authorization: Bearer <token>`. Failed attempts are delayed and rate-limited to eliminate brute-force risks.
-- **Tailscale First**: The bridge is built to sit on your Tailnet. Direct internet port forwarding is neither needed nor recommended.
-- **Anti-Rebinding & Browser Blocking**: Refuses browser requests (rejects `Origin` headers) and blocks non-Tailscale dotted domain names to protect against malicious websites on your network.
-
----
-
-Service management, logs and the bridge's Obsidian features are covered in the [herdr-bridge README](https://github.com/XicuM/herdr-bridge#readme).
+- **SSH only**: the app opens no port and needs no server of its own; it logs in like any SSH client.
+- **Its own key**: an ed25519 key made on the phone, kept in the app's private storage (no Android backups).
+- **Host keys** are trusted on first use and checked after; a changed one stops the connection until you forget it on
+  the machine's page.
+- **Tailscale first**: reach your computers over your Tailnet; port forwarding SSH to the internet isn't needed.
 
 ---
 
 ## 🤝 Contributing & Development
 
-- **Bridge**: now in [herdr-bridge](https://github.com/XicuM/herdr-bridge).
-- **Mobile App**: `flutter analyze`, `flutter test`, `flutter run`
+- `flutter analyze`, `flutter test`, `flutter run`. `test/hc_live_test.dart` talks to this computer's herdr-core when it has one.
 
 ---
 

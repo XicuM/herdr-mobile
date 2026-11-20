@@ -1,62 +1,44 @@
 import 'dart:async';
 import 'dart:convert';
-import 'dart:io';
+import 'dart:typed_data';
 import 'package:flutter/foundation.dart';
-import 'package:web_socket_channel/io.dart';
-import 'package:web_socket_channel/web_socket_channel.dart';
 import 'package:xterm/xterm.dart';
+import 'hc.dart';
 
-/// Streams one herdr pane, sized to this terminal, through the bridge.
-/// Binary frames carry terminal bytes both ways; text frames carry resizes and scrolls.
+/// Streams one terminal from herdr-core into [terminal], sized to it: `terminal.attach` on the machine's
+/// link, whose channel carries a first paint (screen, some history, modes), then the program's raw output;
+/// keys go back as DATA on it, and size as RESIZE. Attaching makes this phone the terminal's active viewer,
+/// so the terminal takes its size until another viewer (the desktop) types, resizes or gains focus.
 class PtyChannel {
-  /// As in [HerdrClientService.machines]: `host:port`, or a machine its bridge reaches.
+  /// As in [HerdrClientService.machines].
   final String machine;
   final String paneId;
   final Terminal terminal;
 
-  /// The bridge's token header ([HerdrClientService.headersOf]).
-  final Map<String, String> headers;
+  /// The link to reach it now (it changes when the machine reconnects), and its address through it.
+  final HcLink? Function() link;
+  final String address;
 
-  /// Called with each attach's first frame, when herdr shows the pane live.
+  /// Called with each attach's first frame.
   final VoidCallback? onAttach;
 
-  /// Called with the `term-closed` reason the bridge sends when herdr ends the
-  /// session (e.g. another client holds the pane), before the reconnect logic.
+  /// Called with why herdr-core refused or ended the stream (the terminal finished), before retrying.
   final ValueChanged<String>? onClose;
 
-  /// One-shot request to steal the pane from another attached client
-  /// (`?takeover=1`): used for the next attach only, so a held pane is taken
-  /// over when the user asks, never by background reconnects fighting it.
-  final bool takeover;
-
-  /// Whether herdr is streaming the pane: set by each attach's first frame, cleared when the connection drops.
+  /// Whether the terminal is streaming: set by each attach's first frame, cleared when it drops.
   final attached = ValueNotifier(false);
 
-  WebSocketChannel? _channel; // null between a dropped connection and the next attempt
-  StreamSubscription? _sub;
-  Timer? _reconnectTimer;
+  HcLink? _link;
+  int? _channel;
+  Timer? _retry;
   int _fails = 0; // attempts in a row that never attached, to back off
-  bool _takeoverArmed; // a steal asked for this channel, spent on its first attach
-  String? _closeReason; // why herdr ended the last session, when it said
-  final _pending = <String>[]; // input typed while there was no connection, sent with the next one
+  final _pending = <int>[]; // input typed while there was no stream, sent with the next one
   bool _disposed = false;
   final _held = StringBuffer();
   bool _hold = false;
 
-  /// Whether herdr refused the attach because another client holds the pane
-  /// ("already has an attached client"), or this client was taken over by one
-  /// ("terminal attach taken over"): then a fast reconnect would only fight it.
-  static bool isBusyReason(String reason) =>
-      reason.contains('already has an attached client') || reason.contains('taken over');
-
-  /// How long a reconnect waits: 15 s after herdr reported a busy pane, else
-  /// soon, since on a phone most drops are brief, backing off while it fails.
-  Duration get _retryDelay => _closeReason != null && isBusyReason(_closeReason!)
-      ? const Duration(seconds: 15)
-      : Duration(milliseconds: 500 << _fails.clamp(0, 3));
-
-  /// While set (text is selected), frames wait instead of moving the text under the selection; cleared,
-  /// they're written in order.
+  /// While set (text is selected), output waits instead of moving the text under the selection; cleared,
+  /// it's written in order.
   set hold(bool value) {
     if (_hold == value) return;
     _hold = value;
@@ -69,128 +51,122 @@ class PtyChannel {
     required this.machine,
     required this.paneId,
     required this.terminal,
-    this.headers = const {},
+    required this.link,
+    required this.address,
     this.onAttach,
     this.onClose,
-    this.takeover = false,
-  }) : _takeoverArmed = takeover;
+  });
 
-  void connect() {
+  Future<void> connect() async {
     if (_disposed) return;
-    // Herdr sends rendered frames of its own viewport (absolute cursor moves, no newlines), so the
-    // pane's history lives in herdr, not here. Keep xterm on the alt screen, which has no scrollback,
-    // and start each attach from a blank screen; herdr repaints the whole pane on attach. The clear goes
-    // in front of the first frame, not here, so the old screen stays up until then instead of going black.
-    var reset = '\x1b[?1049h\x1b[0m\x1b[H\x1b[2J';
-    var closed = false; // herdr ended this session: the frames after it are its reason, not the pane
-    final take = _takeoverArmed;
-    _takeoverArmed = false;
-    final uri = Uri.parse(
-        'ws://$machine/ws/term/${Uri.encodeComponent(paneId)}?cols=${terminal.viewWidth}&rows=${terminal.viewHeight}${take ? '&takeover=1' : ''}');
-    // Pings notice a connection that died silently (a bad signal, a changed network), which would otherwise
-    // freeze the screen and swallow input until TCP gives up, minutes later. Only a pong counts, and on a
-    // congested link it waits behind the frames, so shorter would drop slow but live connections; longer
-    // also lets the phone's radio rest between them.
-    final channel = IOWebSocketChannel(
-        WebSocket.connect(uri.toString(), headers: headers).then((s) => s..pingInterval = const Duration(seconds: 10)));
-    _channel = channel;
-    // An attempt made while the network is down can hang as long, so one not streaming soon is given up
-    // (soon enough for a slow link, or a machine the bridge reaches over SSH).
-    _reconnectTimer = Timer(const Duration(seconds: 20), () => _dropped(channel));
-    // Connection failures also reach the stream's onError, which reconnects.
-    channel.ready.ignore();
-    // The sink holds them until the socket opens.
-    for (final input in _pending) {
-      channel.sink.add(utf8.encode(input));
-    }
-    _pending.clear();
-    // Utf8Decoder as a stream transformer keeps multi-byte characters split across frames intact.
-    // Text frames carry the bridge's `term-closed` reasons; anything else is ignored.
-    _sub = channel.stream.listen(
-      (data) {
-        if (data is String) {
-          try {
-            final msg = jsonDecode(data);
-            if (msg is Map && msg['type'] == 'term-closed' && msg['reason'] is String) {
-              _closeReason = msg['reason'] as String;
-              closed = true;
-              onClose?.call(_closeReason!);
-            }
-          } catch (_) {}
-          return;
+    final link = _link = this.link();
+    if (link == null) return _dropped(null);
+    try {
+      final res = await link.call('terminal.attach', {
+        'terminal': address,
+        'cols': terminal.viewWidth,
+        'rows': terminal.viewHeight,
+        'history': 2000,
+        // Back after a dropped line: the size is set only once the phone is active again.
+        'resumed': _fails > 0,
+      }) as Map;
+      final channel = res['channel'] as int;
+      if (_disposed || _link != link) {
+        link.send(channel, HcLink.close, const []);
+        return;
+      }
+      _channel = channel;
+      final decoder = const Utf8Decoder(allowMalformed: true).startChunkedConversion(_Sink(_write));
+      var first = true;
+      link.listen(channel, (kind, payload) {
+        if (kind == HcLink.close) {
+          if (payload.isNotEmpty) onClose?.call(_reason(payload));
+          return _dropped(channel);
         }
-        if (data is! List<int>) return;
-        final text = const Utf8Decoder(allowMalformed: true).convert(data);
-        _hold ? _held.write(reset + text) : terminal.write(reset + text);
-        if (reset.isNotEmpty && !closed) {
-          _reconnectTimer?.cancel();
+        if (kind != HcLink.data) return;
+        if (first) {
+          // The first paint resets the modes and repaints the screen; this phone's own scrollback goes too,
+          // since the paint brings the history again.
+          first = false;
+          terminal.useMainBuffer();
+          terminal.mainBuffer.clearScrollback();
           _fails = 0;
-          _closeReason = null;
           attached.value = true;
+          decoder.add(payload);
           onAttach?.call();
+        } else {
+          decoder.add(payload);
         }
-        reset = '';
-      },
-      onError: (err) {
-        debugPrint('Terminal WS error: $err');
-        _dropped(channel);
-      },
-      onDone: () => _dropped(channel),
-      cancelOnError: true,
-    );
+        link.send(channel, HcLink.credit, (ByteData(4)..setUint32(0, payload.length, Endian.little)).buffer.asUint8List());
+      });
+      if (_pending.isNotEmpty) {
+        link.send(channel, HcLink.data, List.of(_pending));
+        _pending.clear();
+      }
+      link.done.then((_) => _dropped(channel));
+    } on HcError catch (e) {
+      onClose?.call(e.message);
+      _dropped(null);
+    } catch (e) {
+      debugPrint('Terminal attach failed: $e');
+      _dropped(null);
+    }
   }
 
-  /// Retries after [_retryDelay]: soon for a dropped connection, slowly when
-  /// another client holds the pane, so the two never fight over it.
-  /// The screen keeps the last frame meanwhile; [attached] tells it it's stale.
-  void _dropped(WebSocketChannel channel) {
+  void _write(String text) => _hold ? _held.write(text) : terminal.write(text);
+
+  static String _reason(Uint8List payload) {
+    try {
+      final r = jsonDecode(utf8.decode(payload));
+      return r['reason'] == 'exited' ? 'It exited${r['exit_code'] == null ? '' : ' with ${r['exit_code']}'}' : '${r['reason']}';
+    } catch (_) {
+      return utf8.decode(payload, allowMalformed: true);
+    }
+  }
+
+  /// Reattaches soon (a dropped line on a phone is usually brief), backing off while it fails. The screen
+  /// keeps the last output meanwhile; [attached] tells it it's stale.
+  void _dropped(int? channel) {
     if (_disposed || _channel != channel) return;
-    _reconnectTimer?.cancel();
-    _sub?.cancel();
-    channel.sink.close();
+    if (channel != null) _link?.forget(channel);
     _channel = null;
     attached.value = false;
-    _reconnectTimer = Timer(_retryDelay, connect);
+    _retry?.cancel();
+    _retry = Timer(Duration(milliseconds: 500 << _fails.clamp(0, 4)), connect);
     _fails++;
   }
 
-  /// Input typed while reconnecting waits for the connection rather than vanishing.
+  /// Input typed while reconnecting waits for the stream rather than vanishing.
   void sendInput(String input) {
+    final bytes = utf8.encode(input);
     final channel = _channel;
-    channel == null ? _pending.add(input) : channel.sink.add(utf8.encode(input));
+    channel == null ? _pending.addAll(bytes) : _link?.send(channel, HcLink.data, bytes);
   }
 
   void sendResize(int cols, int rows) {
-    _channel?.sink.add(jsonEncode({'cols': cols, 'rows': rows}));
-  }
-
-  /// Scrolls herdr's view of the pane through its history; positive [lines] go back in time.
-  /// [column] and [row] are 0-based screen cells under the gesture: herdr hands an
-  /// alternate-screen app the scroll as a mouse wheel there, so it reaches the widget
-  /// being scrolled (OpenCode only scrolls the widget under the wheel, unlike Claude).
-  void sendScroll(int lines, {int? column, int? row}) {
-    _channel?.sink.add(jsonEncode({
-      'type': 'terminal.scroll',
-      'direction': lines > 0 ? 'up' : 'down',
-      'lines': lines.abs(),
-      if (column != null) 'column': column,
-      if (row != null) 'row': row,
-    }));
-  }
-
-  /// A left click on a cell (0-based), which herdr hands to the pane only if its program asked for the mouse.
-  void sendClick(int column, int row) {
-    for (final action in ['down', 'up']) {
-      _channel?.sink.add(
-          jsonEncode({'type': 'terminal.mouse', 'action': action, 'button': 'left', 'column': column, 'row': row}));
-    }
+    final channel = _channel;
+    if (channel == null) return;
+    _link?.send(channel, HcLink.resize,
+        (ByteData(4)..setUint16(0, cols, Endian.little)..setUint16(2, rows, Endian.little)).buffer.asUint8List());
   }
 
   void dispose() {
     _disposed = true;
-    _reconnectTimer?.cancel();
-    _sub?.cancel();
-    _channel?.sink.close();
+    _retry?.cancel();
+    final channel = _channel;
+    if (channel != null) {
+      _link?.forget(channel);
+      _link?.send(channel, HcLink.close, const []);
+    }
     attached.dispose();
   }
+}
+
+class _Sink implements Sink<String> {
+  _Sink(this._onText);
+  final void Function(String) _onText;
+  @override
+  void add(String data) => _onText(data);
+  @override
+  void close() {}
 }

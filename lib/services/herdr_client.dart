@@ -4,12 +4,10 @@ import 'dart:io';
 import 'package:material_color_utilities/material_color_utilities.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart';
-import 'package:web_socket_channel/io.dart';
-import 'package:web_socket_channel/web_socket_channel.dart';
-import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 import '../models/session.dart';
 import '../ui/widgets/agent_avatar.dart';
+import 'hc.dart';
 
 /// What the volume keys do on the terminal screen; [volume] leaves them to the system.
 enum VolumeKeys { fontSize, arrows, volume }
@@ -18,81 +16,48 @@ enum VolumeKeys { fontSize, arrows, volume }
 /// [send] sends the message (Shift+Enter inserts a new line).
 enum EnterBehavior { newline, send }
 
-/// A file an agent sent the user (`herdr-bridge send`), offered on its pane until opened or dismissed.
-class Delivery {
-  Delivery(this.machine, Map<String, dynamic> json)
-      : id = json['id'],
-        name = json['name'],
-        size = json['size'] ?? 0,
-        mime = json['mime'] ?? 'application/octet-stream',
-        title = json['title'],
-        paneId = json['pane_id'];
-
-  /// The bridge it came from, which serves it at `/api/deliveries/[id]`.
-  final String machine;
-  final String id, name, mime;
-  final int size;
-  final String? title;
-
-  /// The sending agent's pane; null for an agent in another herdr session, offered on every pane.
-  final String? paneId;
-
-  /// How much has arrived (0–1) while downloading, else null.
-  final progress = ValueNotifier<double?>(null);
-
-  /// Where it was saved, so opening it again doesn't fetch it again.
-  String? path;
-
-  bool get isApk => mime == 'application/vnd.android.package-archive';
-
-  String get sizeLabel => size >= 1 << 20
-      ? '${(size / (1 << 20)).toStringAsFixed(1)} MB'
-      : size >= 1 << 10
-          ? '${(size / (1 << 10)).round()} KB'
-          : '$size B';
-
-  /// The title, then its size: what the alert and the card say under its name.
-  String get detail => [if (title?.isNotEmpty == true) title!, sizeLabel].join(' · ');
-}
-
-/// One machine's `/ws/session` link, its last snapshot, and the pane last viewed on it.
+/// One machine's state: for a machine the phone dials ([HerdrClientService.parentOf] null), its herdr-core
+/// link; for one that core reaches, the root's link carries it. Its terminals and layout make [raw].
 class _Conn {
-  WebSocketChannel? channel;
-
-  /// [channel]'s socket, once connected, whose ping interval follows the app on and off screen.
-  WebSocket? socket;
+  /// The SSH link to this machine's herdr-core, once connected; roots only.
+  HcLink? link;
+  bool dialing = false;
   Timer? retry;
 
   /// Failed attempts in a row, which space the retries out.
   int fails = 0;
   bool connected = false;
 
-  /// What herdr last sent, and what's shown of it: the same, less anything closed but still undoable.
+  /// What herdr-core and the layout make, and what's shown of it: the same, less anything closed but still undoable.
   SessionSnapshot? raw;
   SessionSnapshot? snapshot;
   String? selectedPaneId;
 
-  /// Why the bridge has no snapshot (herdr not running, or the machine unreachable from it), until it has.
+  /// Why the machine has nothing to show while its link is up (its line from the root is down).
   String? error;
 
   /// Why the last attempt to connect failed, in words the user can act on, until one succeeds.
   String? failure;
 
-  /// The highest `completion_seq` seen per pane: a snapshot fetched over HTTP can land after a newer
-  /// pushed one, and going back and forth must not alert twice.
+  /// The highest `turn` seen per terminal, so going back and forth never alerts twice.
   final completions = <String, int>{};
 
-  /// Per pane, its agent's last `state_change_seq` (0 when herdr sends none), its status and when this
-  /// app saw that change: herdr has no timestamps. Null for an agent already there in the first snapshot,
-  /// whose last change the app never saw, unless it is still the one saved before ([HerdrClientService._saved]).
-  final changes = <String, (int, String, DateTime?)>{};
+  /// Its live terminals by local address (`t7`), as herdr-core's records, and the Herdr app's layout
+  /// (its `herdr-app` document: spaces, tabs, panes), null without the app.
+  final terminals = <String, Map>{};
+  Map? layout;
+
+  /// Subscription usage by agent (`claude`, `opencode`…) as the herdr-usage mod keeps it in the Herdr app's
+  /// `shared.json` on this machine; roots only, the same account everywhere.
+  Map usage = const {};
 }
 
 /// Every saved machine keeps its own connection, so several can be connected at once; each can be
-/// disconnected on its own. The *active* machine ([machine]) is just the one on screen: [snapshot],
-/// [selectedPaneId] and the bridge requests below are its.
+/// disconnected on its own. A machine is an SSH target (`user@host[:port]`) the phone dials, or
+/// `<target>/m/<name>`, a machine that one's herdr-core has added (`hc machine ls`). The *active* machine
+/// ([machine]) is just the one on screen: [snapshot], [selectedPaneId] and the requests below are its.
 class HerdrClientService extends ChangeNotifier {
-  String _machine = '127.0.0.1:7788';
+  String _machine = '';
   double _fontSize = defaultFontSize;
   Color? _seed;
   Color? _systemSeed;
@@ -101,12 +66,14 @@ class HerdrClientService extends ChangeNotifier {
   List<String> _machines = [];
   Map<String, String> _names = {};
 
-  /// The SSH target of each machine a bridge reaches, as its herdr has it.
+  /// The SSH target of each machine another machine's herdr-core reaches, as that core has it.
   Map<String, String> _targets = {};
 
-  /// Each bridge's token (`herdr-bridge --print-token` there), sent with every request to it and to the
-  /// machines it reaches.
-  Map<String, String> _tokens = {};
+  /// Each dialed host's key fingerprint, trusted on first use (pref `ssh_host_keys`, `target=fingerprint`).
+  Map<String, String> _hostKeys = {};
+
+  /// This phone's SSH key (pref `ssh_key`), made on first use.
+  PhoneKey? _key;
 
   /// Machines the user disconnected; every other saved machine stays connected.
   Set<String> _off = {};
@@ -119,10 +86,6 @@ class HerdrClientService extends ChangeNotifier {
   /// Panes that never raise an alert, as `machine/pane_id`.
   Set<String> _muted = {};
 
-  /// The [_Conn.changes] that have a time, as `machine/pane_id`, kept across restarts (pref `agent_changes`).
-  /// A machine's first snapshot takes a time back only while the agent's seq (without seqs, its status) is
-  /// still the saved one: otherwise it changed while the app wasn't looking, or herdr reused the pane's id.
-  Map<String, (int, String, DateTime)> _saved = {};
   bool _keyBar = false;
   VolumeKeys _volumeKeys = VolumeKeys.fontSize;
   bool _pinchZoom = true;
@@ -131,9 +94,6 @@ class HerdrClientService extends ChangeNotifier {
   bool _started = false;
   bool _disposed = false;
   final _conns = <String, _Conn>{};
-
-  /// Files agents sent, oldest first, across machines ([deliveriesOf]).
-  final _deliveries = <Delivery>[];
 
   /// HerdrApp.kt: the ongoing status notification, alerts, and taps on them.
   static const _android = MethodChannel('herdr/android');
@@ -163,9 +123,6 @@ class HerdrClientService extends ChangeNotifier {
           openTerminalRequested = true;
         }
       }
-      // A delivery's alert's Install/Open button.
-      final delivery = _deliveries.where((d) => d.id == call.arguments['delivery']).firstOrNull;
-      if (delivery != null) openDelivery(delivery);
     });
     _native('ready');
     _loadSystemSeed();
@@ -184,11 +141,6 @@ class HerdrClientService extends ChangeNotifier {
       },
       onPause: _stopDiscoveryTimer,
       onHide: _stopDiscoveryTimer,
-      onStateChange: (_) {
-        for (final c in _conns.values) {
-          c.socket?.pingInterval = _ping;
-        }
-      },
     );
   }
 
@@ -340,25 +292,33 @@ class HerdrClientService extends ChangeNotifier {
 
   bool isConnected(String m) => _conns[m]?.connected ?? false;
 
-  /// Why [m] can't be shown: why its connection failed (e.g. nothing answers at its address), or, once
-  /// connected, why its bridge has no snapshot (e.g. "ssh: Could not resolve hostname …"); null once it can.
+  /// Why [m] can't be shown: why its connection failed (e.g. the key isn't authorized there), or, once
+  /// connected, why its line from the machine that reaches it is down; null once it can.
   String? errorOf(String m) => isConnected(m) ? _conns[m]?.error : _conns[m]?.failure;
 
-  /// The token sent to [m]'s bridge, if one was given.
-  String? tokenOf(String m) => _tokens[parentOf(m) ?? m];
+  /// The line for a machine's `~/.ssh/authorized_keys` that lets this phone in.
+  String get publicKey => (_key ??= _loadKey()).publicLine;
 
-  /// The headers every request to [m] carries: its bridge's token.
-  Map<String, String> headersOf(String m) =>
-      {if (tokenOf(m) case final token?) HttpHeaders.authorizationHeader: 'Bearer $token'};
+  PhoneKey _loadKey() {
+    final prefs = _prefs;
+    var pem = prefs?.getString('ssh_key');
+    if (pem == null) {
+      pem = PhoneKey.generatePem();
+      prefs?.setString('ssh_key', pem);
+    }
+    return PhoneKey.fromPem(pem);
+  }
 
-  /// The bridge that reaches [m] over SSH (`host:port/m/<id>`, from its `/api/machines`), or null when
-  /// [m] runs its own.
+  SharedPreferences? _prefs;
+
+  /// The machine whose herdr-core reaches [m] (`<target>/m/<name>`, from its `hc machine ls`), or null when
+  /// the phone dials [m] itself.
   static String? parentOf(String m) {
     final i = m.indexOf('/m/');
     return i > 0 ? m.substring(0, i) : null;
   }
 
-  /// Whether [m] is a valid bridge (`host:port`) or SSH machine (`host:port/m/<id>`).
+  /// Whether [m] is a valid SSH target (`user@host[:port]`) or a machine one reaches (`<target>/m/<name>`).
   static bool isValidMachine(String m) {
     final parts = m.split('/m/');
     if (parts.length == 1) return !m.contains('/');
@@ -383,7 +343,13 @@ class HerdrClientService extends ChangeNotifier {
   }
 
   @visibleForTesting
-  void handleMessageForTesting(String m, dynamic message) => _handleMessage(m, message);
+  void handleNotificationForTesting(String root, Map notification) => _onNotification(root, notification);
+
+  @visibleForTesting
+  void resetForTesting(String root, List terminals, [Map? layout]) {
+    _conns.putIfAbsent(root, _Conn.new).layout = layout;
+    _reset(root, terminals);
+  }
 
   /// The name given to [machine] when it was added, or its address.
   String nameOf(String machine) => _names[machine] ?? machine;
@@ -396,7 +362,7 @@ class HerdrClientService extends ChangeNotifier {
     final counts = <String, int>{};
     for (final a in snapshotOf(m)?.agents ?? <AgentModel>[]) {
       // `done` lasts only until the pane is viewed: it is idle all the same.
-      final status = a.displayStatus == 'done' ? 'idle' : a.displayStatus;
+      final status = a.status == 'done' ? 'idle' : a.status;
       counts[status] = (counts[status] ?? 0) + 1;
     }
     final text = [
@@ -452,8 +418,12 @@ class HerdrClientService extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// When the agent in [paneId] on [machine] (or the active machine) last changed status, if this app saw it.
-  DateTime? changedAt(String paneId, [String? machine]) => _conns[machine ?? this.machine]?.changes[paneId]?.$3;
+  /// When the agent in [paneId] on [machine] (or the active machine) last changed status (herdr-core's
+  /// `status_ms`, or when this app heard of a change since).
+  DateTime? changedAt(String paneId, [String? machine]) => switch (snapshotOf(machine ?? this.machine)?.agentOf(paneId)?.stateChangeSeq) {
+        final int ms when ms > 0 => DateTime.fromMillisecondsSinceEpoch(ms),
+        _ => null,
+      };
 
   /// Panes that never raise an alert, as `machine/pane_id`.
   Set<String> get muted => Set.unmodifiable(_muted);
@@ -537,6 +507,7 @@ class HerdrClientService extends ChangeNotifier {
   /// Reads the saved settings, without writing them back. The first launch turns alerts on and asks
   /// for the permissions they need. The machine on screen last time stays off if it was disconnected.
   void load(SharedPreferences p) {
+    _prefs = p;
     _fontSize = p.getDouble('terminal_font_size') ?? _fontSize;
     final seed = p.getInt('theme_seed');
     if (seed != null) _seed = Color(seed);
@@ -547,25 +518,18 @@ class HerdrClientService extends ChangeNotifier {
     _hideMessageTerminal = p.getBool('hide_message_terminal') ?? false;
     _enterBehavior = EnterBehavior.values.asNameMap()[p.getString('enter_behavior')] ?? EnterBehavior.newline;
     _muted = (p.getStringList('muted_panes') ?? []).toSet();
-    _saved = {
-      for (final s in p.getStringList('agent_changes') ?? [])
-        if (s.split('\t') case [final k, final seq, final status, final ms])
-          k: (int.parse(seq), status, DateTime.fromMillisecondsSinceEpoch(int.parse(ms)))
-    };
     final alerts = p.getBool('background_alerts');
     alerts == null ? setAlerts(true) : _alerts = alerts;
     _alertBlocked = p.getBool('alert_blocked') ?? true;
     _alertFinished = p.getBool('alert_finished') ?? true;
     _alertSound = p.getBool('alert_sound') ?? true;
     _alertDesktop = p.getBool('alert_desktop') ?? true;
-    setMachines(p.getStringList('herdr_machines') ?? [], p.getStringList('herdr_machine_names') ?? [],
-        p.getStringList('herdr_machines_off') ?? []);
-    _tokens = _pairs(p.getStringList('herdr_machine_tokens') ?? []);
-    final host = p.getString('herdr_host');
-    if (host != null) {
-      _machine = '$host:${p.getInt('herdr_port') ?? 7788}${p.getString('herdr_path') ?? ''}';
-      if (!_machines.contains(machine)) _machines = [..._machines, machine];
-    }
+    // Machines are SSH targets now; the bridge's `herdr_machines` (host:port) are left behind.
+    setMachines(p.getStringList('hc_machines') ?? [], p.getStringList('hc_machine_names') ?? [],
+        p.getStringList('hc_machines_off') ?? []);
+    _hostKeys = _pairs(p.getStringList('ssh_host_keys') ?? []);
+    final active = p.getString('hc_active');
+    _machine = active != null && _machines.contains(active) ? active : _machines.firstOrNull ?? '';
   }
 
   /// Opens the connections, once the saved state is loaded.
@@ -590,7 +554,6 @@ class HerdrClientService extends ChangeNotifier {
     final agents = [for (final m in on.where(isConnected)) ...?snapshotOf(m)?.agents];
     final blocked = agents.where((a) => a.status == 'blocked').length;
     final working = agents.where((a) => a.status == 'working').length;
-    final monitoring = agents.where((a) => a.displayStatus == 'monitoring').length;
     _native('status', {
       'title': !on.any(isConnected)
           ? 'Reconnecting…'
@@ -598,119 +561,108 @@ class HerdrClientService extends ChangeNotifier {
               ? '$blocked ${blocked == 1 ? 'agent needs' : 'agents need'} you'
               : working > 0
                   ? '$working ${working == 1 ? 'agent' : 'agents'} working'
-                  : monitoring > 0
-                      ? '$monitoring ${monitoring == 1 ? 'agent' : 'agents'} monitoring'
-                      : agents.isEmpty
-                          ? 'No agents running'
-                          : 'All agents idle',
+                  : agents.isEmpty
+                      ? 'No agents running'
+                      : 'All agents idle',
       'text': [
         for (final m in on) '${nameOf(m)}: ${isConnected(m) ? summaryOf(m) : errorOf(m) ?? 'reconnecting…'}'
       ].join('\n'),
     });
   }
 
-  /// Opens a connection for every saved machine that isn't off (and whose bridge isn't off) and doesn't
-  /// have one (or a retry pending).
+  /// Dials every saved machine that isn't off and has no link (nor an attempt or a retry pending). A machine
+  /// another one's core reaches comes with that one's link.
   void _sync() {
     if (!_started || _disposed) return;
     for (final m in _machines) {
-      final parent = parentOf(m);
-      if (parent != null && _off.contains(parent)) continue;
       final c = _conns.putIfAbsent(m, _Conn.new);
-      if (!_off.contains(m) && c.channel == null && c.retry == null) _open(m, c);
+      if (parentOf(m) == null && !_off.contains(m) && c.link == null && !c.dialing && c.retry == null) _open(m, c);
     }
   }
 
-  /// Pings notice a connection that died silently (e.g. the phone changed networks), so it reconnects. Each
-  /// wakes the phone's radio, so off screen, where only alerts need the connection, they're rarer.
-  static Duration get _ping => WidgetsBinding.instance.lifecycleState == AppLifecycleState.resumed
-      ? const Duration(seconds: 20)
-      : const Duration(seconds: 90);
-
-  void _open(String m, _Conn c) {
-    try {
-      // Without a timeout, an attempt made while the network is down can hang and never retry.
-      final channel = IOWebSocketChannel(WebSocket.connect('ws://$m/ws/session', headers: headersOf(m))
-          .then((s) => c.socket = s..pingInterval = _ping)
-          .timeout(const Duration(seconds: 5)));
-      c.channel = channel;
-      // Connection failures also reach the stream's onError, which retries.
-      channel.ready.ignore();
-      // A closed or replaced socket's late frames are ignored.
-      channel.stream.listen(
-        (message) {
-          if (c.channel != channel) return;
-          if (!c.connected) {
-            c.connected = true;
-            c.failure = null;
-            c.fails = 0;
-            if (parentOf(m) == null) _discover(m);
-            notifyListeners();
-          }
-          _handleMessage(m, message);
-        },
-        onError: (e) {
-          if (!c.connected && c.channel == channel) _diagnose(m, c, e);
-          _dropped(c, channel);
-        },
-        onDone: () => _dropped(c, channel),
-      );
-    } catch (_) {
-      _dropped(c, null);
-    }
+  /// Trusts a host's key the first time, and only that key afterwards.
+  bool _trust(String target, String fingerprint) {
+    final known = _hostKeys[target];
+    if (known != null) return known == fingerprint;
+    _hostKeys = {..._hostKeys, target: fingerprint};
+    _prefs?.setStringList('ssh_host_keys', [for (final e in _hostKeys.entries) '${e.key}=${e.value}']);
+    return true;
   }
 
-  /// After a failed connection, finds out why, so the app can say so instead of retrying quietly: a
-  /// refused upgrade doesn't say why, so it asks again over HTTP, whose answer does (the token is checked
-  /// first, then a reached machine's id), and a bridge that can't be reached is told apart by the error.
-  Future<void> _diagnose(String m, _Conn c, Object wsError) async {
-    final bridge = parentOf(m) ?? m;
-    String failure;
-    try {
-      final res = await http
-          .get(Uri.parse('http://$m/api/auth'), headers: headersOf(m))
-          .timeout(const Duration(seconds: 5));
-      failure = switch (res.statusCode) {
-        401 => 'Wrong or missing token: run herdr-bridge --print-token on ${nameOf(bridge)} and edit the machine',
-        // The bridge refuses a dotted name other than *.ts.net (DNS rebinding).
-        403 => '${res.body.trim()}: add ${nameOf(bridge)} by its Tailscale IP or name',
-        200 => 'The bridge answered but refused the session: ${_parseError(wsError)}',
-        _ => 'The bridge answered ${res.statusCode}: ${res.body.trim()}',
-      };
-    } catch (e) {
-      failure = _networkError(bridge, e);
-    }
-    debugPrint('Could not connect to $m: $failure ($wsError)');
-    if (c.failure == failure) return;
-    c.failure = failure;
+  /// Forgets [m]'s host key, so the next connection trusts the one it shows (after the machine was reinstalled).
+  void forgetHostKey(String m) {
+    _hostKeys = {..._hostKeys}..remove(m);
+    _prefs?.setStringList('ssh_host_keys', [for (final e in _hostKeys.entries) '${e.key}=${e.value}']);
+    _conns[m]?.failure = null;
+    _close(m);
     notifyListeners();
   }
 
-  /// [e], a failed request to [bridge], in words the user can act on.
-  static String _networkError(String bridge, Object e) {
-    final host = bridge.split(':').first;
-    if (e is TimeoutException) {
-      return 'No answer from $host: is it on, and are this device and it both on Tailscale?';
+  Future<void> _open(String m, _Conn c) async {
+    c.dialing = true;
+    HcLink? link;
+    try {
+      // Without a timeout, an attempt made while the network is down can hang and never retry.
+      link = await HcLink.open(m, _key ??= _loadKey(), (fp) => _trust(m, fp))
+          .timeout(const Duration(seconds: 30));
+      if (!c.dialing) return link.dispose(); // closed meanwhile
+      c.link = link;
+      final first = await link.subscribe((n) => _onNotification(m, n));
+      c
+        ..dialing = false
+        ..connected = true
+        ..failure = null
+        ..fails = 0;
+      _reset(m, first['terminals']);
+      final dropped = link;
+      link.done.then((why) => _dropped(m, c, dropped, why));
+      await _discover(m);
+      await _fetchLayouts(m);
+      await _fetchUsage(m);
+    } catch (e) {
+      link?.dispose();
+      if (!c.dialing && c.link == null) return;
+      c.failure = _words(m, e);
+      debugPrint('Could not connect to $m: $e');
+      _dropped(m, c, link, null);
     }
+  }
+
+  /// [e], a failed connection to [m], in words the user can act on.
+  String _words(String m, Object e) {
+    final host = m.substring(m.lastIndexOf('@') + 1).split(':').first;
+    final text = '$e';
+    final low = text.toLowerCase();
+    if (e is TimeoutException) return 'No answer from $host: is it on, and are this device and it both on Tailscale?';
+    if (low.contains('hostkey') || low.contains('host key')) {
+      return "$host's host key changed. If it was reinstalled, forget its key on its page and connect again";
+    }
+    if (low.contains('auth')) return "$host didn't accept this phone's key: add it to ~/.ssh/authorized_keys there (Settings shows it)";
+    if (low.contains('not installed')) return 'herdr-core is not installed on $host';
     if (e is SocketException) {
       final os = '${e.message} ${e.osError?.message}'.toLowerCase();
-      if (os.contains('refused')) return 'Nothing answers at $bridge: is herdr-bridge running there, on that port?';
+      if (os.contains('refused')) return 'Nothing answers on $host\'s SSH port: is SSH on there?';
       if (os.contains('lookup') || os.contains('resol') || os.contains('no address')) {
         return "Can't find $host: check the address, or that Tailscale is on";
       }
-      if (os.contains('unreachable')) return 'No route to $host: check this device\'s network and Tailscale';
-      if (os.contains('timed out')) return 'No answer from $host: is it on, and are this device and it both on Tailscale?';
-      return "Can't reach $bridge: ${e.osError?.message ?? e.message}";
+      if (os.contains('unreachable')) return "No route to $host: check this device's network and Tailscale";
+      return "Can't reach $host: ${e.osError?.message ?? e.message}";
     }
-    return "Can't reach $bridge: $e";
+    return "Can't reach $host: $text";
   }
 
   /// Retries in 3 s, doubling with each failure in a row up to about 3 min, so a machine that's asleep or
-  /// off the network doesn't keep the phone awake; unless [c] was closed or reopened meanwhile.
-  void _dropped(_Conn c, WebSocketChannel? channel) {
-    if (c.channel != channel || _disposed) return;
-    c.channel = null;
-    c.connected = false;
+  /// off the network doesn't keep the phone awake; unless [m] was closed or reopened meanwhile.
+  void _dropped(String m, _Conn c, HcLink? link, String? why) {
+    if (c.link != link || _disposed) return;
+    if (why != null && c.connected) c.failure = _words(m, why);
+    c
+      ..link = null
+      ..dialing = false
+      ..connected = false;
+    for (final x in _machines.where((x) => parentOf(x) == m)) {
+      _conns[x]?.connected = false;
+    }
     c.retry = Timer(Duration(seconds: 3 << c.fails.clamp(0, 6)), () {
       c.retry = null;
       c.fails++;
@@ -726,13 +678,213 @@ class HerdrClientService extends ChangeNotifier {
     c.retry?.cancel();
     c.retry = null;
     c.fails = 0;
-    final channel = c.channel;
-    c.channel = null;
-    channel?.sink.close();
+    c.dialing = false;
+    final link = c.link;
+    c.link = null;
+    link?.dispose();
     c.connected = false;
   }
 
-  /// Reports failed bridge requests; set by the app, which shows them as a SnackBar on any screen.
+  /// The link that reaches [m]'s terminals now, and [pane]'s address through it, for a terminal stream.
+  HcLink? linkOf(String m) => _route(m).$1;
+  String addressOf(String m, String pane) => '${_route(m).$2}$pane';
+
+  /// [m]'s root link and the address prefix of its terminals as seen through it (`rohan/` for a machine
+  /// that root's core added).
+  (HcLink?, String) _route(String m) {
+    final root = parentOf(m);
+    return root == null ? (_conns[m]?.link, '') : (_conns[root]?.link, '${m.substring(m.lastIndexOf('/') + 1)}/');
+  }
+
+  /// The machine (as in [machines]) and local address of [address], seen from [root]'s core.
+  (String, String) _local(String root, String address) {
+    final slash = address.indexOf('/');
+    return slash < 0 ? (root, address) : ('$root/m/${address.substring(0, slash)}', address.substring(slash + 1));
+  }
+
+  /// Replaces every terminal of [root] and the machines its core reaches.
+  void _reset(String root, List terminals) {
+    for (final m in [root, ..._machines.where((x) => parentOf(x) == root)]) {
+      _conns.putIfAbsent(m, _Conn.new).terminals.clear();
+    }
+    for (final Map t in terminals) {
+      final (m, local) = _local(root, t['address']);
+      _conns.putIfAbsent(m, _Conn.new).terminals[local] = t;
+    }
+    for (final m in [root, ..._machines.where((x) => parentOf(x) == root)]) {
+      _rebuild(m);
+    }
+  }
+
+  /// One notification of [root]'s event stream, applied as herdr-core's `schema/README.md` says.
+  void _onNotification(String root, Map n) {
+    final p = n['params'] as Map? ?? const {};
+    switch (n['method']) {
+      case 'missed':
+        _reset(root, p['terminals'] ?? const []);
+        _fetchLayouts(root);
+      case 'event':
+        final data = p['data'];
+        if (p['type'] == 'doc') {
+          if (data?['name'] == 'herdr-app') _fetchLayout(p['machine'] == null ? root : '$root/m/${p['machine']}');
+          return;
+        }
+        final (m, local) = _local(root, p['terminal'] ?? '');
+        final c = _conns.putIfAbsent(m, _Conn.new);
+        final t = c.terminals[local];
+        switch (p['type']) {
+          case 'created' || 'restarted':
+            c.terminals[local] = Map.of(data);
+          case 'removed' || 'finished':
+            c.terminals.remove(local);
+          case 'status' when t != null:
+            t['status'] = data['status'];
+            t['reported'] = data['reported'];
+            t['status_ms'] = DateTime.now().millisecondsSinceEpoch;
+          case 'turn' when t != null:
+            t['turn'] = data['turn'];
+          case 'title' when t != null:
+            t['title'] = data['title'];
+          case 'labels' when t != null || data['record'] != null:
+            if (data['record'] != null) c.terminals[local] = Map.of(data['record']);
+            c.terminals[local]!['labels'] = data['labels'];
+          case 'foreground' when t != null:
+            t['foreground'] = data;
+          default:
+            return;
+        }
+        _rebuild(m);
+    }
+  }
+
+  /// Reads the Herdr app's layout of [root] and of the machines its core reaches.
+  Future<void> _fetchLayouts(String root) async {
+    await Future.wait([for (final m in [root, ..._machines.where((x) => parentOf(x) == root)]) _fetchLayout(m)]);
+  }
+
+  Future<void> _fetchLayout(String m) async {
+    final (link, prefix) = _route(m);
+    if (link == null) return;
+    try {
+      final res = await link.call('doc.get', {'name': 'herdr-app', if (prefix.isNotEmpty) 'on': prefix.substring(0, prefix.length - 1)});
+      _conns.putIfAbsent(m, _Conn.new)
+        ..layout = res['value'] as Map?
+        ..error = null;
+    } on HcError catch (e) {
+      _conns[m]?.error = e.kind == 'unavailable' || e.kind == 'machine_unknown' ? e.message : null;
+    }
+    _rebuild(m);
+  }
+
+  /// The snapshot the screens show, made from [m]'s terminals and the Herdr app's layout: each space a
+  /// workspace, each tab a tab, each terminal in a tab's panes a pane (by its address), and each terminal
+  /// whose program reports its status an agent. Agents in no tab (sub-agents, `hc run`) are panes of none.
+  void _rebuild(String m) {
+    final c = _conns[m];
+    if (c == null) return;
+    final live = {for (final e in c.terminals.entries) if (e.value['state'] != 'finished') e.key: e.value};
+    final workspaces = <WorkspaceModel>[], tabs = <TabModel>[], panes = <PaneModel>[], agents = <AgentModel>[];
+
+    void add(String address, String space, String tab) {
+      final t = live[address]!;
+      final fg = t['foreground'] as Map?;
+      panes.add(PaneModel.fromJson({
+        'pane_id': address,
+        'workspace_id': space,
+        'tab_id': tab,
+        'title': t['title'] ?? '',
+        'cwd': fg?['cwd'] ?? t['cwd'] ?? '',
+        'agent_status': _statusOf(t),
+      }));
+      final status = t['status'];
+      if (status is Map) {
+        final app = '${status['app'] ?? fg?['name'] ?? ''}';
+        final name = app.split('-').first;
+        agents.add(AgentModel.fromJson({
+          'agent': name,
+          'usage': _conns[parentOf(m) ?? m]?.usage[name]?['usage'],
+          'pane_id': address,
+          'status': _statusOf(t),
+          'completion_seq': t['turn'],
+          'state_change_seq': t['status_ms'],
+        }));
+      }
+    }
+
+    String worst(Iterable<PaneModel> ps) =>
+        urgency.firstWhere((s) => ps.any((p) => p.agentStatus == s), orElse: () => 'unknown');
+
+    final placed = <String>{};
+    for (final (i, Map space) in ((c.layout?['spaces'] as List?) ?? const []).indexed) {
+      final from = panes.length;
+      for (final (j, Map tab) in ((space['tabs'] as List?) ?? const []).indexed) {
+        final start = panes.length;
+        for (final address in _terminalsIn(tab['root'])) {
+          if (!live.containsKey(address) || !placed.add(address)) continue;
+          add(address, space['id'], tab['id']);
+        }
+        tabs.add(TabModel(
+            id: tab['id'],
+            workspaceId: space['id'],
+            number: j + 1,
+            label: tab['name'] ?? '',
+            agentStatus: worst(panes.sublist(start))));
+      }
+      final own = panes.sublist(from);
+      final first = own.isEmpty ? null : live[own.first.id];
+      workspaces.add(WorkspaceModel(
+        id: space['id'],
+        number: i + 1,
+        label: (space['name'] as String?)?.isNotEmpty == true
+            ? space['name']
+            : _placeName('${(first?['foreground'] as Map?)?['cwd'] ?? first?['cwd'] ?? space['folder'] ?? ''}'),
+        agentStatus: worst(own),
+      ));
+    }
+    for (final address in live.keys) {
+      if (!placed.contains(address) && live[address]!['status'] is Map) add(address, '', '');
+    }
+    _apply(m, SessionSnapshot(workspaces: workspaces, tabs: tabs, panes: panes, agents: agents));
+  }
+
+  /// Rereads [root]'s usage from the herdr-usage mod, if it has one there.
+  Future<void> _fetchUsage(String root) async {
+    final link = _conns[root]?.link;
+    if (link == null) return;
+    try {
+      final res = await link.call('file.read', {'path': '.config/herdr-app/shared.json'}) as Map;
+      final usage = (jsonDecode(res['text']) as Map)['herdr-usage.v1'];
+      if (usage is! Map) return;
+      _conns[root]!.usage = usage;
+      for (final m in [root, ..._machines.where((x) => parentOf(x) == root)]) {
+        _rebuild(m);
+      }
+    } catch (_) {}
+  }
+
+  /// A terminal's status in the app's words: herdr-core's own, with `error` as needing you.
+  static String _statusOf(Map t) {
+    final state = (t['status'] as Map?)?['state'];
+    return state == null ? 'unknown' : (state == 'error' ? 'blocked' : '$state');
+  }
+
+  /// The terminals of a layout node's blocks, in order.
+  static Iterable<String> _terminalsIn(Object? node) sync* {
+    if (node is! Map) return;
+    if (node['content']?['terminal'] case final String t) yield t;
+    for (final child in (node['children'] as List?) ?? const []) {
+      yield* _terminalsIn(child);
+    }
+  }
+
+  /// What the Herdr app calls a space with no name: after where its first terminal is, `~` at home.
+  static String _placeName(String path) {
+    if (path.isEmpty) return '';
+    if (RegExp(r'^(/home/[^/]+|/Users/[^/]+|/root)/?$').hasMatch(path)) return '~';
+    return path.split('/').where((s) => s.isNotEmpty).lastOrNull ?? '/';
+  }
+
+  /// Reports failed requests; set by the app, which shows them as a SnackBar on any screen.
   void Function(String message)? onError;
 
   static const double defaultFontSize = 14;
@@ -763,21 +915,15 @@ class HerdrClientService extends ChangeNotifier {
 
   void _setActive(String m) {
     _machine = m;
-    final slash = m.contains('/') ? m.indexOf('/') : m.length;
-    final colon = m.lastIndexOf(':', slash);
-    SharedPreferences.getInstance().then((p) => p
-      ..setString('herdr_host', m.substring(0, colon))
-      ..setInt('herdr_port', int.parse(m.substring(colon + 1, slash)))
-      ..setString('herdr_path', m.substring(slash)));
+    SharedPreferences.getInstance().then((p) => p.setString('hc_active', m));
   }
 
-  /// Shows [m] (`host:port`, or a machine a bridge reaches), remembering it in the machine list and,
-  /// with [connect], connecting it if it was off.
-  void configure(String m, {String? name, String? token, bool connect = true}) {
+  /// Shows [m] (an SSH target, or a machine another one's core reaches), remembering it in the machine list
+  /// and, with [connect], connecting it if it was off.
+  void configure(String m, {String? name, bool connect = true}) {
     _setActive(m);
     if (!_machines.contains(machine)) _machines = [..._machines, machine];
     if (name != null && name.isNotEmpty) _names = {..._names, machine: name};
-    if (token != null && token.isNotEmpty) _tokens = {..._tokens, machine: token};
     if (connect) _off = {..._off}..remove(machine);
     _saveMachines();
     notifyListeners();
@@ -789,6 +935,7 @@ class HerdrClientService extends ChangeNotifier {
     _machines = machines.where(isValidMachine).toList();
     _names = _pairs(names)..removeWhere((k, _) => !isValidMachine(k));
     _off = off.where(isValidMachine).toSet();
+    if (!_machines.contains(_machine)) _machine = _machines.firstOrNull ?? '';
     notifyListeners();
   }
 
@@ -798,15 +945,12 @@ class HerdrClientService extends ChangeNotifier {
           if (n.contains('=')) n.substring(0, n.indexOf('=')): n.substring(n.indexOf('=') + 1)
       };
 
-  /// Resolves a workspace ID to the ID of its main repository workspace if it's a linked worktree.
   void removeMachine(String m) {
     _forget([m, ..._machines.where((x) => parentOf(x) == m)]);
     if (_machines.contains(machine)) return notifyListeners();
     if (_machines.isNotEmpty) return switchMachine(_machines.first);
-    SharedPreferences.getInstance().then((p) => p
-      ..remove('herdr_host')
-      ..remove('herdr_port')
-      ..remove('herdr_path'));
+    _machine = '';
+    SharedPreferences.getInstance().then((p) => p.remove('hc_active'));
     notifyListeners();
   }
 
@@ -818,109 +962,106 @@ class HerdrClientService extends ChangeNotifier {
     }
     _machines = _machines.where((x) => !gone.contains(x)).toList();
     _names = {..._names}..removeWhere((k, _) => gone.contains(k));
-    _tokens = {..._tokens}..removeWhere((k, _) => gone.contains(k));
     _off = _off.difference(gone.toSet());
     _saveMachines();
   }
 
-  /// Saves [target] (`user@host`, or a host from the SSH config) in [bridge]'s herdr, which gets herdr
-  /// ready there; the bridge then reaches it like the machines saved there already. False on failure,
-  /// reported to [onError].
-  Future<bool> addSshMachine(String bridge, String target, String name) async {
-    final res = await _request('add $target', 'POST', '/api/machines',
-        body: {'target': target, if (name.isNotEmpty) 'label': name}, on: bridge);
-    if (res == null) return false;
-    await _discover(bridge);
-    return true;
+  /// Adds [target] (`user@host`, or a host from the SSH config there) to [root]'s herdr-core, which then
+  /// reaches it like its other machines. False on failure, reported to [onError].
+  Future<bool> addSshMachine(String root, String target, String name) async {
+    final ok = await _core('add $target', root, 'machine.add', {'target': target, if (name.isNotEmpty) 'name': name});
+    await _discover(root);
+    return ok != null;
   }
 
-  /// Renames [m], a machine a bridge reaches, in that bridge's herdr and, given another [target], moves it
-  /// there: herdr adds it anew, so it comes back as a new machine. False on failure, reported to [onError].
+  /// Renames [m], a machine another one's core reaches, there, and given another [target], adds it anew
+  /// under its name, since herdr-core can't change a target. False on failure, reported to [onError].
   Future<bool> editSshMachine(String m, String target, String name) async {
-    final bridge = parentOf(m)!;
-    final res = await _request('change ${nameOf(m)}', 'POST', '/api/machines/${m.substring(m.lastIndexOf('/') + 1)}',
-        body: {'target': target, 'label': name}, on: bridge);
-    if (res == null) return false;
-    if (name.isNotEmpty && _machines.contains(m)) _names = {..._names, m: name};
-    await _discover(bridge);
+    final root = parentOf(m)!;
+    final old = m.substring(m.lastIndexOf('/') + 1);
+    final newName = name.isEmpty ? old : name;
+    if (target != _targets[m]) {
+      if (await _core('change ${nameOf(m)}', root, 'machine.rm', {'machine': old}) == null) return false;
+      final ok = await _core('change ${nameOf(m)}', root, 'machine.add', {'target': target, 'name': newName});
+      await _discover(root);
+      return ok != null;
+    }
+    if (newName != old && await _core('rename ${nameOf(m)}', root, 'machine.rename', {'machine': old, 'new_name': newName}) == null) {
+      return false;
+    }
+    await _discover(root);
     return true;
   }
 
-  /// Removes [m], a machine a bridge reaches, from that bridge's herdr, which is where it comes from.
+  /// Removes [m], a machine another one's core reaches, from that core, which is where it comes from.
   Future<void> removeSshMachine(String m) async {
-    final bridge = parentOf(m)!;
-    await _request('remove ${nameOf(m)}', 'DELETE', '/api/machines/${m.substring(m.lastIndexOf('/') + 1)}', on: bridge);
-    await _discover(bridge);
+    final root = parentOf(m)!;
+    await _core('remove ${nameOf(m)}', root, 'machine.rm', {'machine': m.substring(m.lastIndexOf('/') + 1)});
+    await _discover(root);
   }
 
-  /// Renames [m] and/or moves it to [to] (`host:port`), keeping its place in the list and its on/off
-  /// state. The machines it reached are found again at the new address.
-  void updateMachine(String m, {required String to, required String name, String? token}) {
+  /// One herdr-core call on [m]'s link; failures go to [onError] as "Could not [what]", and give null.
+  Future<dynamic> _core(String what, String m, String method, Map<String, dynamic> params) async {
+    final link = _route(m).$1;
+    try {
+      if (link == null) throw HcError('unavailable', '${nameOf(parentOf(m) ?? m)} is not connected');
+      return await link.call(method, params) ?? true;
+    } catch (e) {
+      debugPrint('$method on $m failed: $e');
+      onError?.call('Could not $what: $e');
+      return null;
+    }
+  }
+
+  /// Renames [m] and/or moves it to [to] (another SSH target), keeping its place in the list and its on/off
+  /// state. The machines its core reaches are found again at the new address.
+  void updateMachine(String m, {required String to, required String name}) {
     _machines = [
       for (final x in _machines)
         if (x == m) to else if (x != to) x
     ];
     _names = {..._names}..remove(m);
     if (name.isNotEmpty) _names[to] = name;
-    final oldToken = _tokens[m];
-    final newToken = token ?? oldToken;
     if (to != m) {
       final (active, off) = (machine, _off.contains(m));
       _forget([m, ..._machines.where((x) => parentOf(x) == m)]);
       if (off) _off = {..._off, to};
       if (active == m || parentOf(active) == m) _setActive(to);
     }
-    _tokens = {..._tokens}..remove(to);
-    if (newToken != null && newToken.isNotEmpty) _tokens[to] = newToken;
-    // A new token reconnects it, and the machines it reaches, with it.
-    if (to == m && newToken != oldToken) {
-      for (final x in [m, ..._machines.where((x) => parentOf(x) == m)]) {
-        _conns[x]?.failure = null;
-        _close(x);
-      }
-    }
     _saveMachines();
     notifyListeners();
   }
 
-  /// Adds the machines [m]'s bridge reaches over SSH (those saved in its herdr) right after it, named as
-  /// there, and forgets the ones it no longer does. A bridge without `/api/machines` reaches none.
+  /// Puts the machines [m]'s core reaches (`hc machine ls` there) right after it, named as there, and
+  /// forgets the ones it no longer does.
   Future<void> _discover(String m) async {
-    if (parentOf(m) != null) return;
-    final List found;
+    final link = _conns[m]?.link;
+    if (parentOf(m) != null || link == null) return;
     try {
-      final res = await http.get(Uri.parse('http://$m/api/machines'), headers: headersOf(m));
-      if (res.statusCode != 200) return;
-      found = jsonDecode(res.body)['machines'];
-    } catch (_) {
-      return;
-    }
-    _applyDiscovered(m, found);
+      final res = await link.call('machine.list') as Map;
+      _applyDiscovered(m, res['machines'] as List);
+    } catch (_) {}
   }
 
   void _applyDiscovered(String m, List found) {
     if (parentOf(m) != null || !_machines.contains(m)) return;
-    final children = {
-      for (final f in found)
-        '$m/m/${f['id']}': (f['label'] as String?)?.isNotEmpty == true
-            ? f['label'] as String
-            : (f['target'] as String?) ?? ''
-    };
-    final newTargets = {
-      for (final f in found)
-        '$m/m/${f['id']}': (f['target'] as String?) ?? ''
-    };
+    final children = {for (final f in found) '$m/m/${f['name']}': '${f['name']}'};
+    final newTargets = {for (final f in found) '$m/m/${f['name']}': '${f['target'] ?? ''}'};
+    for (final f in found) {
+      final c = _conns.putIfAbsent('$m/m/${f['name']}', _Conn.new);
+      final up = f['state'] == 'connected' && isConnected(m);
+      if (c.connected != up) {
+        c.connected = up;
+        if (up) _fetchLayout('$m/m/${f['name']}');
+      }
+      c.failure = up ? null : (f['why'] as String?) ?? '${f['name']} is ${'${f['state']}'.replaceAll('_', ' ')}';
+    }
     final removed = _machines.where((x) => parentOf(x) == m && !children.containsKey(x)).toList();
     final kept = _machines.where((x) => parentOf(x) == m && children.containsKey(x)).toList();
     final added = children.keys.where((x) => !_machines.contains(x)).toList();
-
     final namesChanged = children.entries.any((e) => _names[e.key] != e.value);
     final targetsChanged = newTargets.entries.any((e) => _targets[e.key] != e.value);
-
-    if (removed.isEmpty && added.isEmpty && !namesChanged && !targetsChanged) {
-      return;
-    }
-
+    if (removed.isEmpty && added.isEmpty && !namesChanged && !targetsChanged) return notifyListeners();
     if (removed.isNotEmpty) {
       _forget(removed);
       _targets = {..._targets}..removeWhere((k, _) => removed.contains(k));
@@ -933,19 +1074,22 @@ class HerdrClientService extends ChangeNotifier {
     }
     _names = {..._names, for (final e in children.entries) e.key: e.value};
     _saveMachines();
-    _sync();
+    for (final x in added) {
+      _rebuild(x);
+    }
     notifyListeners();
   }
 
-  /// Discovers remote machines for every connected bridge.
+  /// Rereads the machines every connected core reaches.
   Future<void> discoverMachines() async {
-    final bridges = _machines.where((x) => parentOf(x) == null && isConnected(x)).toList();
-    for (final b in bridges) {
-      await _discover(b);
+    final roots = _machines.where((x) => parentOf(x) == null && isConnected(x)).toList();
+    for (final r in roots) {
+      await _discover(r);
     }
   }
 
   Timer? _discoveryTimer;
+  int _ticks = 0;
 
   void _startDiscoveryTimer() {
     if (!_started || _disposed) return;
@@ -957,6 +1101,12 @@ class HerdrClientService extends ChangeNotifier {
         return;
       }
       discoverMachines();
+      // Usage moves slowly, and the mod itself reads it every minute or two.
+      if (++_ticks % 6 == 0) {
+        for (final r in _machines.where((x) => parentOf(x) == null && isConnected(x))) {
+          _fetchUsage(r);
+        }
+      }
     });
   }
 
@@ -966,10 +1116,9 @@ class HerdrClientService extends ChangeNotifier {
   }
 
   void _saveMachines() => SharedPreferences.getInstance().then((p) => p
-    ..setStringList('herdr_machines', _machines)
-    ..setStringList('herdr_machine_names', [for (final e in _names.entries) '${e.key}=${e.value}'])
-    ..setStringList('herdr_machine_tokens', [for (final e in _tokens.entries) '${e.key}=${e.value}'])
-    ..setStringList('herdr_machines_off', _off.toList()));
+    ..setStringList('hc_machines', _machines)
+    ..setStringList('hc_machine_names', [for (final e in _names.entries) '${e.key}=${e.value}'])
+    ..setStringList('hc_machines_off', _off.toList()));
 
   /// Shows [machine] (as stored in [machines]) as it is: one the user disconnected stays off. The others
   /// stay as they are.
@@ -1058,7 +1207,7 @@ class HerdrClientService extends ChangeNotifier {
         rows.add((m, s, a, pane[a.paneId]));
       }
     }
-    int rank(AgentModel a) => switch (urgency.indexOf(a.displayStatus)) { -1 => urgency.length, final i => i };
+    int rank(AgentModel a) => switch (urgency.indexOf(a.status)) { -1 => urgency.length, final i => i };
     DateTime at(String m, AgentModel a) => changedAt(a.paneId, m) ?? DateTime(0);
     rows.sort((x, y) => rank(x.$3) != rank(y.$3)
         ? rank(x.$3) - rank(y.$3)
@@ -1152,34 +1301,6 @@ class HerdrClientService extends ChangeNotifier {
     notifyListeners();
   }
 
-  void _handleMessage(String m, dynamic message) {
-    try {
-      final data = jsonDecode(message.toString());
-      final type = data['type'];
-      // The bridge pushes a snapshot whenever it changed, or why it has none. An older bridge also
-      // forwards raw events, which are ignored: the snapshot that follows carries their change.
-      if (type == 'snapshot') {
-        _conns[m]?.error = null;
-        _apply(m, SessionSnapshot.fromJson(data['data']));
-      } else if (type == 'machines') {
-        if (parentOf(m) != null) return;
-        final list = data['machines'];
-        if (list is List) {
-          _applyDiscovered(m, list);
-        } else {
-          _discover(m);
-        }
-      } else if (type == 'error') {
-        _conns[m]?.error = data['error'].toString();
-        notifyListeners();
-      } else if (type == 'delivery') {
-        _delivered(Delivery(m, data));
-      }
-    } catch (e) {
-      debugPrint('Error parsing session WS message: $e');
-    }
-  }
-
   void _apply(String m, SessionSnapshot snapshot) {
     final c = _conns.putIfAbsent(m, _Conn.new);
     final before = c.raw;
@@ -1187,43 +1308,8 @@ class HerdrClientService extends ChangeNotifier {
     _show(m);
     // After a dropout [before] is the last snapshot seen, so what changed meanwhile still alerts.
     if (before != null && _alerts) _alertChanges(m, before, snapshot);
-    // herdr reuses a closed pane's id: a new pane mustn't come up muted, nor inherit the old one's
-    // completion count, which would hold back its "Finished" alerts.
+    // A pane gone mustn't leave its completion count, nor its mute, to a later one.
     c.completions.removeWhere((id, _) => !snapshot.panes.any((p) => p.id == id));
-    c.changes.removeWhere((id, _) => !snapshot.agents.any((a) => a.paneId == id));
-    _deliveries.removeWhere((d) => d.machine == m && d.paneId != null && !snapshot.panes.any((p) => p.id == d.paneId));
-    for (final a in snapshot.agents) {
-      final was = c.changes[a.paneId];
-      final seq = a.stateChangeSeq ?? 0;
-      // A higher seq is a change; an older snapshot landing late (lower seq) isn't. Nor is `done` turning
-      // `idle` when the pane is viewed: herdr leaves the seq as it was. Without seqs, a new status is.
-      if (was == null || seq > was.$1 || seq == 0 && a.status != was.$2) {
-        final kept = _saved['$m/${a.paneId}'];
-        c.changes[a.paneId] = (
-          seq,
-          a.status,
-          before != null
-              ? DateTime.now()
-              : kept != null && kept.$1 == seq && (seq != 0 || kept.$2 == a.status)
-                  ? kept.$3
-                  : null
-        );
-      }
-    }
-    final saved = {..._saved}
-      ..removeWhere((k, _) => k.substring(0, k.lastIndexOf('/')) == m)
-      ..addAll({
-        for (final MapEntry(:key, :value) in c.changes.entries)
-          if (value.$3 case final at?) '$m/$key': (value.$1, value.$2, at)
-      });
-    if (saved.length != _saved.length || saved.entries.any((e) => _saved[e.key] != e.value)) {
-      _saved = saved;
-      final list = [
-        for (final MapEntry(:key, :value) in saved.entries)
-          '$key\t${value.$1}\t${value.$2}\t${value.$3.millisecondsSinceEpoch}'
-      ];
-      SharedPreferences.getInstance().then((p) => p.setStringList('agent_changes', list));
-    }
     // A pane id has no slash, so the key's machine is all before its last one.
     final gone =
         _muted.where((k) => k.substring(0, k.lastIndexOf('/')) == m && !snapshot.panes.any((p) => '$m/${p.id}' == k));
@@ -1411,70 +1497,144 @@ class HerdrClientService extends ChangeNotifier {
     }
   }
 
-  /// Files sent to [paneId] on [m], oldest first: its agent's, and those of agents in another herdr session.
-  List<Delivery> deliveriesOf(String m, String? paneId) =>
-      _deliveries.where((d) => d.machine == m && (d.paneId == null || d.paneId == paneId)).toList();
-
-  void dismissDelivery(Delivery d) {
-    _deliveries.remove(d);
-    _native('cancel', {'key': '${d.machine}/delivery/${d.id}'});
-    notifyListeners();
-  }
-
-  /// Offers a file an agent sent on its pane and, unless that pane is on screen or muted, alerts with a
-  /// button that opens it. The bridge sends none to the app on its own machine, which already has the file.
-  void _delivered(Delivery d) {
-    final m = d.machine;
-    _deliveries.add(d);
-    notifyListeners();
-    final watching = m == machine && WidgetsBinding.instance.lifecycleState == AppLifecycleState.resumed;
-    if (!_alerts || watching && (d.paneId == null || d.paneId == selectedPaneId)) return;
-    if (d.paneId != null && _muted.contains('$m/${d.paneId}')) return;
-    final snap = snapshotOf(m);
-    final pane = snap?.panes.where((p) => p.id == d.paneId).firstOrNull;
-    final agentName = snap?.agents.where((a) => a.paneId == d.paneId).firstOrNull?.name ?? '';
-    final who = agentName.isEmpty ? 'An agent' : agentName[0].toUpperCase() + agentName.substring(1);
-    final title = '$who sent ${d.name}';
-    final place = [if (pane != null) snap!.placeOf(pane), nameOf(m)].where((s) => s.isNotEmpty).join(' · ');
-    if (Platform.isAndroid) {
-      final iconBytes = agentIconBytes(agentName);
-      _native('alert', {
-        'key': '$m/delivery/${d.id}',
-        'title': title,
-        'text': d.detail,
-        'place': place,
-        'machine': m,
-        'pane': d.paneId ?? '',
-        'urgent': false,
-        'delivery': d.id,
-        'action': d.isApk ? 'Install' : 'Open',
-        if (iconBytes != null) 'icon': iconBytes,
-      });
-    } else if (Platform.isLinux && _alertDesktop) {
-      Process.run('notify-send', ['-a', 'Herdr', '-i', agentIconPath(agentName) ?? 'document-save', title, '${d.detail}\n$place'])
-          .ignore();
+  /// Runs a Herdr app command on the machine whose window shows [on]'s spaces (the machine the phone
+  /// dials: its window shows the machines its core reaches too), through herdr-core. Spaces and tabs are
+  /// the app's, so changing them needs its window open there. Failures go to [onError] as "Could not
+  /// [what]"; gives the command's answer, or null on failure.
+  Future<dynamic> _app(String what, String command, Map<String, dynamic> args, {String? on}) async {
+    final m = on ?? machine;
+    final root = parentOf(m) ?? m;
+    try {
+      final link = _conns[root]?.link;
+      if (link == null) throw '${nameOf(root)} is not connected';
+      final res = await link.call('machine.exec', {
+        'argv': ['herdr-app', 'do', command, jsonEncode(args)],
+        'timeout': 20,
+      }) as Map;
+      final out = utf8.decode(base64.decode(res['stdout'] ?? ''), allowMalformed: true).trim();
+      final err = utf8.decode(base64.decode(res['stderr'] ?? ''), allowMalformed: true).trim();
+      if (res['code'] != 0) {
+        if (err.contains('no Herdr window') || res['code'] == 127) throw 'open Herdr on ${nameOf(root)} to change its spaces';
+        throw _parseError(out.isNotEmpty ? out : err);
+      }
+      try {
+        return out.isEmpty ? true : jsonDecode(out);
+      } on FormatException {
+        return true;
+      }
+    } catch (e) {
+      debugPrint('herdr-app do $command on $root failed: $e');
+      onError?.call('Could not $what: $e');
+      return null;
     }
   }
 
-  /// Downloads [d] (once) and opens it: on Android with the app for its type, the installer for an APK;
-  /// on Linux it is saved to the Downloads folder and opened from there.
-  Future<void> openDelivery(Delivery d) async {
-    if (d.progress.value != null) return;
+  String _parseError(dynamic e) {
     try {
-      var path = d.path;
-      if (path == null || !File(path).existsSync()) {
-        d.progress.value = 0;
-        path = d.path = await _download(d);
+      final text = e.toString();
+      final data = jsonDecode(text.substring(text.indexOf('{')));
+      if (data is Map && data['error'] != null) return data['error'].toString();
+      if (data is Map && data['message'] != null) return data['message'].toString();
+    } catch (_) {}
+    return e.toString();
+  }
+
+  Future<void> createTab(String workspaceId) =>
+      _app('create tab', 'tab.new', {'space': workspaceId, 'focus': false});
+
+  /// Puts image [bytes] beside the selected terminal, on its machine, for its agent to read. Returns the
+  /// path for `@`-references, or null (already reported to [onError]).
+  Future<String?> uploadImage(List<int> bytes, String mime) async {
+    final pane = selectedPaneId;
+    if (pane == null) return null;
+    final (_, prefix) = _route(machine);
+    final res = await _core('attach image', machine, 'terminal.put', {
+      'terminal': '$prefix$pane',
+      'name': 'image.${mime.split('/').last.replaceAll('jpeg', 'jpg')}',
+      'data': base64Encode(bytes),
+    });
+    return res is Map ? res['path'] as String? : null;
+  }
+
+  Future<void> closeTab(String tabId, [String? m]) =>
+      _app('close tab', 'tab.close', {'id': tabId, 'confirmed': true}, on: m);
+
+  /// Closes [paneId] on [m] (the active machine by default): its pane in the Herdr app when it has one,
+  /// which ends its terminal; else (a sub-agent, an `hc run`) just ends the terminal.
+  Future<void> closePane(String paneId, [String? m]) async {
+    final on = m ?? machine;
+    final c = _conns[on];
+    final inTab = c?.raw?.panes.any((p) => p.id == paneId && p.tabId.isNotEmpty) ?? false;
+    c?.raw?.panes.removeWhere((p) => p.id == paneId);
+    c?.raw?.agents.removeWhere((a) => a.paneId == paneId);
+    final block = inTab ? _blockOf(c!.layout, paneId) : null;
+    if (block != null) {
+      await _app('close agent', 'pane.close', {'pane': block}, on: on);
+    } else {
+      await _core('close agent', on, 'terminal.kill', {'terminal': '${_route(on).$2}$paneId'});
+    }
+    _rebuild(on);
+  }
+
+  /// The id of the layout block showing [terminal].
+  static String? _blockOf(Map? layout, String terminal) {
+    String? find(Object? node) {
+      if (node is! Map) return null;
+      if (node['content']?['terminal'] == terminal) return node['id'];
+      for (final child in (node['children'] as List?) ?? const []) {
+        if (find(child) case final id?) return id;
       }
-      if (Platform.isAndroid) {
-        await _android.invokeMethod('openFile', {'path': path, 'mime': d.mime});
-      } else {
-        await Process.run('xdg-open', [path]);
+      return null;
+    }
+
+    for (final Map space in (layout?['spaces'] as List?) ?? const []) {
+      for (final Map tab in (space['tabs'] as List?) ?? const []) {
+        if (find(tab['root']) case final id?) return id;
       }
-    } catch (e) {
-      onError?.call('Could not open ${d.name}: ${e is PlatformException ? e.message : _parseError(e)}');
-    } finally {
-      d.progress.value = null;
+    }
+    return null;
+  }
+
+  /// Moves a tab to [targetId]'s place in their workspace, reordering the local snapshot first so the strip
+  /// doesn't jump back while the request runs.
+  Future<void> moveTab(String tabId, String targetId) async {
+    final all = snapshot?.tabs;
+    final tab = all?.where((t) => t.id == tabId).firstOrNull;
+    if (all == null || tab == null) return;
+    final own = all.where((t) => t.workspaceId == tab.workspaceId).map((t) => t.id).toList();
+    final from = own.indexOf(tabId), to = own.indexOf(targetId);
+    if (to < 0 || to == from) return;
+    all.remove(tab);
+    all.insert(all.indexWhere((t) => t.id == targetId) + (from < to ? 1 : 0), tab);
+    notifyListeners();
+    await _app('move tab', 'tab.move', {'id': tabId, 'index': to + 1});
+  }
+
+  /// A new space on the active machine, in its home.
+  Future<void> createWorkspace() => _app('create workspace', 'space.new', {
+        'machine': parentOf(machine) == null ? '' : machine.substring(machine.lastIndexOf('/') + 1),
+        'focus': false,
+      });
+
+  /// Closes a space and ends its terminals.
+  Future<void> deleteWorkspace(String workspaceId, {String? on}) =>
+      _app('close workspace', 'space.close', {'id': workspaceId, 'confirmed': true}, on: on);
+
+  Future<void> renameWorkspace(String workspaceId, String label, {String? on}) =>
+      _app('rename workspace', 'space.rename', {'id': workspaceId, 'name': label}, on: on);
+
+  /// Moves [ids] (a workspace) before [beforeId], or to the end when null. Reorders the local snapshot
+  /// first so the list doesn't jump back while the request runs.
+  Future<void> moveWorkspaces(List<String> ids, String? beforeId) async {
+    final list = snapshot?.workspaces;
+    if (list == null) return;
+    final moved = list.where((w) => ids.contains(w.id)).toList();
+    list.removeWhere((w) => ids.contains(w.id));
+    final at = list.indexWhere((w) => w.id == beforeId);
+    list.insertAll(at < 0 ? list.length : at, moved);
+    notifyListeners();
+    for (final w in moved) {
+      await _app('move workspace', 'space.move', {'id': w.id, 'index': list.indexOf(w) + 1});
     }
   }
 
@@ -1497,207 +1657,6 @@ class HerdrClientService extends ChangeNotifier {
       onError?.call('Could not open link: ${e is PlatformException ? e.message : _parseError(e)}');
     }
   }
-
-  Future<String> _download(Delivery d) async {
-    final String dir;
-    if (Platform.isAndroid) {
-      // The app's cache, which its FileProvider shares with the app that opens it. Only the files still
-      // offered are kept: an APK runs to tens of MB.
-      dir = (await _android.invokeMethod<String>('deliveriesDir'))!;
-      final kept = {for (final o in _deliveries) o.path};
-      for (final f in Directory(dir).listSync()) {
-        if (!kept.contains(f.path)) f.deleteSync();
-      }
-    } else {
-      final xdg = await Process.run('xdg-user-dir', ['DOWNLOAD']).then((r) => (r.stdout as String).trim(), onError: (_) => '');
-      dir = xdg.isNotEmpty ? xdg : '${Platform.environment['HOME']}/Downloads';
-    }
-    // A bridge's name for it never holds a slash, but a name is no path to trust.
-    final name = d.name.replaceAll('/', '_');
-    var file = File('$dir/$name');
-    final dot = name.lastIndexOf('.');
-    for (var i = 1; !Platform.isAndroid && file.existsSync(); i++) {
-      file = File('$dir/${dot > 0 ? '${name.substring(0, dot)} ($i)${name.substring(dot)}' : '$name ($i)'}');
-    }
-    final req = http.Request('GET', Uri.parse('http://${d.machine}/api/deliveries/${d.id}'))
-      ..headers.addAll(headersOf(d.machine));
-    final res = await req.send();
-    if (res.statusCode != 200) throw await res.stream.bytesToString();
-    final sink = file.openWrite();
-    var got = 0;
-    try {
-      await for (final chunk in res.stream) {
-        sink.add(chunk);
-        got += chunk.length;
-        d.progress.value = d.size > 0 ? got / d.size : 1;
-      }
-      await sink.close();
-    } catch (_) {
-      // Half a file isn't left behind.
-      await sink.close().catchError((_) {});
-      if (file.existsSync()) file.deleteSync();
-      rethrow;
-    }
-    return file.path;
-  }
-
-  Future<void> _fetchSnapshotHttp(String m) async {
-    try {
-      final res = await http.get(Uri.parse('http://$m/api/snapshot'), headers: headersOf(m));
-      if (res.statusCode == 200 && _machines.contains(m) && !_off.contains(m)) {
-        _apply(m, SessionSnapshot.fromJson(jsonDecode(res.body)));
-      }
-    } catch (_) {}
-  }
-
-  /// Sends one request to [on]'s bridge (the active machine's by default), then refreshes that machine's snapshot (also on
-  /// failure, which may have changed something, or undoes [moveTab]'s or [moveWorkspaces]'s local reorder). Failures go
-  /// to [onError] as "Could not [what]". Returns the decoded response, or null on failure.
-  Future<dynamic> _request(String what, String method, String path,
-      {Map<String, dynamic>? body, Map<String, String>? query, String? on}) async {
-    final m = on ?? machine;
-    dynamic result;
-    try {
-      final req = http.Request(method, Uri.parse('http://$m$path').replace(queryParameters: query))
-        ..headers.addAll(headersOf(m));
-      if (body != null) {
-        req.headers['Content-Type'] = 'application/json';
-        req.body = jsonEncode(body);
-      }
-      final res = await http.Response.fromStream(await req.send());
-      if (res.statusCode != 200) throw res.body;
-      result = res.body.isEmpty ? null : jsonDecode(res.body);
-    } catch (e) {
-      debugPrint('$method $m$path failed: $e');
-      onError?.call('Could not $what: ${e is SocketException || e is TimeoutException ? _networkError(parentOf(m) ?? m, e) : _parseError(e)}');
-    }
-    unawaited(_fetchSnapshotHttp(m));
-    return result;
-  }
-
-  /// POSTs to a route that creates a tab or workspace, then shows its root pane, unless another
-  /// machine was put on screen meanwhile.
-  Future<bool> _create(String what, String path, Map<String, dynamic> body, {String? on}) async {
-    final m = on ?? machine;
-    final res = await _request(what, 'POST', path, body: body, on: m);
-    final paneId = res is Map ? (res['root_pane']?['pane_id']) : null;
-    if (paneId is String && m == machine) selectPane(paneId);
-    return paneId is String && m == machine;
-  }
-
-  String _parseError(dynamic e) {
-    try {
-      // The bridge words herdr's own errors as "Herdr error response: {code, message}".
-      final text = e.toString();
-      final data = jsonDecode(text.substring(text.indexOf('{')));
-      if (data is Map && data['message'] != null) return data['message'].toString();
-      if (data is Map && data['error'] != null) {
-        if (data['error'] is Map && data['error']['message'] != null) {
-          return data['error']['message'].toString();
-        }
-        return data['error'].toString();
-      }
-    } catch (_) {}
-    return e.toString();
-  }
-
-  Future<void> createTab(String workspaceId) => _create('create tab', '/api/tab', {'workspace_id': workspaceId});
-
-  /// Uploads image [bytes] to the active machine's bridge, which saves them where its agents run.
-  /// Returns the saved path for `@`-references, or null (already reported to [onError]).
-  Future<String?> uploadImage(List<int> bytes, String mime) async {
-    final res = await _request('upload image', 'POST', '/api/uploads',
-        body: {'mime': mime, 'data': base64Encode(bytes)});
-    return res is Map ? res['path'] as String? : null;
-  }
-
-  Future<void> closeTab(String tabId, [String? m]) => _request('close tab', 'DELETE', '/api/tab/$tabId', on: m);
-
-  /// Clears [paneId]'s screen and scrollback, keeping its prompt line (`pane.clear`; full-screen apps are left alone).
-  Future<void> clearPane(String paneId) => _request('clear pane', 'POST', '/api/pane/clear', body: {'pane_id': paneId});
-
-  /// Closes [paneId] on [m] (the active machine by default). herdr closes a tab with its last pane and a
-  /// workspace with its last tab, so when this is the workspace's only pane it first opens a new tab
-  /// there, leaving the workspace with a shell.
-  Future<void> closePane(String paneId, [String? m]) async {
-    // What herdr has, panes hidden to close included.
-    final panes = _conns[m ?? machine]?.raw?.panes ?? const [];
-    final ws = panes.where((p) => p.id == paneId).firstOrNull?.workspaceId;
-    if (ws != null && panes.where((p) => p.workspaceId == ws).length == 1) {
-      await _request('create tab', 'POST', '/api/tab', body: {'workspace_id': ws}, on: m);
-    }
-    final raw = _conns[m ?? machine]?.raw;
-    raw?.panes.removeWhere((p) => p.id == paneId);
-    raw?.agents.removeWhere((a) => a.paneId == paneId);
-    await _request('close agent', 'DELETE', '/api/pane/$paneId', on: m);
-  }
-
-  /// Moves a tab to [targetId]'s place in their workspace, reordering the local snapshot first so the strip
-  /// doesn't jump back while the request runs.
-  Future<void> moveTab(String tabId, String targetId) async {
-    final all = snapshot?.tabs;
-    final tab = all?.where((t) => t.id == tabId).firstOrNull;
-    if (all == null || tab == null) return;
-    final own = all.where((t) => t.workspaceId == tab.workspaceId).map((t) => t.id).toList();
-    final from = own.indexOf(tabId), to = own.indexOf(targetId);
-    if (to < 0 || to == from) return;
-    all.remove(tab);
-    all.insert(all.indexWhere((t) => t.id == targetId) + (from < to ? 1 : 0), tab);
-    notifyListeners();
-    // herdr's index is into the order before the move: the tab goes in front of the one there.
-    await _request('move tab', 'POST', '/api/tab/move',
-        body: {'tab_id': tabId, 'insert_index': from < to ? to + 1 : to});
-  }
-
-  Future<void> createWorkspace() => _create('create workspace', '/api/workspace', {});
-
-  /// Closes a workspace, or with [closeGroup] a repository's main workspace with its linked worktrees' (herdr
-  /// refuses to close it alone), or with [removeWorktree] deletes a linked worktree's checkout, which herdr
-  /// refuses while it has changes unless [force]d (the caller asks, since herdr's reason for refusing is the
-  /// only sign of that). A checkout's branch stays.
-  Future<void> deleteWorkspace(String workspaceId,
-      {bool closeGroup = false, bool removeWorktree = false, bool force = false, String? on}) {
-    final query = {
-      if (closeGroup) 'close_group': 'true',
-      if (removeWorktree) 'remove_worktree': 'true',
-      if (force) 'force': 'true',
-    };
-    return _request(removeWorktree ? 'delete worktree' : 'close workspace', 'DELETE', '/api/workspace/$workspaceId',
-        query: query.isEmpty ? null : query, on: on);
-  }
-
-  Future<void> renameWorkspace(String workspaceId, String label, {String? on}) =>
-      _request('rename workspace', 'POST', '/api/workspace/$workspaceId/rename', body: {'label': label}, on: on);
-
-  /// Moves [ids] (a workspace and its linked worktrees) before [beforeId], or to the end when null.
-  /// Reorders the local snapshot first so the list doesn't jump back while the request runs.
-  Future<void> moveWorkspaces(List<String> ids, String? beforeId) async {
-    final list = snapshot?.workspaces;
-    if (list != null) {
-      final moved = list.where((w) => ids.contains(w.id)).toList();
-      list.removeWhere((w) => ids.contains(w.id));
-      final at = list.indexWhere((w) => w.id == beforeId);
-      list.insertAll(at < 0 ? list.length : at, moved);
-      notifyListeners();
-    }
-    await _request('move workspace', 'POST', '/api/workspace/move',
-        body: {'workspace_ids': ids, 'before_workspace_id': beforeId});
-  }
-
-  /// A new worktree of a repository's main workspace, on [branch] (checked out if it exists, else made from
-  /// the main checkout's HEAD).
-  Future<bool> createWorktree(String workspaceId, String branch, {String? on}) =>
-      _create('create worktree', '/api/worktree', {'workspace_id': workspaceId, 'branch': branch}, on: on);
-
-  Future<List<Map<String, dynamic>>?> listWorktrees(String workspaceId, {String? on}) async {
-    final res = await _request('list worktrees', 'GET', '/api/worktree', query: {'workspace_id': workspaceId}, on: on);
-    if (res == null) return null;
-    return ((res is Map ? res['worktrees'] : null) as List<dynamic>? ?? []).cast<Map<String, dynamic>>();
-  }
-
-  /// Opens the worktree checked out at [path] in a workspace of its own, next to its repository's main [workspaceId].
-  Future<bool> openWorktree(String workspaceId, String path, {String? on}) =>
-      _create('open worktree', '/api/worktree/open', {'workspace_id': workspaceId, 'path': path}, on: on);
 
   @override
   void dispose() {

@@ -48,12 +48,6 @@ class TerminalScreen extends StatefulWidget {
   static void setDraftForTesting(String paneId, String machine, String text) => _drafts['$machine/$paneId'] = text;
   static void clearDraftsForTesting() => _drafts.clear();
 
-  // Where each pane left was scrolled back to ([_scrolledUp], [_scrolledLines]), by `machine/pane`, with its
-  // agent's `state_change_seq` at the last scroll and the 0-based screen cell scrolled ([_scrollColumn],
-  // [_scrollRow]). Restored only while that seq holds: the replay lands as
-  // far from the bottom as before, which shows other text once the pane has printed meanwhile.
-  static final _places = <String, (int, int, int?, int?, int?)>{};
-
   @override
   State<TerminalScreen> createState() => _TerminalScreenState();
 }
@@ -79,9 +73,7 @@ class _TerminalScreenState extends State<TerminalScreen> {
   String _savedDraft = '';
   PtyChannel? _ptyChannel;
   bool _stale = false; // the pane hasn't streamed for a while: the screen is its last frame, dimmed
-  bool _termBusy = false; // another client holds the pane: herdr refused the attach, retrying slowly
-  bool _allFiles = false; // every file the agent sent is listed, not only the newest
-  bool _takeOver = false; // steal the pane on the next attach, asked once through the banner below
+  String? _ended; // why herdr-core ended or refused the stream (its program exited), until it streams again
   Timer? _staleTimer;
   late final AppLifecycleListener _lifecycle;
   bool _ctrl = false;
@@ -91,26 +83,19 @@ class _TerminalScreenState extends State<TerminalScreen> {
   bool _showingHistory = false; // the recent-messages panel above the pill; the pill filters it
   String _historyDraft = ''; // the box's text when the panel opened, restored on close without a pick
   String? _draftKey; // the pane whose draft is in the message box
-  int _scrolledUp = 0; // scrolls back into the pane's history; 0 is live
-  int _scrolledLines = 0; // the lines those scrolls carried, to scroll back there after a reattach
-  String? _scrolledPane; // the pane (machine/pane) they were in
-  int? _scrolledSeq; // its agent's `state_change_seq` at the last scroll
-  int? _scrollColumn; // 0-based screen cell under the last scroll, so herdr's wheel lands on the
-  int? _scrollRow; // widget scrolled (an alternate-screen app only scrolls the widget under the wheel)
+  final _termScroll = ScrollController(); // xterm's view of its scrollback
+  bool _scrolledBack = false; // that view is above the bottom
   bool _left = false; // popped back to the agents, since the machine went off
 
   // Pinch-to-zoom and history scrolling, tracked from raw pointers so they don't fight the terminal's own gestures.
   final _pointers = <int, Offset>{};
   double? _twoDistance; // how far apart two fingers were when they went down, while two are down
   bool _pinching = false; // two fingers have moved apart or together
-  Offset _padPan = Offset.zero; // a touchpad's two-finger pan so far, until it picks a direction
-  bool? _padVertical; // whether that pan scrolls: it keeps the direction it first moves along
   double _pinchFont = 0;
   Offset _downAt = Offset.zero;
   int? _downPointer; // the press that may be a tap; a right or middle click never is
   Duration _downTime = Duration.zero;
   bool _dragging = false; // set once a one-finger drag counts as a scroll
-  double _scrollRest = 0; // scrolled pixels not yet a whole line
   bool _pinched = false; // the rest of a gesture that pinched never scrolls
 
   // The current tab in the top bar's strip, scrolled into view when it changes.
@@ -137,6 +122,11 @@ class _TerminalScreenState extends State<TerminalScreen> {
     _terminal.onOutput = _send;
     _terminal.onResize = (cols, rows, _, __) => _ptyChannel?.sendResize(cols, rows);
     _terminal.addListener(_findBackground);
+    _termScroll.addListener(() {
+      final p = _termScroll.position;
+      final back = p.maxScrollExtent - p.pixels > 1;
+      if (back != _scrolledBack) setState(() => _scrolledBack = back);
+    });
 
     _message.addListener(_onMessageChanged);
     _messageFocus.onKeyEvent = _onMessageKeyEvent;
@@ -1032,29 +1022,17 @@ class _TerminalScreenState extends State<TerminalScreen> {
     if (background != _background) setState(() => _background = background);
   }
 
-  /// Back to the bottom of the pane's history. Herdr's own scrollback takes a scroll's line count, so
-  /// one scroll long enough reaches the bottom (herdr caps it at a u16); an app on the alternate screen
-  /// (Claude Code) gets each scroll as one wheel tick whatever its count, so it needs as many ticks back
-  /// as went up. Send twice that: going past the bottom does nothing, falling short leaves the view up.
-  /// Input goes through here, so it also lets go of a selection, whose hold would hide what the input does.
+  /// Back to the bottom of the terminal's scrollback. Input goes through here, so it also lets go of a
+  /// selection, whose hold would hide what the input does.
   void _toLive() {
     if (_controller.selection != null) _controller.clearSelection();
-    if (_scrolledUp == 0) return;
-    for (var i = 0; i < 2 * _scrolledUp; i++) {
-      _ptyChannel?.sendScroll(-65535, column: _scrollColumn, row: _scrollRow);
-    }
-    setState(() => _scrolledUp = _scrolledLines = 0);
+    if (_termScroll.hasClients) _termScroll.jumpTo(_termScroll.position.maxScrollExtent);
   }
 
-  /// Scrolls to the beginning of the pane's history.
+  /// To the top of the terminal's scrollback.
   void _toBeginning() {
     if (_controller.selection != null) _controller.clearSelection();
-    _ptyChannel?.sendScroll(65535, column: _scrollColumn, row: _scrollRow);
-    _scrolledSeq = widget.client.snapshot?.agentOf(widget.client.selectedPaneId ?? '')?.stateChangeSeq;
-    setState(() {
-      _scrolledUp = 1000;
-      _scrolledLines = 65535;
-    });
+    if (_termScroll.hasClients) _termScroll.jumpTo(0);
   }
 
   /// The agent running in a tab (focused pane's first), or null if it runs none.
@@ -1097,10 +1075,7 @@ class _TerminalScreenState extends State<TerminalScreen> {
       position: RelativeRect.fromLTRB(at.dx, at.dy, at.dx, at.dy),
       items: [
         if (tab.id != client.selectedPane?.tabId)
-          const PopupMenuItem(value: 'open', child: ListTile(leading: Icon(Icons.tab), title: Text('Open tab')))
-        else
-          const PopupMenuItem(
-              value: 'clear', child: ListTile(leading: Icon(Icons.cleaning_services_outlined), title: Text('Clear'))),
+          const PopupMenuItem(value: 'open', child: ListTile(leading: Icon(Icons.tab), title: Text('Open tab'))),
         if (index > 0)
           const PopupMenuItem(
               value: 'left', child: ListTile(leading: Icon(Icons.arrow_back), title: Text('Move left'))),
@@ -1120,10 +1095,6 @@ class _TerminalScreenState extends State<TerminalScreen> {
     switch (picked) {
       case 'open':
         client.selectTab(tab.id);
-      case 'clear':
-        // The history scrolled back into goes, so the screen is live again.
-        _toLive();
-        client.clearPane(client.selectedPaneId!);
       case 'left':
         if (index > 0) client.moveTab(tab.id, tabs[index - 1].id);
       case 'right':
@@ -1245,13 +1216,12 @@ class _TerminalScreenState extends State<TerminalScreen> {
     }
   }
 
-  /// Pastes clipboard text as one bracketed paste (like the message box), then Enter is left to the user.
-  /// Always bracketed: herdr's frames never carry the pane's `?2004h`, so our terminal can't know the
-  /// mode, while herdr drops the markers itself for a pane that didn't ask for them.
+  /// Pastes clipboard text, bracketed when the program asked for it (like the message box); Enter is
+  /// left to the user.
   void _pasteFromClipboard(String? text) {
     if (text == null || text.isEmpty) return;
     if (_controller.selection != null) _controller.clearSelection(); // as xterm's own paste does
-    _send('\x1b[200~$text\x1b[201~');
+    _send(_terminal.bracketedPasteMode ? '\x1b[200~$text\x1b[201~' : text);
   }
 
   /// Selects the visible screen, like xterm's own Select-all action.
@@ -1323,7 +1293,7 @@ class _TerminalScreenState extends State<TerminalScreen> {
     }
   }
 
-  /// A tap (or a left click) is a click for the pane's program, which herdr drops unless it asked for the mouse.
+  /// A tap (or a left click) is a click for the pane's program, which xterm drops unless it asked for the mouse.
   /// A tap that clears a selection does only that. xterm selects a word on a double-tap, which isn't wanted
   /// here, so its second tap clears that once the gesture arena has run (which is after this, at the lift).
   void _onTap(PointerUpEvent e) {
@@ -1338,9 +1308,10 @@ class _TerminalScreenState extends State<TerminalScreen> {
       widget.client.openUrl(url);
       return;
     }
-    // xterm counts rows from the buffer's top; herdr, from the screen's.
-    final top = _terminal.buffer.height - _terminal.viewHeight;
-    _ptyChannel?.sendClick(cell.x, (cell.y - top).clamp(0, _terminal.viewHeight - 1));
+    // xterm counts rows from the buffer's top; the program, from the screen's.
+    final at = CellOffset(cell.x, (cell.y - (_terminal.buffer.height - _terminal.viewHeight)).clamp(0, _terminal.viewHeight - 1));
+    _terminal.mouseInput(TerminalMouseButton.left, TerminalMouseButtonState.down, at);
+    _terminal.mouseInput(TerminalMouseButton.left, TerminalMouseButtonState.up, at);
   }
 
   /// The https URL under the cell at ([col], [row]), if any, joining wrapped terminal lines.
@@ -1427,75 +1398,28 @@ class _TerminalScreenState extends State<TerminalScreen> {
     _view.currentState?.requestKeyboard();
   }
 
-  /// Herdr holds the pane's history (see [PtyChannel.connect]), so dragging scrolls herdr's view a line
-  /// per text row moved. A press held still past the long-press timeout is text selection instead, and
-  /// so is any mouse drag: a mouse scrolls with its wheel ([_scrollSignal]).
+  /// xterm scrolls a one-finger drag itself: its scrollback, or for a full-screen program that takes the
+  /// mouse, wheel ticks. This only notes that the press became a drag, so it isn't a tap. A press held
+  /// still past the long-press timeout is text selection instead, and so is any mouse drag.
   void _scroll(PointerMoveEvent e) {
-    if (e.kind == PointerDeviceKind.mouse) return;
-    if (!_dragging) {
-      if (e.timeStamp - _downTime >= kLongPressTimeout || (e.position.dy - _downAt.dy).abs() < kTouchSlop) return;
-      _dragging = true;
-      _scrollRest = 0;
-      return;
-    }
-    _scrollBy(e.delta.dy, e.position);
+    if (e.kind == PointerDeviceKind.mouse || _dragging) return;
+    if (e.timeStamp - _downTime >= kLongPressTimeout || (e.position.dy - _downAt.dy).abs() < kTouchSlop) return;
+    _dragging = true;
   }
 
-  /// A mouse wheel scrolls herdr's view like a drag does, and so does a desktop touchpad's two-finger pan
-  /// up or down.
-  void _scrollSignal(PointerEvent e) {
-    if (e is PointerScrollEvent) _scrollBy(-e.scrollDelta.dy, e.position);
-    if (e is PointerPanZoomStartEvent) {
-      _padPan = Offset.zero;
-      _padVertical = null;
-    }
-    if (e is! PointerPanZoomUpdateEvent) return;
-    _padPan += e.panDelta;
-    if (_padVertical == null && _padPan.distance > kTouchSlop) {
-      _padVertical = _padPan.dy.abs() > _padPan.dx.abs();
-      if (_padVertical!) return _scrollBy(_padPan.dy, e.position);
-    }
-    if (_padVertical == true) _scrollBy(e.panDelta.dy, e.position);
-  }
-
-  /// The 0-based screen cell under [global], or null when the terminal has no size yet.
-  (int, int)? _cellAt(Offset global) {
-    final render = _view.currentState?.renderTerminal;
-    if (render == null || !render.hasSize || _terminal.viewWidth <= 0 || _terminal.viewHeight <= 0) return null;
-    final cell = render.getCellOffset(render.globalToLocal(global));
-    // xterm counts rows from the buffer's top; herdr, from the screen's (see [_onTap]).
-    final top = _terminal.buffer.height - _terminal.viewHeight;
-    return (
-      cell.x.clamp(0, _terminal.viewWidth - 1),
-      (cell.y - top).clamp(0, _terminal.viewHeight - 1),
-    );
-  }
-
-  /// Scrolls by [dy] pixels, positive toward older history. [at] is where the gesture is, so herdr's
-  /// wheel lands on the widget scrolled; without it the wheel lands top-left, where OpenCode has
-  /// nothing scrollable and the scroll does nothing.
-  void _scrollBy(double dy, [Offset? at]) {
+  /// Scrolls by [dy] pixels, positive toward older history, for the paging keys: xterm's scrollback, or a
+  /// wheel tick per line for a full-screen program that takes the mouse.
+  void _scrollBy(double dy) {
     if (_controller.selection != null) _controller.clearSelection(); // it would stay on rows whose text moves
-    final cell = at == null ? null : _cellAt(at);
-    if (cell != null) {
-      _scrollColumn = cell.$1;
-      _scrollRow = cell.$2;
+    if (_terminal.isUsingAltBuffer) {
+      final at = CellOffset(_terminal.viewWidth ~/ 2, _terminal.viewHeight ~/ 2);
+      for (var i = 0; i < (dy / (widget.client.fontSize * 1.1)).abs().round(); i++) {
+        _terminal.mouseInput(dy > 0 ? TerminalMouseButton.wheelUp : TerminalMouseButton.wheelDown,
+            TerminalMouseButtonState.down, at);
+      }
+    } else if (_termScroll.hasClients) {
+      _termScroll.jumpTo((_termScroll.offset - dy).clamp(0, _termScroll.position.maxScrollExtent));
     }
-    final lineHeight = widget.client.fontSize * 1.1; // TerminalStyle height is 1.1
-    _scrollRest += dy;
-    final lines = _scrollRest ~/ lineHeight;
-    if (lines == 0) return;
-    _ptyChannel?.sendScroll(lines, column: _scrollColumn, row: _scrollRow);
-    _scrollRest -= lines * lineHeight;
-    // Counts scrolls, not lines: an app on the alternate screen moves a wheel tick per scroll, however
-    // many lines it carries (see [_toLive]). Herdr stops at the bottom, so the count does too; it may
-    // overshoot the top, which only means the way back scrolls further than needed. Capped, since the
-    // way back sends a scroll per count.
-    _scrolledSeq = widget.client.snapshot?.agentOf(widget.client.selectedPaneId ?? '')?.stateChangeSeq;
-    setState(() {
-      _scrolledUp = (_scrolledUp + lines.sign).clamp(0, 1000);
-      _scrolledLines = _scrolledUp == 0 ? 0 : (_scrolledLines + lines).clamp(_scrolledUp, 65535);
-    });
   }
 
   /// Parks the box's text as the current pane's draft and brings back [key]'s.
@@ -1536,78 +1460,40 @@ class _TerminalScreenState extends State<TerminalScreen> {
     final pty = _ptyChannel;
     final state = WidgetsBinding.instance.lifecycleState;
     if (paneId == null ||
-        client.selectedPane?.restoreError != null ||
         client.isDisconnected ||
         (state != null && state != AppLifecycleState.resumed && state != AppLifecycleState.inactive)) {
-      // Machine switched, disconnected, pane not restored, or app in background: detach
+      // Machine switched, disconnected, or app in background: detach
       pty?.dispose();
       _ptyChannel = null;
       return;
     }
-    final headers = client.headersOf(client.machine);
-    // A new token for the machine reconnects too.
-    if (pty != null &&
-        pty.paneId == paneId &&
-        pty.machine == client.machine &&
-        pty.headers[HttpHeaders.authorizationHeader] == headers[HttpHeaders.authorizationHeader]) {
-      return;
-    }
+    if (pty != null && pty.paneId == paneId && pty.machine == client.machine) return;
     pty?.dispose();
     if (_controller.selection != null) _controller.clearSelection(); // the old pane's text
-    // The same pane, reattached, keeps its place in history; another goes back to where it was left, unless
-    // its agent changed status since, which starts it live.
-    final pane = '${client.machine}/$paneId';
-    if (pane != _scrolledPane) {
-      _parkPlace();
-      _scrolledPane = pane;
-      final place = TerminalScreen._places.remove(pane);
-      final kept = place != null && place.$3 == client.snapshot?.agentOf(paneId)?.stateChangeSeq;
-      _scrolledUp = kept ? place.$1 : 0;
-      _scrolledLines = kept ? place.$2 : 0;
-      _scrolledSeq = kept ? place.$3 : null;
-      _scrollColumn = kept ? place.$4 : null;
-      _scrollRow = kept ? place.$5 : null;
-    }
+    final m = client.machine;
     _ptyChannel = PtyChannel(
-      machine: client.machine,
+      machine: m,
       paneId: paneId,
       terminal: _terminal,
-      headers: headers,
-      takeover: _takeOver,
-      onClose: _onTermClosed,
-      // Herdr shows a freshly attached pane live, also after a lost connection, so scroll back to where
-      // it was: as many scrolls as went up (an app on the alternate screen counts each as one wheel tick,
-      // see [_toLive]), sharing the lines they carried (herdr's own scrollback counts those), at the cell
-      // scrolled so the wheel lands on the same widget.
-      onAttach: () {
-        for (var i = 0; i < _scrolledUp; i++) {
-          _ptyChannel?.sendScroll((_scrolledLines / _scrolledUp).ceil(),
-              column: _scrollColumn, row: _scrollRow);
-        }
+      link: () => client.linkOf(m),
+      address: client.addressOf(m, paneId),
+      onClose: (reason) {
+        if (mounted) setState(() => _ended = reason);
       },
     );
-    _takeOver = false; // spent on this attach; reconnects stay polite unless asked again
-    _termBusy = false; // a new attach: herdr hasn't refused it yet
     _ptyChannel!.attached.addListener(_onAttached);
     _onAttached();
     _ptyChannel!.connect();
-  }
-
-  /// Keeps where the pane on screen is scrolled to, for when it's shown again.
-  void _parkPlace() {
-    if (_scrolledPane != null && _scrolledUp > 0) {
-      TerminalScreen._places[_scrolledPane!] = (_scrolledUp, _scrolledLines, _scrolledSeq, _scrollColumn, _scrollRow);
-    }
   }
 
   /// Marks the screen stale once the pane has been off for a second, so an ordinary attach never flashes it.
   void _onAttached() {
     _staleTimer?.cancel();
     if (_ptyChannel?.attached.value ?? true) {
-      if ((_stale || _termBusy) && mounted) {
+      if ((_stale || _ended != null) && mounted) {
         setState(() {
           _stale = false;
-          _termBusy = false;
+          _ended = null;
         });
       }
       return;
@@ -1617,25 +1503,9 @@ class _TerminalScreenState extends State<TerminalScreen> {
     });
   }
 
-  /// Herdr ended the session: when another client holds the pane, show the
-  /// banner instead of fighting it; the channel retries slowly on its own.
-  void _onTermClosed(String reason) {
-    if (!mounted || _termBusy || !PtyChannel.isBusyReason(reason)) return;
-    setState(() => _termBusy = true);
-  }
-
-  /// Steals the pane from the client holding it, once: the banner's Take over.
-  void _takeOverPane() {
-    _takeOver = true;
-    if (mounted) setState(() => _termBusy = false);
-    _ptyChannel?.dispose();
-    _ptyChannel = null;
-    _connectTerminal();
-  }
-
   @override
   void dispose() {
-    _parkPlace();
+    _termScroll.dispose();
     _onMessageChanged();
     _message.removeListener(_onMessageChanged);
     _tabScroll.dispose();
@@ -1668,49 +1538,6 @@ class _TerminalScreenState extends State<TerminalScreen> {
     return null;
   }
 
-  /// A file the agent sent: its name and what it is, and Install (an APK, on Android) or Open, which
-  /// downloads it first, showing how far.
-  Widget _deliveryCard(Delivery d, ColorScheme scheme) {
-    final text = Theme.of(context).textTheme;
-    return Container(
-      color: scheme.surfaceContainerHigh,
-      padding: const EdgeInsets.fromLTRB(12, 6, 4, 6),
-      child: Row(
-        children: [
-          Icon(d.isApk ? Icons.android : Icons.insert_drive_file_outlined, color: scheme.onSurfaceVariant),
-          const SizedBox(width: 12),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(d.name, maxLines: 1, overflow: TextOverflow.ellipsis, style: text.titleSmall),
-                Text(d.detail,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: text.bodySmall?.copyWith(color: scheme.onSurfaceVariant)),
-              ],
-            ),
-          ),
-          const SizedBox(width: 8),
-          ValueListenableBuilder<double?>(
-            valueListenable: d.progress,
-            builder: (context, progress, _) => progress != null
-                ? SizedBox(width: 72, child: LinearProgressIndicator(value: progress))
-                : FilledButton.tonal(
-                    onPressed: () => widget.client.openDelivery(d),
-                    child: Text(d.isApk && Platform.isAndroid ? 'Install' : 'Open'),
-                  ),
-          ),
-          IconButton(
-            tooltip: 'Dismiss',
-            icon: const Icon(Icons.close, size: 20),
-            onPressed: () => widget.client.dismissDelivery(d),
-          ),
-        ],
-      ),
-    );
-  }
-
   @override
   Widget build(BuildContext context) {
     final client = widget.client;
@@ -1731,9 +1558,7 @@ class _TerminalScreenState extends State<TerminalScreen> {
     final connecting = client.machines.isNotEmpty && !client.connected && !client.isDisconnected;
     final unavailable = client.errorOf(client.machine) != null && snapshot == null
         ? (Icons.cloud_off, "Can't reach ${client.nameOf(client.machine)}", client.errorOf(client.machine)!)
-        : pane?.restoreError != null
-            ? (Icons.restore_page_outlined, "Couldn't restore this pane", pane!.restoreError!)
-            : null;
+        : null;
     if (pane?.tabId != _shownTabId) {
       _shownTabId = pane?.tabId;
       WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -1746,9 +1571,7 @@ class _TerminalScreenState extends State<TerminalScreen> {
       });
     }
 
-    final isWorktree = workspace?.isLinkedWorktree ?? false;
     final title = workspace == null ? 'workspace' : snapshot?.titleOf(workspace) ?? workspace.displayName;
-    final branch = workspace?.branchName ?? '';
 
     return PopScope(
       canPop: !_showingHistory,
@@ -1775,7 +1598,7 @@ class _TerminalScreenState extends State<TerminalScreen> {
         notificationPredicate: (_) => false,
         // A step above the terminal's surface, so the current tab stands out joined to the terminal.
         backgroundColor: scheme.surfaceContainerHigh,
-        // The workspace's name, branch and ↑↓ counts: tapping it opens the workspaces panel.
+        // The workspace's name: tapping it opens the workspaces panel.
         title: Tooltip(
           message: 'Open workspaces',
           child: InkWell(
@@ -1793,39 +1616,6 @@ class _TerminalScreenState extends State<TerminalScreen> {
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
                   ),
-                  if (isWorktree || branch.isNotEmpty)
-                    Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        if (isWorktree) ...[
-                          Container(
-                            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
-                            decoration: BoxDecoration(
-                              color: scheme.secondaryContainer,
-                              borderRadius: BorderRadius.circular(4),
-                            ),
-                            child: Text(
-                              'worktree',
-                              style: Theme.of(context).textTheme.labelSmall?.copyWith(
-                                    color: scheme.onSecondaryContainer,
-                                    fontSize: 10,
-                                    fontWeight: FontWeight.w500,
-                                  ),
-                            ),
-                          ),
-                          if (branch.isNotEmpty) const SizedBox(width: 6),
-                        ],
-                        if (branch.isNotEmpty)
-                          Flexible(
-                            child: Text.rich(
-                              TextSpan(text: branch, children: aheadBehind(workspace!)),
-                              style: Theme.of(context).textTheme.bodySmall?.copyWith(color: scheme.onSurfaceVariant),
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                            ),
-                          ),
-                      ],
-                    ),
                 ],
               ),
             ),
@@ -1964,13 +1754,7 @@ class _TerminalScreenState extends State<TerminalScreen> {
                                                 padding: const EdgeInsets.symmetric(horizontal: 8),
                                                 child: Row(
                                                   children: [
-                                                    // herdr's `idle` is `monitoring` while the agent waits on monitors, as in the list.
-                                                    AgentAvatar(
-                                                        name: tabAgent?.name ?? '',
-                                                        radius: 7.5,
-                                                        status: t.agentStatus == 'idle' && tabAgent?.monitoring == true
-                                                            ? 'monitoring'
-                                                            : t.agentStatus),
+                                                    AgentAvatar(name: tabAgent?.name ?? '', radius: 7.5, status: t.agentStatus),
                                                     const SizedBox(width: 6),
                                                     Expanded(
                                                       child: Text(
@@ -2015,32 +1799,6 @@ class _TerminalScreenState extends State<TerminalScreen> {
       body: SafeArea(
         child: Column(
           children: [
-            if (_termBusy)
-              // Another client (usually the desktop) holds this pane: herdr refused the
-              // attach rather than taking it over, and retries slowly. Take over steals it.
-              Container(
-                color: scheme.surfaceContainerHigh,
-                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-                child: Row(
-                  children: [
-                    Icon(Icons.desktop_windows_outlined, size: 18, color: scheme.onSurfaceVariant),
-                    const SizedBox(width: 8),
-                    Expanded(
-                      child: Text(
-                        'Another client is viewing this pane',
-                        style: Theme.of(context)
-                            .textTheme
-                            .bodySmall
-                            ?.copyWith(color: scheme.onSurfaceVariant),
-                      ),
-                    ),
-                    TextButton(
-                      onPressed: _takeOverPane,
-                      child: const Text('Take over'),
-                    ),
-                  ],
-                ),
-              ),
             Expanded(
               // Connected to its bridge, which can't show it (e.g. a machine it reaches over SSH is down), or
               // herdr couldn't restore the pane, which then has no terminal.
@@ -2069,10 +1827,6 @@ class _TerminalScreenState extends State<TerminalScreen> {
                             onPointerMove: _trackPointer,
                             onPointerUp: _trackPointer,
                             onPointerCancel: _trackPointer,
-                            onPointerSignal: _scrollSignal,
-                            onPointerPanZoomStart: _scrollSignal,
-                            onPointerPanZoomUpdate: _scrollSignal,
-                            onPointerPanZoomEnd: _scrollSignal,
                             // Embedded, a little room from the agents and the screen's edge, in the pane's colour.
                             child: Container(
                                 color: background,
@@ -2081,6 +1835,7 @@ class _TerminalScreenState extends State<TerminalScreen> {
                                       _terminal,
                                       key: _view,
                                       controller: _controller,
+                                      scrollController: _termScroll,
                                       onSecondaryTapDown: (details, _) => _showTerminalMenu(details),
                                       backgroundOpacity: 1.0,
                                       // xterm's default colours, on the app's surface.
@@ -2176,17 +1931,17 @@ class _TerminalScreenState extends State<TerminalScreen> {
                             child: IgnorePointer(
                               child: ColoredBox(
                                 color: background.withAlpha(128),
-                                child: const Align(
-                                  alignment: Alignment(0, -0.8),
+                                child: Align(
+                                  alignment: const Alignment(0, -0.8),
                                   child: Chip(
-                                    avatar: Icon(Icons.wifi_off),
-                                    label: Text('Reconnecting…'),
+                                    avatar: Icon(_ended == null ? Icons.wifi_off : Icons.stop_circle_outlined),
+                                    label: Text(_ended ?? 'Reconnecting…'),
                                   ),
                                 ),
                               ),
                             ),
                           ),
-                        if (_scrolledUp > 0)
+                        if (_scrolledBack)
                           // Back to live: a small round arrow, centred at the bottom.
                           Positioned(
                             bottom: 12,
@@ -2203,25 +1958,6 @@ class _TerminalScreenState extends State<TerminalScreen> {
                       ],
                     ),
             ),
-            // Files the agent sent (herdr-bridge send), above the box until opened or dismissed: the newest,
-            // and the others behind "N more".
-            ...() {
-              final files = client.deliveriesOf(client.machine, pane?.id).reversed.toList();
-              return [
-                for (final d in _allFiles ? files : files.take(1)) _deliveryCard(d, scheme),
-                if (files.length > 1)
-                  Container(
-                    color: scheme.surfaceContainerHigh,
-                    alignment: Alignment.centerLeft,
-                    padding: const EdgeInsets.only(left: 4),
-                    child: TextButton.icon(
-                      onPressed: () => setState(() => _allFiles = !_allFiles),
-                      icon: Icon(_allFiles ? Icons.expand_less : Icons.expand_more, size: 18),
-                      label: Text(_allFiles ? 'Show fewer' : '${files.length - 1} more'),
-                    ),
-                  ),
-              ];
-            }(),
             // Two places to type: the message box, or the terminal itself with the control keys in the
             // box's place. The box leads with the control keys' button, which brings the keys without
             // the keyboard; the keys lead with the box's button back, and end with the keyboard's,

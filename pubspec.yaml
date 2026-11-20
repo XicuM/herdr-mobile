@@ -1,7 +1,7 @@
 name: herdr_mobile
 description: "A terminal-first mobile client for Herdr AI coding agent workspaces."
 publish_to: "none"
-version: 1.22.8+54
+version: 2.0.0+55
 
 environment:
   sdk: ">=3.4.0 <4.0.0"
@@ -12,12 +12,12 @@ dependencies:
     sdk: flutter
   xterm:
     path: third_party/xterm # 4.0.0 with its keyboard input fixed (see that copy's custom_text_edit.dart)
-  web_socket_channel: ^3.0.1
   shared_preferences: ^2.2.3
-  http: ^1.2.0
   flutter_svg: ^2.0.10+1
   file_selector: ^1.0.0
   material_color_utilities: ">=0.11.1 <1.0.0"
+  dartssh2: ^4.1.0
+  pinenacl: ^0.6.0
 
 dev_dependencies:
   flutter_test:
@@ -35,3 +35,7 @@ flutter:
         - asset: assets/fonts/MesloLGSNerdFontMono-Regular.ttf
         - asset: assets/fonts/MesloLGSNerdFontMono-Bold.ttf
           weight: 700
+
+dependency_overrides:
+  # dartssh2 asks for meta ^1.16, but uses only annotations 1.15 has, and CI's Flutter 3.24 pins meta 1.15.
+  meta: ">=1.15.0 <2.0.0"

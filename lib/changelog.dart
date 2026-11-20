@@ -1,6 +1,16 @@
 /// Newest first. Shown once after an update; add an entry when bumping the version in pubspec.yaml.
 const changelog = <(String, List<String>)>[
   (
+    '2.0.0',
+    [
+      'Herdr Mobile now talks to herdr-core, the runtime under the Herdr desktop app, over SSH: no herdr-bridge, no token. Add each computer again by its SSH target (user@host), and put this phone\'s key (on the machine\'s page) in its ~/.ssh/authorized_keys, or use Tailscale SSH.',
+      'Spaces and tabs are the Herdr app\'s: new, rename, close and reorder ask the app on that computer, so its window must be open there.',
+      'Scrolling a terminal is instant: its history now comes with it, and full-screen agents get the wheel.',
+      'Usage comes from the herdr-usage mod on the desktop.',
+      'Gone with the bridge: files sent by agents, worktrees, git branches and "monitoring".',
+    ]
+  ),
+  (
     '1.22.8',
     [
       'Closing agents from the list, one or several, offers Undo again.',

@@ -1,4 +1,3 @@
-import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import '../../services/herdr_client.dart';
@@ -22,7 +21,7 @@ class MachineList extends StatelessWidget {
       return Center(
         child: Padding(
           padding: const EdgeInsets.all(32),
-          child: Text('Tap + to add a computer running herdr-bridge.',
+          child: Text('Tap + to add a computer running Herdr, by its SSH target.',
               textAlign: TextAlign.center, style: TextStyle(color: scheme.onSurfaceVariant)),
         ),
       );
@@ -130,16 +129,6 @@ String machineStatus(HerdrClientService client, String m) {
   return 'Connecting…';
 }
 
-/// Takes `host`, `host:port`, an IPv6 address (bare or `[addr]:port`) or a pasted URL; the port defaults
-/// to the bridge's 7788. An IPv6 host keeps its brackets, which `host:port` URLs need.
-(String, int) _parseAddress(String text) {
-  final address = text.trim().replaceFirst(RegExp(r'^\w+://'), '').replaceAll('/', '');
-  if (':'.allMatches(address).length > 1 && !address.startsWith('[')) return ('[$address]', 7788);
-  final i = address.lastIndexOf(':');
-  if (i <= address.lastIndexOf(']')) return (address, 7788);
-  return (address.substring(0, i), int.tryParse(address.substring(i + 1)) ?? 7788);
-}
-
 /// A green dot while [m] shows its agents, a warning when it can't (the why is [machineStatus]), a hollow
 /// dot while it connects, and none while it's off. The one way a machine's state is drawn, everywhere.
 Widget? machineStatusIcon(HerdrClientService client, String m, ColorScheme scheme) => client.isOff(m)
@@ -235,7 +224,6 @@ class _MachineScreenState extends State<MachineScreen> {
   late final TextEditingController name;
   late final TextEditingController address;
   late final TextEditingController target;
-  late final TextEditingController token;
 
   @override
   void initState() {
@@ -247,7 +235,6 @@ class _MachineScreenState extends State<MachineScreen> {
     name = TextEditingController(text: m == null || client.nameOf(m!) == m ? '' : client.nameOf(m!));
     address = TextEditingController(text: m ?? '');
     target = TextEditingController(text: reached ? client.targetOf(m!) ?? '' : '');
-    token = TextEditingController(text: _dashed(_tokenChars(m == null || reached ? '' : client.tokenOf(m!) ?? '')));
   }
 
   @override
@@ -255,7 +242,6 @@ class _MachineScreenState extends State<MachineScreen> {
     name.dispose();
     address.dispose();
     target.dispose();
-    token.dispose();
     super.dispose();
   }
 
@@ -278,35 +264,15 @@ class _MachineScreenState extends State<MachineScreen> {
       if (done) return _close();
       return setState(() => busy = false);
     }
-    if (address.text.trim().isEmpty) return;
-    final (host, port) = _parseAddress(address.text);
-    final to = '$host:$port';
-    final key = _tokenChars(token.text);
-    _close();
-    if (m != null) return client.updateMachine(m!, to: to, name: name.text.trim(), token: key);
-    client.configure(to, name: name.text.trim(), token: key);
-  }
-
-  /// Fills the form from a pairing link, `herdrmobile://pair?to=host:port&token=…&name=…` as `install.sh
-  /// --phone` shows it, scanned or pasted into Address. Leaves it alone for anything else.
-  void _pair(String text) {
-    final uri = Uri.tryParse(text.trim());
-    if (uri == null || uri.scheme != 'herdrmobile' || uri.host != 'pair') return;
-    final q = uri.queryParameters;
-    address.text = q['to'] ?? '';
-    token.text = _dashed(_tokenChars(q['token'] ?? ''));
-    if (name.text.isEmpty) name.text = q['name'] ?? '';
-  }
-
-  Future<void> _scan() async {
-    try {
-      final text = await client.scanQr();
-      if (text != null && mounted) _pair(text);
-    } on PlatformException catch (e) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text("Couldn't scan (${e.message}): type the address and token instead")));
+    final to = address.text.trim().replaceFirst(RegExp(r'^ssh://'), '');
+    if (!RegExp(r'^[^@\s/]+@[^@\s/]+$').hasMatch(to)) {
+      ScaffoldMessenger.of(context)
+          .showSnackBar(const SnackBar(content: Text('Give the SSH target as user@host, or user@host:port')));
+      return;
     }
+    _close();
+    if (m != null) return client.updateMachine(m!, to: to, name: name.text.trim());
+    client.configure(to, name: name.text.trim());
   }
 
   Future<void> _remove() async {
@@ -315,7 +281,7 @@ class _MachineScreenState extends State<MachineScreen> {
       builder: (confirmContext) => AlertDialog(
         title: const Text('Remove machine?'),
         content: Text(reached
-            ? '"${client.nameOf(m!)}" will be removed from herdr on ${client.nameOf(HerdrClientService.parentOf(m!)!)}.'
+            ? '"${client.nameOf(m!)}" will be removed from herdr-core on ${client.nameOf(HerdrClientService.parentOf(m!)!)}. Its terminals keep running there.'
             : '"${client.nameOf(m!)}" ($m) will be forgotten.'),
         actions: [
           TextButton(onPressed: () => Navigator.pop(confirmContext, false), child: const Text('Cancel')),
@@ -352,7 +318,7 @@ class _MachineScreenState extends State<MachineScreen> {
                 decoration: InputDecoration(
                   labelText: 'SSH target',
                   prefixIcon: const Icon(Icons.terminal),
-                  helperText: 'user@host, saved in herdr on ${client.nameOf(m!)}',
+                  helperText: 'user@host, added to herdr-core on ${client.nameOf(m!)}',
                   border: const OutlineInputBorder(),
                 ),
               ),
@@ -447,8 +413,8 @@ class _MachineScreenState extends State<MachineScreen> {
               if (m == null && bridges.isNotEmpty) ...[
                 SegmentedButton<bool>(
                   segments: const [
-                    ButtonSegment(value: false, icon: Icon(Icons.lan_outlined), label: Text('Bridge')),
-                    ButtonSegment(value: true, icon: Icon(Icons.terminal), label: Text('SSH')),
+                    ButtonSegment(value: false, icon: Icon(Icons.phone_android), label: Text('From this phone')),
+                    ButtonSegment(value: true, icon: Icon(Icons.lan_outlined), label: Text('Through Herdr')),
                   ],
                   selected: {ssh},
                   onSelectionChanged: busy ? null : (v) => setState(() => ssh = v.first),
@@ -465,7 +431,7 @@ class _MachineScreenState extends State<MachineScreen> {
                     labelText: 'SSH target',
                     prefixIcon: const Icon(Icons.terminal),
                     helperText:
-                        'Saved in herdr on ${client.nameOf(HerdrClientService.parentOf(m!)!)}; changing it sets the machine up there again',
+                        'Added to herdr-core on ${client.nameOf(HerdrClientService.parentOf(m!)!)}; changing it adds it there again',
                     helperMaxLines: 2,
                     border: const OutlineInputBorder(),
                   ),
@@ -493,7 +459,7 @@ class _MachineScreenState extends State<MachineScreen> {
                   decoration: InputDecoration(
                     labelText: 'SSH target',
                     prefixIcon: const Icon(Icons.terminal),
-                    helperText: 'user@host, saved in herdr on ${client.nameOf(via ?? '')}',
+                    helperText: 'user@host, added to herdr-core on ${client.nameOf(via ?? '')} (hc machine add)',
                     border: const OutlineInputBorder(),
                   ),
                 ),
@@ -502,21 +468,28 @@ class _MachineScreenState extends State<MachineScreen> {
                   controller: address,
                   autofocus: m == null,
                   keyboardType: TextInputType.url,
-                  onChanged: _pair,
-                  decoration: InputDecoration(
-                    labelText: 'Address',
-                    prefixIcon: const Icon(Icons.lan_outlined),
-                    suffixIcon: Platform.isAndroid
-                        ? IconButton(icon: const Icon(Icons.qr_code_scanner), tooltip: 'Scan QR code', onPressed: _scan)
-                        : null,
-                    helperText: 'Tailscale IP or name; add :port if not 7788. Or paste or scan the pairing link '
-                        'from install.sh --phone',
-                    helperMaxLines: 2,
-                    border: const OutlineInputBorder(),
+                  autocorrect: false,
+                  decoration: const InputDecoration(
+                    labelText: 'SSH target',
+                    prefixIcon: Icon(Icons.terminal),
+                    hintText: 'user@host',
+                    helperText: 'user@host (Tailscale IP or name), :port if not 22. It needs herdr-core, and this '
+                        "phone's key below in its ~/.ssh/authorized_keys, unless it has Tailscale SSH",
+                    helperMaxLines: 3,
+                    border: OutlineInputBorder(),
                   ),
                 ),
                 const SizedBox(height: 16),
-                _TokenField(controller: token),
+                _PhoneKeyCard(client: client),
+                if (m != null && (client.errorOf(m!)?.contains('host key') ?? false))
+                  Align(
+                    alignment: Alignment.centerLeft,
+                    child: TextButton.icon(
+                      onPressed: () => client.forgetHostKey(m!),
+                      icon: const Icon(Icons.key_off_outlined),
+                      label: const Text('Forget its host key'),
+                    ),
+                  ),
               ],
               section('Display'),
               TextField(
@@ -526,7 +499,7 @@ class _MachineScreenState extends State<MachineScreen> {
                   labelText: 'Name',
                   prefixIcon: const Icon(Icons.label_outline),
                   hintText: reached || ssh ? target.text : address.text,
-                  helperText: 'Optional; the address is shown without one',
+                  helperText: 'Optional; the SSH target is shown without one',
                   border: const OutlineInputBorder(),
                 ),
                 onSubmitted: (_) => _save(),
@@ -559,9 +532,9 @@ class _MachineScreenState extends State<MachineScreen> {
                   iconColor: scheme.error,
                   textColor: scheme.error,
                   leading: const Icon(Icons.delete_outline),
-                  title: Text(reached ? 'Remove from herdr' : 'Remove machine'),
+                  title: Text(reached ? 'Remove from herdr-core' : 'Remove machine'),
                   subtitle: Text(reached
-                      ? 'Deletes it from herdr on ${client.nameOf(HerdrClientService.parentOf(m!)!)}'
+                      ? 'Forgets it in herdr-core on ${client.nameOf(HerdrClientService.parentOf(m!)!)}'
                       : 'Forgets it on this phone'),
                   onTap: _remove,
                 ),
@@ -574,64 +547,45 @@ class _MachineScreenState extends State<MachineScreen> {
   }
 }
 
-/// A token as the bridge compares it: without the spaces and dashes it ignores, in capitals as it prints
-/// them (it ignores case too).
-String _tokenChars(String s) => s.replaceAll(RegExp(r'[\s-]'), '').toUpperCase();
+/// This phone's public SSH key, to copy into a machine's `~/.ssh/authorized_keys`.
+class _PhoneKeyCard extends StatelessWidget {
+  final HerdrClientService client;
 
-/// [raw] in groups of four, `K3MF-9QXA` as `herdr-bridge --print-token` prints it.
-String _dashed(String raw) =>
-    [for (var i = 0; i < raw.length; i += 4) raw.substring(i, i + 4 > raw.length ? raw.length : i + 4)].join('-');
-
-/// The bridge's token, one field that groups what is typed or pasted in fours and hides a saved one until
-/// asked.
-class _TokenField extends StatefulWidget {
-  final TextEditingController controller;
-
-  const _TokenField({required this.controller});
-
-  @override
-  State<_TokenField> createState() => _TokenFieldState();
-}
-
-class _TokenFieldState extends State<_TokenField> {
-  late var _hidden = widget.controller.text.isNotEmpty;
+  const _PhoneKeyCard({required this.client});
 
   @override
   Widget build(BuildContext context) {
-    return TextField(
-      controller: widget.controller,
-      obscureText: _hidden,
-      autocorrect: false,
-      enableSuggestions: false,
-      keyboardType: TextInputType.visiblePassword,
-      textCapitalization: TextCapitalization.characters,
-      style: const TextStyle(fontFamily: 'monospace', letterSpacing: 2),
-      decoration: InputDecoration(
-        labelText: 'Token',
-        hintText: 'XXXX-XXXX',
-        prefixIcon: const Icon(Icons.key_outlined),
-        suffixIcon: IconButton(
-          icon: Icon(_hidden ? Icons.visibility_outlined : Icons.visibility_off_outlined),
-          tooltip: _hidden ? 'Show token' : 'Hide token',
-          onPressed: () => setState(() => _hidden = !_hidden),
+    final theme = Theme.of(context);
+    final key = client.publicKey;
+    return Card.outlined(
+      margin: EdgeInsets.zero,
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(16, 8, 8, 12),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Expanded(child: Text("This phone's key", style: theme.textTheme.titleSmall)),
+                IconButton(
+                  icon: const Icon(Icons.copy),
+                  tooltip: 'Copy',
+                  onPressed: () {
+                    Clipboard.setData(ClipboardData(text: key));
+                    if (!client.systemShowsCopies) {
+                      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Copied')));
+                    }
+                  },
+                ),
+              ],
+            ),
+            SelectableText(key, style: theme.textTheme.bodySmall?.copyWith(fontFamily: 'monospace')),
+            const SizedBox(height: 8),
+            Text('On the computer: echo \'<key>\' >> ~/.ssh/authorized_keys',
+                style: theme.textTheme.bodySmall?.copyWith(color: theme.colorScheme.onSurfaceVariant)),
+          ],
         ),
-        helperText: 'Run herdr-bridge --print-token on that computer',
-        border: const OutlineInputBorder(),
       ),
-      inputFormatters: [
-        TextInputFormatter.withFunction((old, v) {
-          var raw = _tokenChars(v.text);
-          // Raw characters before the cursor, so it stays put as dashes come and go.
-          var at = _tokenChars(v.text.substring(0, v.selection.end.clamp(0, v.text.length))).length;
-          // Backspace over a dash deletes the character before it.
-          if (v.text.length < old.text.length && raw == _tokenChars(old.text) && at > 0) {
-            raw = raw.substring(0, at - 1) + raw.substring(at);
-            at--;
-          }
-          return TextEditingValue(
-              text: _dashed(raw), selection: TextSelection.collapsed(offset: at + (at > 0 ? (at - 1) ~/ 4 : 0)));
-        }),
-      ],
     );
   }
 }

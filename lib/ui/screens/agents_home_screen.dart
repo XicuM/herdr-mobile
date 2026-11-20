@@ -274,11 +274,11 @@ class _AgentsHomeScreenState extends State<AgentsHomeScreen> {
         content: SingleChildScrollView(
           child: firstRun
               ? const Text(
-                  'Herdr Mobile is a remote control for Herdr, the terminal multiplexer for AI coding agents.\n\n'
-                  '1. On each computer running Herdr, start herdr-bridge (deploy/start-bridge.sh). '
-                  'It listens on port 7788 on the computer\'s Tailscale IP.\n'
-                  '2. Make sure this phone is on the same Tailscale network.\n'
-                  '3. Add each computer here as a machine, using its Tailscale IP or MagicDNS name.\n\n'
+                  'Herdr Mobile is a remote control for Herdr, the app for terminals and AI coding agents.\n\n'
+                  '1. Install Herdr (or herdr-core) on each computer, and turn SSH on there.\n'
+                  '2. Make sure this phone reaches it, e.g. on the same Tailscale network.\n'
+                  '3. Add each computer here by its SSH target (me@laptop), and put this phone\'s key, shown '
+                  'there, in its ~/.ssh/authorized_keys (Tailscale SSH needs none).\n\n'
                   'Every agent on every machine is listed here, the ones that need you first. Tap one for its '
                   'terminal, swipe it right to mute it or left to close it, and long-press to pick several. '
                   'In a terminal, tap the top bar for the workspace\'s actions; the tabs sit under it. Type in '
@@ -519,7 +519,7 @@ class _AgentsHomeScreenState extends State<AgentsHomeScreen> {
               r.$3.name,
               client.nameOf(r.$1),
               if (r.$4 != null) r.$2.placeOf(r.$4!),
-              AgentStatus.fromString(r.$3.displayStatus).label,
+              AgentStatus.fromString(r.$3.status).label,
               if (TerminalScreen.hasDraft(r.$3.paneId, r.$1)) 'Draft',
             ]))
               r
@@ -532,12 +532,8 @@ class _AgentsHomeScreenState extends State<AgentsHomeScreen> {
             final s = client.snapshotOf(m);
             if (s == null) continue;
             for (final ws in s.workspaces) {
-              // A worktree is also found by its repository's workspace.
-              final repo = ws.isLinkedWorktree ? s.mainOf(ws.repoKey) : null;
               if (hit([
                 ws.displayName,
-                ws.gitBranch,
-                repo?.displayName,
                 client.nameOf(m),
                 AgentStatus.fromString(ws.agentStatus).label
               ])) {
@@ -678,7 +674,7 @@ class _AgentsHomeScreenState extends State<AgentsHomeScreen> {
                     context,
                     Icons.computer_outlined,
                     'No machines',
-                    'Add a machine running herdr-bridge to see its agents.',
+                    'Add a computer running Herdr, by its SSH target, to see its agents.',
                     FilledButton.icon(
                       onPressed: _addMachine,
                       icon: const Icon(Icons.add),
@@ -881,16 +877,7 @@ class _AgentsHomeScreenState extends State<AgentsHomeScreen> {
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                 ),
-                // The branch's ↑↓ go right after it, before the machine.
-                subtitle: Text.rich(
-                  TextSpan(children: [
-                    TextSpan(text: ws.branchName ?? ''),
-                    ...aheadBehind(ws),
-                    TextSpan(text: ws.branchName == null || sub(m, []).isEmpty ? sub(m, []) : ' · ${sub(m, [])}'),
-                  ]),
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                ),
+                subtitle: sub(m, []).isEmpty ? null : Text(sub(m, []), maxLines: 1, overflow: TextOverflow.ellipsis),
                 onTap: () => open(m, () => client.selectWorkspace(ws.id)),
               ),
             ),
@@ -920,7 +907,7 @@ class _AgentsHomeScreenState extends State<AgentsHomeScreen> {
     final (machine, snapshot, agent, pane) = row;
     final theme = Theme.of(context);
     final scheme = theme.colorScheme;
-    final status = AgentStatus.fromString(agent.displayStatus);
+    final status = AgentStatus.fromString(agent.status);
     final needsYou = status == AgentStatus.blocked;
     final hasDraft = TerminalScreen.hasDraft(agent.paneId, machine);
     final statusLabel = hasDraft ? 'Draft' : status.label;
@@ -935,8 +922,6 @@ class _AgentsHomeScreenState extends State<AgentsHomeScreen> {
       if (pane != null) snapshot.placeOf(pane),
       if (showMachine) client.nameOf(machine),
     ].where((p) => p.isNotEmpty).join(' · ');
-    // A file it sent leads the line until opened or dismissed, as a chat's last message does.
-    final file = client.deliveriesOf(machine, agent.paneId).where((d) => d.paneId == agent.paneId).lastOrNull;
 
     final tileColor = selected
         ? scheme.secondaryContainer
@@ -1036,26 +1021,16 @@ class _AgentsHomeScreenState extends State<AgentsHomeScreen> {
                     child: Icon(Icons.check, color: scheme.onPrimary),
                   ),
                 )
-              : AgentAvatar(name: agent.name, status: agent.displayStatus),
+              : AgentAvatar(name: agent.name, status: agent.status),
         ),
         // Bold while it needs you, like an unread chat.
         title: Text(title,
             maxLines: 1,
             overflow: TextOverflow.ellipsis,
             style: theme.textTheme.titleMedium?.copyWith(fontWeight: needsYou ? FontWeight.bold : null)),
-        subtitle: place.isNotEmpty || file != null
-            ? Text.rich(
-                TextSpan(children: [
-                  if (file != null) ...[
-                    WidgetSpan(
-                      alignment: PlaceholderAlignment.middle,
-                      child: Icon(Icons.attach_file, size: 14, color: scheme.onSurfaceVariant),
-                    ),
-                    TextSpan(text: file.name, style: const TextStyle(fontWeight: FontWeight.w600)),
-                    if (place.isNotEmpty) const TextSpan(text: ' · '),
-                  ],
-                  TextSpan(text: place),
-                ]),
+        subtitle: place.isNotEmpty
+            ? Text(
+                place,
                 style: theme.textTheme.bodySmall?.copyWith(color: scheme.onSurfaceVariant),
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
