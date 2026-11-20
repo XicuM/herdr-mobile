@@ -5,10 +5,10 @@ import 'dart:typed_data';
 /// sends its path as an `@`-reference, which is plain text every agent either reads as an image or
 /// just sees as a path.
 class AttachedImage {
-  /// The bridge's cap on one upload (`uploads::MAX_BYTES`). Nothing here shrinks an image to fit it:
+  /// herdr-core's cap on one `terminal.put`. Nothing here shrinks an image to fit it:
   /// the engine can only re-encode PNG, which for a photo is bigger than the JPEG it came from, and
   /// the agent downsamples what it reads anyway. An image this big is refused instead.
-  static const maxBytes = 10 * 1024 * 1024;
+  static const maxBytes = 8 * 1024 * 1024; // terminal.put's limit
 
   /// The image type of [bytes] by magic, or null when they are no PNG, JPEG, GIF or WebP image.
   static String? mimeOf(Uint8List bytes) {
@@ -79,7 +79,7 @@ class AttachedImage {
   /// bridge takes, which callers report instead of uploading.
   static (Uint8List, String) uploadable(Uint8List bytes) {
     final mime = mimeOf(bytes) ?? (throw StateError('Not a PNG, JPEG, GIF or WebP image.'));
-    if (bytes.length > maxBytes) throw StateError('Image is over 10 MB.');
+    if (bytes.length > maxBytes) throw StateError('Image is over 8 MB.');
     return (bytes, mime);
   }
 

@@ -62,10 +62,11 @@ class PtyChannel {
     final link = _link = this.link();
     if (link == null) return _dropped(null);
     try {
+      final (cols, rows) = (terminal.viewWidth, terminal.viewHeight);
       final res = await link.call('terminal.attach', {
         'terminal': address,
-        'cols': terminal.viewWidth,
-        'rows': terminal.viewHeight,
+        'cols': cols,
+        'rows': rows,
         'history': 2000,
         // Back after a dropped line: the size is set only once the phone is active again.
         'resumed': _fails > 0,
@@ -76,6 +77,8 @@ class PtyChannel {
         return;
       }
       _channel = channel;
+      // The view may have been laid out (or resized) while attaching: a resize meanwhile was dropped.
+      if (terminal.viewWidth != cols || terminal.viewHeight != rows) sendResize(terminal.viewWidth, terminal.viewHeight);
       final decoder = const Utf8Decoder(allowMalformed: true).startChunkedConversion(_Sink(_write));
       var first = true;
       link.listen(channel, (kind, payload) {
@@ -92,6 +95,9 @@ class PtyChannel {
           terminal.mainBuffer.clearScrollback();
           _fails = 0;
           attached.value = true;
+          // The paint resets with DECSTR (CSI ! p), which xterm ignores: reset what the last pane may have
+          // left (hidden cursor, margins, wrap, insert/origin mode, line-drawing charset, keypad).
+          terminal.write('\x1b[0m\x1b[?25h\x1b[?7h\x1b[?6l\x1b[4l\x1b[r\x1b(B\x1b)B\x0f\x1b>');
           decoder.add(payload);
           onAttach?.call();
         } else {

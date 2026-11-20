@@ -63,7 +63,8 @@ class _TerminalScreenState extends State<TerminalScreen> {
       return; // not base64
     }
   });
-  final _controller = TerminalController();
+  // Taps reach the program through _onTap alone (which also opens links): xterm would send a second click.
+  final _controller = TerminalController(pointerInputs: const PointerInputs.none());
   final _view = GlobalKey<TerminalViewState>();
   final _message = TextEditingController();
   final _messageFocus = FocusNode();
@@ -585,7 +586,8 @@ class _TerminalScreenState extends State<TerminalScreen> {
     if (text.isEmpty) {
       channel?.sendInput('\r');
     } else {
-      channel?.sendInput('\x1b[200~$text\x1b[201~');
+      // Bracketed only for a program that asked for it: others would get the markers as text.
+      channel?.sendInput(_terminal.bracketedPasteMode ? '\x1b[200~$text\x1b[201~' : text);
       // An Enter in the same read as the paste is taken as part of it (Claude Code), so send it apart.
       // Dropped if the pane was switched meanwhile: its channel is closed.
       Future.delayed(const Duration(milliseconds: 150), () {

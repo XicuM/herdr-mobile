@@ -408,6 +408,9 @@ class EscapeParser {
   ///
   /// https://terminalguide.namepad.de/seq/csi_sm/
   void _csiHandleSgr() {
+    // `CSI > Ps ; Ps m` (XTMODKEYS, e.g. Claude Code's modifyOtherKeys) and `CSI ? Ps m` aren't SGR: read
+    // as SGR, `>4;2m` underlines and dims everything after it.
+    if (_csi.prefix != null) return;
     final params = _csi.params;
 
     if (params.isEmpty) {
