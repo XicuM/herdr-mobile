@@ -753,11 +753,18 @@ class HerdrClientService extends ChangeNotifier {
           case 'removed' || 'finished':
             c.terminals.remove(local);
           case 'status' when t != null:
+            // Updates that only change the title or records keep when the state last changed.
+            if ((t['status'] as Map?)?['state'] != (data['status'] as Map?)?['state']) {
+              t['status_ms'] = DateTime.now().millisecondsSinceEpoch;
+            }
             t['status'] = data['status'];
             t['reported'] = data['reported'];
-            t['status_ms'] = DateTime.now().millisecondsSinceEpoch;
           case 'turn' when t != null:
             t['turn'] = data['turn'];
+            if (m == machine && local == c.selectedPaneId &&
+                WidgetsBinding.instance.lifecycleState == AppLifecycleState.resumed) {
+              _markSeen(m, local);
+            }
           case 'title' when t != null:
             t['title'] = data['title'];
           case 'labels' when t != null || data['record'] != null:
@@ -877,10 +884,26 @@ class HerdrClientService extends ChangeNotifier {
     } catch (_) {}
   }
 
-  /// A terminal's status in the app's words: herdr-core's own, with `error` as needing you.
+  /// A terminal's status in the app's words: herdr-core's own, with `error` as needing you, and `idle`
+  /// after a turn not yet viewed (its `herdr.seen` label, which Herdr keeps) as `done`, as Herdr shows it.
   static String _statusOf(Map t) {
     final state = (t['status'] as Map?)?['state'];
+    if (state == 'idle' && t['turn'] is int) {
+      final seen = int.tryParse('${(t['labels'] as Map?)?['herdr.seen']}');
+      if (seen != null && t['turn'] > seen) return 'done';
+    }
     return state == null ? 'unknown' : (state == 'error' ? 'blocked' : '$state');
+  }
+
+  /// Marks [paneId]'s last turn viewed (`herdr.seen`), as Herdr does for the terminal on screen.
+  void _markSeen(String m, String paneId) {
+    final t = _conns[m]?.terminals[paneId];
+    final link = linkOf(m);
+    if (t == null || link == null || t['turn'] is! int) return;
+    final labels = t['labels'] = Map.of(t['labels'] as Map? ?? const {});
+    if (labels['herdr.seen'] == '${t['turn']}') return;
+    labels['herdr.seen'] = '${t['turn']}';
+    link.call('terminal.label', {'terminal': addressOf(m, paneId), 'labels': {'herdr.seen': '${t['turn']}'}}).catchError((_) {});
   }
 
   /// The terminals of a layout node's blocks, in order.
@@ -1141,6 +1164,7 @@ class HerdrClientService extends ChangeNotifier {
 
   void selectPane(String paneId) {
     _conns.putIfAbsent(machine, _Conn.new).selectedPaneId = paneId;
+    _markSeen(machine, paneId);
     _native('cancel', {'key': '$machine/$paneId'});
     notifyListeners();
   }
@@ -1325,6 +1349,8 @@ class HerdrClientService extends ChangeNotifier {
     if (before != null && _alerts) _alertChanges(m, before, snapshot);
     // A pane gone mustn't leave its completion count, nor its mute, to a later one.
     c.completions.removeWhere((id, _) => !snapshot.panes.any((p) => p.id == id));
+    // Until the layout is in, tabbed panes without a running agent are missing, not gone.
+    if (c.layout == null) return notifyListeners();
     // A pane id has no slash, so the key's machine is all before its last one.
     final gone =
         _muted.where((k) => k.substring(0, k.lastIndexOf('/')) == m && !snapshot.panes.any((p) => '$m/${p.id}' == k));
@@ -1346,7 +1372,8 @@ class HerdrClientService extends ChangeNotifier {
     bool hidden(String id) => _hidden.contains('$m/$id');
     final before = c.snapshot;
     final tabs = s.tabs.where((t) => !hidden(t.id) && !hidden(t.workspaceId)).toList();
-    final panes = s.panes.where((p) => !hidden(p.id) && tabs.any((t) => t.id == p.tabId)).toList();
+    // Agents outside any tab (sub-agents, `hc run`) stay: only a hidden tab hides its panes.
+    final panes = s.panes.where((p) => !hidden(p.id) && (p.tabId.isEmpty || tabs.any((t) => t.id == p.tabId))).toList();
     final now = c.snapshot = _hidden.isEmpty
         ? s
         : SessionSnapshot(
@@ -1441,7 +1468,8 @@ class HerdrClientService extends ChangeNotifier {
 
       final wasBlocked = wasAgent?.status == 'blocked' || was?.agentStatus == 'blocked';
       final blocked = !wasBlocked && (agent?.status == 'blocked' || pane.agentStatus == 'blocked');
-      final finished = wasAgent != null && seq > seen;
+      // A turn also ends when the agent stops to ask: that's the needs-you alert, not a second one.
+      final finished = wasAgent != null && seq > seen && agent?.status != 'blocked' && pane.agentStatus != 'blocked';
       if (!blocked && !finished) continue;
       if (blocked && !_alertBlocked) continue;
       if (finished && !_alertFinished) continue;
