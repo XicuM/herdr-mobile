@@ -1409,6 +1409,25 @@ void main() {
       await tester.pumpAndSettle();
       expect(find.text('antigravity-refactor'), findsOneWidget);
       expect(find.text('Agent closed'), findsNothing);
+
+      // Picking both and closing the selection is undoable too, in one snackbar.
+      await tester.longPress(find.text('claude-task'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('antigravity-refactor'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byTooltip('Close'));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 250));
+      expect(find.text('claude-task'), findsNothing);
+      expect(find.text('antigravity-refactor'), findsNothing);
+      expect(find.text('Agents closed'), findsOneWidget);
+
+      await tester.tap(find.text('Undo'));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 250));
+      expect(find.text('claude-task'), findsOneWidget);
+      expect(find.text('antigravity-refactor'), findsOneWidget);
+      expect(find.text('Agents closed'), findsNothing);
     });
 
     testWidgets('Agent timestamps update when state changes and format correctly in AgentsHomeScreen', (tester) async {

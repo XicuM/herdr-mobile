@@ -1,6 +1,12 @@
 /// Newest first. Shown once after an update; add an entry when bumping the version in pubspec.yaml.
 const changelog = <(String, List<String>)>[
   (
+    '1.22.8',
+    [
+      'Closing agents from the list, one or several, offers Undo again.',
+    ]
+  ),
+  (
     '1.22.7',
     [
       'The agents list\'s top bar keeps the list\'s own colour while scrolling instead of changing shade.',
